@@ -1,0 +1,8 @@
+BasedOnStyle: Google
+BreakBeforeBraces: Attach
+ColumnLimit: 0
+SpaceBeforeParens: ControlStatements
+UseTab: Always
+IndentWidth: 4
+TabWidth: 4
+AccessModifierOffset: 0

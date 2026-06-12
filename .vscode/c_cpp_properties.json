@@ -1,0 +1,80 @@
+{
+	"env": {
+		"vex_compilerPath": "${config:vexrobotics.vexcode.Cpp.Toolchain.Path}/clang/bin/clang",
+		"vex_sdkPath": "${config:vexrobotics.vexcode.Cpp.Sdk.Home}/V5/V5_20240802_15_00_00/vexv5",
+		"vex_gcc": "${vex_sdkPath}/gcc/include/c++/4.9.3",
+		"vex_sdkIncludes": [
+			"${vex_sdkPath}/clang/8.0.0/include/**",
+			"${vex_gcc}/**",
+			"${vex_gcc}/arm-none-eabi/thumb",
+			"${vex_sdkPath}/gcc/include",
+			"${vex_sdkPath}/include/**",
+			"${workspaceFolder}/include/**",
+			"${workspaceFolder}/src/**",
+			"${vex_gcc}/arm-none-eabi/armv7-ar/thumb"
+		]
+	},
+	"configurations": [
+		{
+			"name": "Win32",
+			"includePath": [
+				"${vex_sdkIncludes}"
+			],
+			"defines": [
+				"VexV5",
+				"__INT32_TYPE__=long",
+				"__UINT32_TYPE__=unsigned long"
+			],
+			"compilerPath": "${vex_compilerPath}",
+			"compilerArgs": [
+				"-target",
+				"thumbv7-none-eabi",
+				"-fshort-enums"
+			],
+			"cStandard": "gnu99",
+			"cppStandard": "gnu++11",
+			"intelliSenseMode": "windows-clang-arm"
+		},
+		{
+			"name": "Mac",
+			"includePath": [
+				"${vex_sdkIncludes}"
+			],
+			"defines": [
+				"VexV5",
+				"__INT32_TYPE__=long",
+				"__UINT32_TYPE__=unsigned long"
+			],
+			"compilerPath": "${vex_compilerPath}",
+			"compilerArgs": [
+				"-target",
+				"thumbv7-none-eabi",
+				"-fshort-enums"
+			],
+			"cStandard": "gnu99",
+			"cppStandard": "gnu++11",
+			"intelliSenseMode": "macos-clang-arm"
+		},
+		{
+			"name": "Linux",
+			"includePath": [
+				"${vex_sdkIncludes}"
+			],
+			"defines": [
+				"VexV5",
+				"__INT32_TYPE__=long",
+				"__UINT32_TYPE__=unsigned long"
+			],
+			"compilerPath": "",
+			"compilerArgs": [
+				"-target",
+				"thumbv7-none-eabi",
+				"-fshort-enums"
+			],
+			"cStandard": "gnu99",
+			"cppStandard": "gnu++11",
+			"intelliSenseMode": "linux-clang-arm"
+		}
+	],
+	"version": 4
+}
