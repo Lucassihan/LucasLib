@@ -33,8 +33,6 @@ void autonSettings() {
   drivePID.maxDecelRate = 0.5;
   // totalOutput.maxAccelRate = 0.5;
   // totalOutput.maxDecelRate = 0.5;
-  useConvergeControl = false; //Set to true to use the Lyapunov-based coupled controller for point drives. Set to false to use the old separate drivePID → headingPID → blendOutputs chain.
-
 
   //You can put your own stuff in here too
 }
@@ -42,9 +40,6 @@ void autonSettings() {
 void exampleAuton() {
   autonSettings();
   chassis.setPos(0,0,90);
-
-  useLyapunovControl = true;
-  kLat = 0.02;
 
 //   moveTo(24,24, {.timeout = 50000});
 
@@ -72,8 +67,6 @@ void exampleAuton() {
 //   };
 
 
-//   useLyapunovControl = true;
-//   kLat = 0.03;
 //   facePoint(10, 36, tFast);
 //   moveTo(0, 36, {.timeout = 500000});
 //   voltageDrive(0,0);

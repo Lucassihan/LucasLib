@@ -42,19 +42,6 @@ void swingOnRightToPoint(double x, double y,
                          int direction = 0);
 
 // =========================================================================
-// Lyapunov control mode
-// =========================================================================
-
-extern bool   useLyapunovControl;
-extern bool   useClassicControl;
-extern bool   useConvergeControl;
-extern double kLat;
-
-double sinc(double x);
-
-void lyapunovCalculate(double tx, double ty, bool backward = false);
-
-// =========================================================================
 // Boomerang point
 // =========================================================================
 
