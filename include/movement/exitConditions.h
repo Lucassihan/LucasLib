@@ -6,7 +6,7 @@
 //These are initiated as parameters inside movement functions in movement.cpp.
 struct LateralExitConditions {
     double timeout   = 5000;   // 5000 ms by default, 0 = off
-    bool   settle    = false;
+    bool   settle    = true;
     double smallError = 1;   // inches — exit after staying within this for smallTime ms continuously
     double smallTime  = 100;   // ms
     double bigError   = 3;   // inches — exit after staying within this for bigTime ms continuously
@@ -20,7 +20,7 @@ struct LateralExitConditions {
 
 struct TurnExitConditions {
     double timeout    = 5000;  // 5000 ms by default, 0 = off
-    bool   settle     = false;
+    bool   settle     = true;
     double smallError = 1;   // degrees — exit after staying within this for smallTime ms continuously
     double smallTime  = 150;   // ms
     double bigError   = 3;   // degrees — exit after staying within this for bigTime ms continuously
