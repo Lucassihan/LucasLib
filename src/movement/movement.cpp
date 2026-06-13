@@ -32,6 +32,8 @@ TotalOutput totalOutput;
 double lastLeftOut  = 0;
 double lastRightOut = 0;
 
+extern double lyapunovMinDist;
+
 void clearAllValues() {
     turnPow = 0;
     swingPow = 0;
@@ -51,6 +53,7 @@ void clearAllValues() {
 
     close = false;
     exitConditionFulfilled = false;
+    lyapunovMinDist = 1e9;
 
     turnPID.clearAllValues();
     swingPID.clearAllValues();
@@ -508,7 +511,8 @@ void boomerangTo(BoomParams bp,
     double minPerpDist = initialPerpDist;
 
     while (not exitConditionFulfilled) {
-        if (not close) {
+        if (useLyapunovControl) {
+            // Update lead point retraction
             double perpDist = fabs((chassis.x - x) * dirY - (chassis.y - y) * dirX);
             if (perpDist < minPerpDist) {
                 minPerpDist = perpDist;
@@ -523,33 +527,55 @@ void boomerangTo(BoomParams bp,
             leadX = x + leadSign * sin(headingRad) * leadDisplacement;
             leadY = y + leadSign * cos(headingRad) * leadDisplacement;
 
+            // Pursue the lead point with Lyapunov controller
+            lyapunovCalculate(leadX, leadY, backward);
+
+            // Telemetry uses distance to actual target, not lead point
             lateralError = chassis.distanceTo(x, y, backward);
+        } else {
+            if (not close) {
+                double perpDist = fabs((chassis.x - x) * dirY - (chassis.y - y) * dirX);
+                if (perpDist < minPerpDist) {
+                    minPerpDist = perpDist;
+                }
 
-            if (hypot(leadX - chassis.x, leadY - chassis.y) > 0.5) {
-                headingError = chassis.wrappedPointHeadingError(leadX, leadY, backward);
-            } else {
-                // Absolute heading: always steer the HEAD to `heading`,
-                // regardless of backward.
+                double retraction = 0;
+                if (initialPerpDist > 0) {
+                    retraction = pow(minPerpDist / initialPerpDist, n);
+                }
+
+                double leadDisplacement = retraction * initialLeadDist;
+                leadX = x + leadSign * sin(headingRad) * leadDisplacement;
+                leadY = y + leadSign * cos(headingRad) * leadDisplacement;
+
+                lateralError = chassis.distanceTo(x, y, backward);
+
+                if (hypot(leadX - chassis.x, leadY - chassis.y) > 0.5) {
+                    headingError = chassis.wrappedPointHeadingError(leadX, leadY, backward);
+                } else {
+                    // Absolute heading: always steer the HEAD to `heading`,
+                    // regardless of backward.
+                    headingError = chassis.wrappedHeadingError(heading, false);
+                }
+
+                if (fabs(lateralError) < 6) {
+                    close = true;
+                    targetStraightDistance = lateralError;
+                    chassis.clearTrackedInches();
+                }
+            }
+
+            if (close) {
+                // Absolute heading: HEAD faces `heading`, even when backward.
                 headingError = chassis.wrappedHeadingError(heading, false);
+                lateralError = targetStraightDistance - chassis.yInchesTracked;
             }
 
-            if (fabs(lateralError) < 6) {
-                close = true;
-                targetStraightDistance = lateralError;
-                chassis.clearTrackedInches();
-            }
+            drivePow   = drivePID.calculateOutput(lateralError);
+            headingPow = headingPID.calculateOutput(headingError);
+
+            blendOutputs(bs);
         }
-
-        if (close) {
-            // Absolute heading: HEAD faces `heading`, even when backward.
-            headingError = chassis.wrappedHeadingError(heading, false);
-            lateralError = targetStraightDistance - chassis.yInchesTracked;
-        }
-
-        drivePow   = drivePID.calculateOutput(lateralError);
-        headingPow = headingPID.calculateOutput(headingError);
-
-        blendOutputs(bs);
 
         governOutputs();
         voltageDrive(leftOut, rightOut);
@@ -560,8 +586,95 @@ void boomerangTo(BoomParams bp,
     }
 }
 
+// =========================================================================
+// Lyapunov control
+// =========================================================================
 
-double headingDisableDist = 6;
+bool   useLyapunovControl = false;
+double kLat = 0.04;
+
+double sinc(double x) { //Simple helper function for the sinc function. Uses taylor series approximation when x is small, so we don't accidentally divide by 0.
+    if (fabs(x) < 1e-3) {
+        return 1.0 - (x * x) / 6.0;
+    }
+    return sin(x) / x;
+}
+
+// Computes leftOut/rightOut using the Lyapunov-based coupled controller.
+// Replaces the separate drivePID → headingPID → blendOutputs chain.
+// Writes drivePow, headingPow, driveOut, turnOut, leftOut, rightOut,
+// headingError, and lateralError for telemetry.
+double lyapunovHeadingDisableDist = 3;
+double lyapunovMinDist = 1e9;
+void lyapunovCalculate(double tx, double ty, bool backward) {
+    // 1. World-frame error
+    double dx = tx - chassis.x;
+    double dy = ty - chassis.y;
+
+    // 2. Rotate into robot's local frame (heading 0 = +Y, 90 = +X).
+    //    For backward: rotate heading by π so the robot's back becomes
+    //    the reference "forward" direction in the local frame.
+    double h = chassis.h * M_PI / 180.0;
+    if (backward) {
+        h += M_PI;
+    }
+    double e_x =  sin(h) * dx + cos(h) * dy;
+    double e_y = -cos(h) * dx + sin(h) * dy;
+
+    // 3. Local heading error
+    double e_theta = atan2(e_y, e_x);
+
+    // 4. Desired drive power (PID on signed distance)
+    double dist = hypot(e_x, e_y);
+    double distSigned = dist * sign(cos(e_theta));
+    double v_d = drivePID.calculateOutput(distSigned);
+
+    // 5. Forward power (cosine-scaled).
+    //    For backward: negate v so "forward in the rotated frame"
+    //    becomes physical reverse.
+    double v = fabs(cos(e_theta)) * v_d;
+    if (backward) {
+        v = -v;
+    }
+
+    // 6. Turn power (Lyapunov math convention: positive ω = CCW).
+    //    Negate to match VEX motors where positive turn = CW.
+    //    Coupling term uses cosine-scaled v (not raw PID output or
+    //    chassis.velocity). This self-scales: v ≈ 0 when heading error
+    //    is large (coupling stays quiet, headingPID handles the big turn),
+    //    v is full when aligned (coupling actively corrects lateral drift),
+    //    v → 0 at the target (no phantom spot turns).
+    double omega = headingPID.calculateOutput(e_theta * 180.0 / M_PI)
+                 + kLat * v * e_y * sinc(e_theta);
+    omega = -omega;
+
+    // One-way latch: once the robot gets close, heading fade only
+    // gets stronger (never recovers), preventing atan2 noise from
+    // re-engaging heading correction after an overshoot.
+    if (dist < lyapunovMinDist) {
+        lyapunovMinDist = dist;
+    }
+    double headingFade = lyapunovMinDist / lyapunovHeadingDisableDist;
+    if (headingFade > 1.0) {
+        headingFade = 1.0;
+    }
+    omega *= headingFade;
+
+    // 7. Blend to left/right
+    leftOut  = v + omega;
+    rightOut = v - omega;
+
+    // Write telemetry globals
+    lateralError = dist;
+    headingError = e_theta * 180.0 / M_PI;
+    drivePow     = v_d;
+    headingPow   = omega;
+    driveOut     = v;
+    turnOut      = omega;
+}
+
+
+double headingDisableDist = 6; //only relevant for non-Lyapunov movement. This is EXACTLY what Lyapunov control fixes
 void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSettings bs) {
     ExitStateVars exitStateVars;
     clearAllValues();
@@ -572,31 +685,37 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
     lateralError = chassis.distanceTo(targetX, targetY, backward);
 
     while (not exitConditionFulfilled) {
-        //if we're far from the target, use point based heading error and distance.
-        if (not close) {
-            headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
-            lateralError = chassis.distanceTo(targetX, targetY, backward);
+        if (useLyapunovControl) {
+            lyapunovCalculate(targetX, targetY, backward);
+        }
 
-            //check if we're close or not
-            if (fabs(lateralError) < headingDisableDist) {
-                close = true;
-                targetH = chassis.h;
-                targetStraightDistance = lateralError;
-                chassis.clearTrackedInches();
+        if (not useLyapunovControl) {
+            //if we're far from the target, use point based heading error and distance.
+            if (not close) {
+                headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
+                lateralError = chassis.distanceTo(targetX, targetY, backward);
+
+                //check if we're close or not
+                if (fabs(lateralError) < headingDisableDist) {
+                    close = true;
+                    targetH = chassis.h;
+                    targetStraightDistance = lateralError;
+                    chassis.clearTrackedInches();
+                }
             }
+
+            // If we're close to the target, no more active point-based heading correction
+            if (close) {
+                headingError = chassis.wrappedHeadingError(targetH, false);
+                lateralError = targetStraightDistance - chassis.yInchesTracked;
+            }
+
+            drivePow   = drivePID.calculateOutput(lateralError);
+            headingPow = headingPID.calculateOutput(headingError);
+
+            //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
+            blendOutputs(bs);
         }
-
-        // If we're close to the target, no more active point-based heading correction
-        if (close) {
-            headingError = chassis.wrappedHeadingError(targetH, false);
-            lateralError = targetStraightDistance - chassis.yInchesTracked;
-        }
-
-        drivePow   = drivePID.calculateOutput(lateralError);
-        headingPow = headingPID.calculateOutput(headingError);
-
-        //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
-        blendOutputs(bs);
 
         //enforce output constraints (slew, ratio-preserving max cap, min floor)
         governOutputs();
