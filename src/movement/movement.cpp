@@ -404,8 +404,14 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
     clearAllValues();
     targetH = heading;
 
+    //Capture the pose at the start of the move. Error is the gap between the
+    //commanded distance and how far we've actually moved along the heading axis
+    //since then — read straight off (MCL-corrected) pose, not wheel encoders.
+    double startX = chassis.x;
+    double startY = chassis.y;
+
     while (not exitConditionFulfilled) {
-        lateralError = distance - chassis.yInchesTracked;
+        lateralError = distance - chassis.forwardProgress(startX, startY, targetH);
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -434,8 +440,13 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
     clearAllValues();
     targetH = heading;
 
+    //Same pose-based error as driveForward, mirrored: the target is -distance
+    //along the heading axis, so backing up drives forwardProgress negative.
+    double startX = chassis.x;
+    double startY = chassis.y;
+
     while (not exitConditionFulfilled) {
-        lateralError = -(distance + chassis.yInchesTracked);
+        lateralError = -(distance + chassis.forwardProgress(startX, startY, targetH));
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);

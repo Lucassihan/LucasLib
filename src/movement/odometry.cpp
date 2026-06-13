@@ -273,6 +273,19 @@ double Odometry::distanceTo(double targetX, double targetY, bool backward) {
   return dist;
 }
 
+//Signed forward displacement from a captured start point, projected onto the
+//given heading axis (0 = north, clockwise-positive). The forward unit vector at
+//heading h is (sin h, cos h), matching the position update in track().
+//Positive = moved forward along the axis, negative = moved backward.
+//This is the pose-based replacement for the wheel-encoder yInchesTracked
+//odometer: it reads straight off (x, y), so movement error follows the fused
+//(MCL) pose rather than raw encoders, and a pose correction just changes the
+//current reading instead of being permanently accumulated.
+double Odometry::forwardProgress(double startX, double startY, double headingDeg) {
+  double axisRad = headingDeg * (M_PI / 180.0);
+  return (x - startX) * sin(axisRad) + (y - startY) * cos(axisRad);
+}
+
 //Resets the cumulative tracked-inches counters. Called by clearAllValues() at the start of each movement.
 void Odometry::clearTrackedInches() {
   yInchesTracked = 0;

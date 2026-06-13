@@ -54,6 +54,7 @@ public:
 
   double wrapAngle(double angle);
   double distanceTo(double targetX, double targetY, bool backward = false);
+  double forwardProgress(double startX, double startY, double headingDeg);
   double wrappedHeadingError(double targetH, bool backward = false);
   double positiveHeadingError(double targetH, bool backward = false);
   double negativeHeadingError(double targetH, bool backward = false);
