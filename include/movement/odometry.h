@@ -54,6 +54,11 @@ public:
 
   double wrapAngle(double angle);
   double distanceTo(double targetX, double targetY, bool backward = false);
+
+  //Signed radius (inches) of the arc the robot traced on the last track() cycle: r = ds/dtheta.
+  //Sign follows heading change (CW+). Near-straight motion returns a large sentinel (~1e9).
+  //Used by boomerang slip-limiting (centripetal: v_max = sqrt(grip * |r|)).
+  double travelArcRadius();
   double forwardProgress(double startX, double startY, double headingDeg);
   double wrappedHeadingError(double targetH, bool backward = false);
   double positiveHeadingError(double targetH, bool backward = false);
@@ -83,6 +88,9 @@ private:
   double lastRightPos = 0;
 
   uint64_t lastTrackTime = 0;
+
+  //Cached arc radius (inches) from the most recent track() cycle. See travelArcRadius().
+  double lastArcRadius = 1e9;
 
   double resolveHeading(double dIMU1, double dIMU2, double dLDeg, double dRDeg);
   double motorDegsToInches(double deg);

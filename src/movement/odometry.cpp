@@ -133,6 +133,14 @@ void Odometry::track() {
   yInchesTracked += localDY;
   xInchesTracked += localDX;
 
+  //Instantaneous arc radius this cycle: r = ds/dtheta (forward roll over heading change).
+  //Near-zero heading change means (near-)straight travel -> large sentinel radius.
+  if (fabs(dhRad) < 1e-6) {
+    lastArcRadius = 1e9;
+  } else {
+    lastArcRadius = dYInches / dhRad;
+  }
+
   // Forward velocity in inches/sec
   uint64_t now = vex::timer::systemHighResolution();
   double dtSec = (now - lastTrackTime) / 1000000.0;
@@ -271,6 +279,10 @@ double Odometry::distanceTo(double targetX, double targetY, bool backward) {
     dist = -dist;
   }
   return dist;
+}
+
+double Odometry::travelArcRadius() {
+  return lastArcRadius;
 }
 
 //Signed forward displacement from a captured start point, projected onto the

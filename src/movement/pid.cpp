@@ -18,6 +18,7 @@ PID::PID()
       lastTime(0), firstCycle(true),
       lockedKP(0), lockedKI(0), lockedKD(0),
       minOutput(0), maxOutput(12.0),
+      executingLyapunov(false),
       maxAccelRate(0), maxDecelRate(0),
       integralBound(2), maxIntegral(2), //integral will only start to accumulate when it is within 2 error units, and its max contribution to output is 2 volts.
       error(0), output(0), derivative(0)
@@ -71,6 +72,7 @@ void PID::clearAllValues() {
     error            = 0;
     output           = 0;
     derivative       = 0;
+    executingLyapunov = false;
 }
 
 //determine constants
@@ -110,7 +112,10 @@ double PID::calculateOutput(double inputError) {
 
     //dt
     uint64_t now = vex::timer::systemHighResolution();
-    double dt    = firstCycle ? 10.0 : (now - lastTime) / 1000.0;
+    double dt    = (now - lastTime) / 1000.0;
+    if (firstCycle) {
+        dt = 10.0;
+    }
     if (dt <= 0) {
         dt = 10.0;
     }
@@ -150,14 +155,18 @@ double PID::calculateOutput(double inputError) {
     //THE FAMOUS PID EQUATION IS HERE!
     double raw = kP * error + kI * sumerror + kD * derivative;
 
-    //accel/decel rate limiting
-    raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
+    //accel/decel rate limiting — skipped under lyapunov (governor slews instead)
+    if (!executingLyapunov) {
+        raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
+    }
 
-    //maxOutput cap
+    //maxOutput cap (kept even under lyapunov as a safety clamp)
     raw = takeSmallerBetween(raw, maxOutput); //this function compares magnitude while preserving sign
 
-    //minOutput floor   
-    raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
+    //minOutput floor — skipped under lyapunov (it would fight settling)
+    if (!executingLyapunov) {
+        raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
+    }
 
     lastError = error;
     prevOutput = raw;

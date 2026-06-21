@@ -35,6 +35,12 @@ class PID {
     double minOutput;
     double maxOutput;
 
+    // When true, this PID skips its minOutput floor AND its per-PID slew. Set by
+    // lyapunov movements (lyPose / lyapunov moveTo) so the controller works with
+    // raw drive/heading output and all rate-limiting + flooring happens once, at
+    // the governor, on the real left/right voltages. Reset by clearAllValues().
+    bool executingLyapunov;
+
     // accel/decel limits
     double maxAccelRate;
     double maxDecelRate;
