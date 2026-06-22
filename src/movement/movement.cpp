@@ -3,7 +3,7 @@
 #include "movement/pid.h"
 #include "coreConfigs.h"
 #include "misc/util.h"
-
+#include "movement/exitConditions.h"
 #include <cmath>
 #include <algorithm>
 
@@ -35,7 +35,7 @@ void face(double heading, TurnExitConditions ec, int direction) {
         headingError = resolveHeadingTarget(heading, false, direction);
 
         //calculate turn power based on the heading error calculated above
-        turnPow = turnPID.calculateOutput(headingError);
+        turnPow = turnPID.calculateOutput(headingError + turnOvershoot);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
@@ -52,6 +52,7 @@ void face(double heading, TurnExitConditions ec, int direction) {
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -75,7 +76,7 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
         headingError = resolvePointTarget(targetX, targetY, backward, direction);
 
         //calculate turn power based on the heading error calculated above
-        turnPow = turnPID.calculateOutput(headingError);
+        turnPow = turnPID.calculateOutput(headingError + turnOvershoot);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
@@ -92,6 +93,7 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -113,9 +115,9 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
         headingError = resolveHeadingTarget(heading, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError);
+            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
         } else {
-            swingPow = swingPID.calculateOutput(headingError);
+            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
         }
 
         leftOut = -swingPow * partiality;
@@ -127,6 +129,7 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -148,9 +151,9 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
         headingError = resolveHeadingTarget(heading, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError);
+            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
         } else {
-            swingPow = swingPID.calculateOutput(headingError);
+            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
         }
 
         leftOut = swingPow;
@@ -162,6 +165,7 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -185,9 +189,9 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
         headingError = resolvePointTarget(targetX, targetY, backward, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError);
+            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
         } else {
-            swingPow = swingPID.calculateOutput(headingError);
+            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
         }
 
         leftOut = -swingPow * partiality;
@@ -199,6 +203,7 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -222,9 +227,9 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
         headingError = resolvePointTarget(targetX, targetY, backward, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError);
+            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
         } else {
-            swingPow = swingPID.calculateOutput(headingError);
+            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
         }
 
         leftOut = swingPow;
@@ -236,6 +241,7 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
 
         delay(10);
     }
+    turnOvershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -261,6 +267,7 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
     while (not exitConditionFulfilled) {
         lateralError = distance - chassis.forwardProgress(startX, startY, targetH);
+        lateralError = lateralError - lateralUndershoot;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -282,6 +289,7 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
         delay(10);
     }
+    lateralUndershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -297,6 +305,7 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
     while (not exitConditionFulfilled) {
         lateralError = -(distance + chassis.forwardProgress(startX, startY, targetH));
+        lateralError = lateralError + lateralUndershoot;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -318,10 +327,12 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
         delay(10);
     }
+    lateralUndershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
-double headingDisableDist = 6; //only relevant for non-Lyapunov movement. This is EXACTLY what Lyapunov control fixes
+double turnDisableLength = 6;        // moveTo: within this distance, stop point-aiming and hold a fixed heading
+double lyPoseTurnDisableLength = 3;  // lyPose: within this distance, kill steering and drive straight in
 void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSettings bs) {
     ExitStateVars exitStateVars;
     clearAllValues();
@@ -338,7 +349,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
             lateralError = chassis.distanceTo(targetX, targetY, backward);
 
             //check if we're close or not
-            if (fabs(lateralError) < headingDisableDist) {
+            if (fabs(lateralError) < turnDisableLength) {
                 close = true;
                 targetH = chassis.h;
                 targetStraightDistance = lateralError;
@@ -352,7 +363,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
             lateralError = targetStraightDistance - chassis.yInchesTracked;
         }
 
-        drivePow   = drivePID.calculateOutput(lateralError);
+        drivePow   = drivePID.calculateOutput(lateralError - lateralUndershoot);
         headingPow = headingPID.calculateOutput(headingError);
 
         //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
@@ -365,11 +376,11 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - lateralUndershoot, targetX, targetY, backward);
 
         delay(10);
     }
-
+    lateralUndershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -379,7 +390,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
 // heading) and held for the whole movement. Gives a consistent final heading at
 // the target. Drives on e_x, so it backs up cleanly if it overshoots.
 void lyPose(double x, double y, LateralExitConditions ec, bool backward,
-            double heading, BlendSettings bs) {
+            double heading) {
     ExitStateVars exitStateVars;
     clearAllValues();
     targetX = x;
@@ -404,6 +415,15 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
         //always path-follow; lyapunovCalculate writes leftOut/rightOut + lateralError
         lyapunovCalculate(targetX, targetY, backward, pathHeading);
 
+        //CLOSE stage: within lyPoseTurnDisableLength of the pose, kill the turn
+        //and drive straight in on the held heading (no last-inch heading jitter).
+        if (lateralError < lyPoseTurnDisableLength) {
+            leftOut    = driveOut;
+            rightOut   = driveOut;
+            turnOut    = 0;
+            headingPow = 0;
+        }
+
         //enforce output constraints (governor slew, ratio-preserving max cap, min floor)
         governOutputs();
 
@@ -411,13 +431,14 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
         voltageDrive(leftOut, rightOut);
 
         //exit settles on the TRUE distance to the pose (lateralError = dist)
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - lateralUndershoot, targetX, targetY, backward);
 
         delay(10);
     }
 
     drivePID.executingLyapunov   = false;
     headingPID.executingLyapunov = false;
+    lateralUndershoot = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -433,8 +454,7 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
 // distance factor) never springs back out if chasing the lead briefly increases
 // the robot's distance to the target.
 void boomerangTo(BoomParams bp,
-                 LateralExitConditions ec, bool backward,
-                 BlendSettings bs) {
+                 LateralExitConditions ec, bool backward) {
     double x = bp.x;
     double y = bp.y;
     double heading = bp.heading;
@@ -541,7 +561,7 @@ void boomerangTo(BoomParams bp,
 
         headingPow = headingPID.calculateOutput(headingError);
 
-        blendOutputs(bs);
+        blendOutputs({.cosineScaling = false, .turnPriority = 0});
         governOutputs();
         voltageDrive(leftOut, rightOut);
 
@@ -550,4 +570,12 @@ void boomerangTo(BoomParams bp,
         delay(10);
     }
     voltageDrive(0,0); //Stop the motors when the movement ends
+}
+
+void voldrive(double left, double right) {
+    voltageDrive(left,right);
+}
+
+void voldrive(double volts) {
+    voltageDrive(volts, volts);
 }

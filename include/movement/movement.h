@@ -66,18 +66,20 @@ void moveTo(double x, double y,
 // (x, y). heading = a value → the line points that way; heading = NAN → the
 // bot→target heading is frozen at the first loop and held (straightline-steady,
 // consistent final heading). Drives on signed along-line distance, so it backs
-// up cleanly on overshoot. heading sits before bs so it can be set on its own.
+// up cleanly on overshoot.
+// Within the lyPoseTurnDisableLength global (default 3") of the pose, steering
+// is disabled and the bot drives straight in on the held heading — a clean,
+// jitter-free settle (CLOSE stage). Outside it the full path-follow law runs
+// (FAR stage). No BlendSettings: the control law does its own cosine scaling
+// and left/right blend.
 void lyPose(double x, double y,
             LateralExitConditions ec = {},
             bool backward = false,
-            double heading = NAN,
-            BlendSettings bs = {});
+            double heading = NAN);
 
 void boomerangTo(BoomParams bp,
                  LateralExitConditions ec = {},
-                 bool backward = false,
-                 BlendSettings bs = {});
+                 bool backward = false);
 
-// Motion-state telemetry globals + the Lyapunov control law now live in
-// movementUtils.h (included above), so anything that includes movement.h still
-// sees turnPow / leftOut / kLat / lyapunovCalculate / etc.
+void voldrive(double left, double right);
+void voldrive(double volts);

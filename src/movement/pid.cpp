@@ -8,6 +8,7 @@ PID drivePID;
 PID turnPID;
 PID headingPID;
 PID swingPID;
+PID lyPosePID;
 
 //constructor
 PID::PID()

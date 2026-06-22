@@ -1,0 +1,59 @@
+<!doctype html><html><head>
+<meta charset="utf-8">
+<style>
+  html, body { margin:0; padding:0; background:#0d0d0d; font-family: 'Manrope', system-ui, sans-serif; color:#ededed; }
+  .page { display:flex; flex-direction:column; gap:18px; padding:18px; }
+  .row { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  .card { background:#181818; border-radius:10px; padding:14px; }
+  .cap { font-size:13px; font-weight:600; color:#ededed; margin-bottom:3px; }
+  .cd { font-size:11px; color:#9a9a9a; margin-bottom:10px; line-height:1.45; }
+  .app { background:#1b1b1b; border-radius:9px; padding:13px; box-shadow:inset 0 0 0 1px rgba(255,255,255,0.05); }
+  .hd { display:flex; align-items:center; gap:6px; margin-bottom:11px; }
+  .hl { font-size:11px; font-weight:700; }
+  .hb { font-size:8.5px; font-weight:700; color:#0c2c2a; background:#2dd4bf; border-radius:3px; padding:1px 6px; letter-spacing:0.04em; }
+  .hs { font-size:9px; color:#6a6a6a; margin-left:auto; }
+  .errs { display:flex; gap:6px; margin-bottom:12px; }
+  .stat { flex:1; background:#141414; border-radius:5px; padding:6px 8px; }
+  .sk { font-size:9px; color:#7a7a7a; display:block; }
+  .sv { font-size:12px; font-weight:600; }
+  .cn { font-size:10.5px; font-weight:600; color:#b9b9b9; margin:0 0 6px; }
+  .term { display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+  .tl { width:34px; font-size:10px; font-weight:700; }
+  .bar { flex:1; height:7px; border-radius:3.5px; background:#141414; overflow:hidden; }
+  .fill { height:100%; border-radius:3.5px; }
+  .tv { width:62px; text-align:right; font-family:ui-monospace,Menlo,monospace; font-size:11px; font-weight:600; }
+  .chips { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin:0 0 7px 42px; }
+  .chip { font-size:9px; padding:1px 5px; border-radius:3px; background:#141414; color:#8a8a8a; }
+  .cv { font-family:ui-monospace,Menlo,monospace; font-size:9.5px; font-weight:600; color:#dcdcdc; }
+  .mul { font-size:8.5px; color:#5a5a5a; }
+  .outrow { display:flex; justify-content:space-between; align-items:baseline; margin-top:7px; padding-top:7px; border-top:1px solid rgba(255,255,255,0.06); }
+  .ol { font-size:10.5px; font-weight:600; color:#b9b9b9; }
+  .ov { font-size:15px; font-weight:700; color:#fff; }
+  .eqn { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:#cfcfcf; margin:2px 0 1px; }
+  .sb { font-family:ui-monospace,Menlo,monospace; font-size:11px; margin:0 0 10px; color:#9a9a9a; }
+  .lr { display:flex; gap:6px; margin-top:9px; }
+  .lrt { flex:1; background:#141414; border-radius:5px; padding:6px 8px; text-align:center; }
+  .energy { background:#141414; border-radius:6px; padding:10px 11px; margin-bottom:11px; }
+  .epill { font-size:9px; color:#2dd4bf; }
+</style>
+<style>html,body{background:transparent;margin:0;padding:0}.card{margin:0}</style></head><body><div class="page" style="padding:8px;gap:0"><div class="row" style="grid-template-columns:1fr;gap:0"><div class="card" id="L3">
+    <div class="cap">L3 · Energy-led</div>
+    <div class="cd">Leads with the Lyapunov function V (the energy that must always descend), then the terms.</div>
+    <div class="app">
+      <div class="hd"><span class="hl">Lyapunov control</span><span class="hb">LYAP</span><span class="hs">at cursor</span></div>
+      <div class="energy">
+        <div style="display:flex;align-items:baseline;justify-content:space-between">
+          <span class="sk">Lyapunov energy V</span>
+          <span class="epill">▼ converging</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;margin-top:3px">
+          <span style="font-size:22px;font-weight:700;color:#fff;line-height:1">201.8</span>
+          <svg viewBox="0 0 100 26" width="100" height="26" style="margin-bottom:2px"><polyline points="0,3 16,6 32,9 48,13 64,17 80,20 100,22" fill="none" stroke="#2dd4bf" stroke-width="1.8"/></svg>
+        </div>
+      </div>
+      <div class="term"><span class="tl" style="color:#3b82f6">v</span><div class="bar"><div class="fill" style="width:53%;background:#3b82f6"></div></div><span class="tv">+6.35 V</span></div>
+      <div class="term"><span class="tl" style="color:#ef4444">ω·pid</span><div class="bar"><div class="fill" style="width:83%;background:#ef4444"></div></div><span class="tv">-9.92 V</span></div>
+      <div class="term"><span class="tl" style="color:#2dd4bf">ω·lat</span><div class="bar"><div class="fill" style="width:73%;background:#2dd4bf"></div></div><span class="tv">+8.71 V</span></div>
+      <div class="outrow"><span class="ol">ω output</span><span class="ov">-1.21 V</span></div>
+    </div>
+  </div></div></div></body></html>

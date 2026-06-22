@@ -85,3 +85,4 @@ extern PID drivePID;
 extern PID turnPID;
 extern PID headingPID;
 extern PID swingPID;
+extern PID lyPosePID;
