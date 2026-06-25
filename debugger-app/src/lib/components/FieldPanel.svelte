@@ -9,11 +9,12 @@
   import { traceState, poseAt, movementEndHeading } from '$lib/stores/trace.svelte';
   import { endsAtTarget, isTurn, prettyMovement, movementColor } from '$lib/trace/labels';
   import { toScreen } from '$lib/field/coords';
+  import { backdropSrc, fieldImageRect } from '$lib/field/backdrops';
+  import { base } from '$app/paths';
   import type { Movement } from '$lib/trace/types';
 
   // VEX field: 144" × 144", 24" foam tiles (6 × 6 grid).
   const SIZE = 144;
-  const lines = [24, 48, 72, 96, 120]; // interior grid lines
 
   // Distance-based "close" stage zone radius. Only moveTo / boomerang flip a
   // stage purely on distance to target (headingDisableDist); other movements
@@ -25,6 +26,12 @@
 
   // Robot pose tracks the scrubber position over the loaded trace.
   const pose = $derived(poseAt(traceState.time));
+
+  // Top-down field render shown behind the path/robot. The PNG is scaled so its
+  // playable TILE area (not the perimeter wall) maps onto the 144×144 field box,
+  // keeping 1 tile = 24"; the wall falls just outside the viewBox and is clipped.
+  const fieldImg = $derived(backdropSrc(settings.fieldBackdrop, base));
+  const fieldRect = fieldImageRect(SIZE);
 
   // perp-line orientation: boomerang faces its targetH; others approach along
   // their final heading.
@@ -55,19 +62,11 @@
   <div class="panel-label">Field</div>
 
   <div class="canvas">
-    <svg viewBox="0 0 {SIZE} {SIZE}" preserveAspectRatio="xMidYMid meet">
-      <!-- interior tile grid -->
-      {#each lines as p}
-        <line x1={p} y1="0" x2={p} y2={SIZE} class="grid" vector-effect="non-scaling-stroke" />
-        <line x1="0" y1={p} x2={SIZE} y2={p} class="grid" vector-effect="non-scaling-stroke" />
-      {/each}
-
-      <!-- center cross, a touch brighter -->
-      <line x1={SIZE / 2} y1="0" x2={SIZE / 2} y2={SIZE} class="center" vector-effect="non-scaling-stroke" />
-      <line x1="0" y1={SIZE / 2} x2={SIZE} y2={SIZE / 2} class="center" vector-effect="non-scaling-stroke" />
-
-      <!-- field perimeter -->
-      <rect x="0" y="0" width={SIZE} height={SIZE} class="border" vector-effect="non-scaling-stroke" />
+    <svg viewBox="{fieldRect.x} {fieldRect.y} {fieldRect.w} {fieldRect.h}" preserveAspectRatio="xMidYMid meet">
+      <!-- top-down field render. The viewBox is expanded to the full image so the
+           perimeter wall stays visible, while the playable TILE area still sits at
+           coords [0,144] (1 tile = 24"), so robot/path land on the right tiles. -->
+      <image href={fieldImg} x={fieldRect.x} y={fieldRect.y} width={fieldRect.w} height={fieldRect.h} preserveAspectRatio="none" />
 
       <!-- actual (odometry) path, colored by movement -->
       <Path ticks={traceState.trace.ticks} movements={traceState.trace.movements} />
@@ -168,20 +167,9 @@
     max-height: 100%;
   }
 
-  .grid {
-    stroke: var(--border-subtle);
-    stroke-width: 1;
-  }
-
-  .center {
-    stroke: var(--border-light);
-    stroke-width: 1;
-  }
-
-  .border {
-    stroke: var(--text-ghost);
-    stroke-width: 1;
-    fill: none;
+  /* field render fills the square; round its corners to match the panel */
+  image {
+    border-radius: 6px;
   }
 
   /* waypoint hover tooltip — fixed so it floats free of the panel's clipping */

@@ -151,8 +151,16 @@ void Odometry::track() {
 
   //rotate local to global frame (clockwise-positive heading, 0 = north)
   double avgHRad = h * (M_PI / 180.0) + dhRad / 2.0;
-  x += localDY * sin(avgHRad) + localDX * cos(avgHRad);
-  y += localDY * cos(avgHRad) - localDX * sin(avgHRad);
+  double gdx = localDY * sin(avgHRad) + localDX * cos(avgHRad);
+  double gdy = localDY * cos(avgHRad) - localDX * sin(avgHRad);
+
+  mclMutex.lock();
+  x += gdx;
+  y += gdy;
+  mclAccumDX += gdx;   // MCL task consumes this as its predict increment
+  mclAccumDY += gdy;
+  mclMutex.unlock();
+
   h += dhDeg;
 
   //update last values
@@ -214,12 +222,21 @@ void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
 }
 
 //helper math
-double Odometry::wrappedPointHeadingError(double targetX, double targetY, bool backward) {
+//Absolute field bearing (deg, 0 = +Y, CW+) from the robot to (targetX, targetY),
+//flipped 180 if backward. This is the raw turn TARGET; wrappedPointHeadingError is
+//just this minus current heading, wrapped. Kept separate so callers can offset the
+//target (e.g. turnOvershoot) BEFORE wrapping — adding to an already-wrapped error
+//would turn the long way around near the ±180 boundary.
+double Odometry::angleToPoint(double targetX, double targetY, bool backward) {
   double targetH = atan2(targetX - x, targetY - y) * (180.0 / M_PI);
   if (backward) {
     targetH += 180;
   }
-  return wrapAngle(targetH - h);
+  return targetH;
+}
+
+double Odometry::wrappedPointHeadingError(double targetX, double targetY, bool backward) {
+  return wrapAngle(angleToPoint(targetX, targetY, backward) - h);
 }
 
 double Odometry::positivePointHeadingError(double targetX, double targetY, bool backward) {

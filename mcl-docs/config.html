@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Config &amp; Tuning — LucasLib MCL</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<button class="menu-btn" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰ Menu</button>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">L</div>
+      <div><div class="t">LucasLib · MCL</div><div class="s">Implementation docs</div></div></div>
+    <div class="nav-group"><h4>Docs</h4>
+      <a class="nav-link" href="index.html"><span class="lvl">0</span> Overview</a>
+      <a class="nav-link" href="pipeline.html"><span class="lvl">1</span> The Pipeline</a>
+      <a class="nav-link active" href="config.html"><span class="lvl">2</span> Config &amp; Tuning</a>
+      <a class="nav-link" href="testing.html"><span class="lvl">3</span> Testing Chronicle</a>
+    </div>
+    <div class="nav-group"><h4>On this page</h4>
+      <a class="nav-link" href="#how" style="font-size:13px">How config works</a>
+      <a class="nav-link" href="#measure" style="font-size:13px">Things you MEASURE</a>
+      <a class="nav-link" href="#tune" style="font-size:13px">Things you TUNE</a>
+      <a class="nav-link" href="#fixed" style="font-size:13px">Leave-alone defaults</a>
+      <a class="nav-link" href="#bringup" style="font-size:13px">Bring-up order</a>
+    </div>
+  </aside>
+
+  <main class="content"><div class="content-inner">
+    <span class="eyebrow">Implementation · reference</span>
+    <h1>Config &amp; Tuning</h1>
+    <p class="lead">Every knob lives in one struct, <code>MCLConfig</code>, with the numbers set in <code>src/mcl/mclConfig.cpp</code>. Read it with a dot: <code>MCLConfig.MCL_WEIGHT</code>, <code>MCLConfig.maxLateralAccel()</code>. This page explains each field and, crucially, sorts them into <em>measure</em> (physical facts about your robot), <em>tune</em> (behaviour dials), and <em>leave alone</em>.</p>
+
+    <h2 id="how">How the config is structured</h2>
+    <p>It's a plain struct with one global instance. Two constants are compile-time (<code>static constexpr</code>, used to size the particle array); everything else is a runtime field you can even change live from a tuner.</p>
+    <pre><code>struct MclConfig {
+  static constexpr int    NUM_PARTICLES = 400;     // array size (compile-time)
+  static constexpr double FIELD_HALF    = 70.4375; // inches, center to a wall
+  double FORWARD_NOISE, SIDEWAYS_NOISE, ... ;      // runtime knobs
+  double SENSOR_FORWARD[4], ... ;                  // per-sensor mounts
+  double SIDE_PUSH_FORCE, ROBOT_WEIGHT;            // slip physics
+  double maxLateralAccel() const { return (SIDE_PUSH_FORCE / ROBOT_WEIGHT) * 39.3701; }
+};
+extern MclConfig MCLConfig;                        // the one instance (values in mclConfig.cpp)</code><span class="code-label">mclConfig.h</span></pre>
+
+    <h2 id="measure">Things you MEASURE (physical facts — get these right first)</h2>
+    <p>These describe your actual robot. They are not "tuned" — they're measured, and a wrong value here makes the filter <em>confidently</em> wrong.</p>
+    <table>
+      <thead><tr><th>Field</th><th>Units</th><th>What it is &amp; how to get it</th></tr></thead>
+      <tbody>
+        <tr><td><code>SENSOR_FORWARD[4]</code></td><td>in</td><td>How far ahead of the tracking center each sensor sits (a back-facing sensor is negative). Measure with a ruler / from CAD. Index matches <code>DistSensor1..4</code>.</td></tr>
+        <tr><td><code>SENSOR_SIDEWAYS[4]</code></td><td>in</td><td>How far to the <em>right</em> of center each sensor sits (left = negative).</td></tr>
+        <tr><td><code>SENSOR_FACE_ANGLE[4]</code></td><td>deg</td><td>Which way each sensor faces vs the robot's front: 0 = front, 90 = right, 180 = back, 270 = left.</td></tr>
+        <tr><td><code>SENSOR_SCALE[4]</code></td><td>×</td><td>Per-sensor scale fix (~1.00–1.03). Park facing a wall at known distances, read the sensor, set the scale so reading × scale = truth. V5 distance sensors read a few % high.</td></tr>
+        <tr><td><code>SIDE_PUSH_FORCE</code></td><td><strong>N</strong></td><td>The sideways force needed to make the wheels start sliding. Pull the chassis sideways (low, so it slides not tips) with a force gauge; record the peak before it slides. A kg luggage-scale reading converts as <strong>N = kg × 9.81</strong>.</td></tr>
+        <tr><td><code>ROBOT_WEIGHT</code></td><td>kg</td><td>The robot's mass, on a scale. Combined with the push force: <code>maxLateralAccel() = (F/m)·39.37</code> in/s² — the slip threshold the sideways noise (and boomerang) use.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn"><span class="tag">Heading-convention sanity</span><p>The mounts assume LucasLib's frame: 0° = +Y (downfield), clockwise positive. The single fastest way to catch a wrong mount or angle is the <a href="#bringup">map test</a> — place the robot at a known pose and compare each sensor's expected vs. measured distance.</p></div>
+
+    <h2 id="tune">Things you TUNE (behaviour dials)</h2>
+    <table>
+      <thead><tr><th>Field</th><th>Default</th><th>What it does · which way to move it</th></tr></thead>
+      <tbody>
+        <tr><td><code>FORWARD_NOISE</code></td><td>0.08</td><td>Predict noise along the heading, as a fraction of distance moved. Bigger = looser/jitterier but more robust; smaller = tighter but can lag.</td></tr>
+        <tr><td><code>SIDEWAYS_NOISE</code></td><td>0.20</td><td>Base sideways predict noise (larger than forward — no lateral tracker). If sideways position lags or snaps, raise it.</td></tr>
+        <tr><td><code>SLIP_GAIN</code></td><td>0.003</td><td>Extra sideways noise per unit of <em>excess</em> centripetal accel (s²/in). Raise if the robot loses position during hard turns.</td></tr>
+        <tr><td><code>MCL_WEIGHT</code></td><td>0.35</td><td>How hard MCL pulls <code>chassis</code> toward its estimate each cycle (0–1). Higher = snappier correction but jitterier; lower = smoother but laggier. 1.0 = snap straight to MCL.</td></tr>
+        <tr><td><code>ROUGHEN_STD</code></td><td>0.4 in</td><td>Jitter added after resampling. Bigger = recovers from bumps faster but noisier steady state; too small = cloud collapses.</td></tr>
+        <tr><td><code>HEAVY_TAIL_FLOOR</code></td><td>0.05</td><td>Minimum per-sensor vote. Higher = more forgiving of bad readings (but mushier); lower = sharper but brittle near walls.</td></tr>
+        <tr><td><code>SENSOR_STD_FRAC</code></td><td>0.025</td><td>Sensor σ as a fraction of the reading (datasheet: ~2.5%). Larger = trust readings less (mushy); smaller = brittle to a single glitch.</td></tr>
+        <tr><td><code>SENSOR_STD_FLOOR</code></td><td>0.5 in</td><td>Smallest σ allowed (keeps close readings from being razor-peaked).</td></tr>
+        <tr><td><code>MIN_UPDATE_DIST</code></td><td>2.0 in</td><td>Move this far before weighting+resampling. Smaller = corrects more often (more CPU, risk of stationary collapse); larger = lazier.</td></tr>
+        <tr><td><code>INJECT_FRAC</code></td><td><strong>0.0</strong></td><td>Fraction of particles randomized each step. <strong>Off by default</strong> — it biases unobserved axes toward field-center. Raise to ~0.02 ONLY if you need to recover from being bumped/kidnapped (and accept that bias).</td></tr>
+        <tr><td><code>SEED_STD</code></td><td>1.5 in</td><td>Initial scatter around the start pose in <code>StartMCL</code>. Bigger if your start placement is uncertain.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="fixed">Leave-alone defaults</h2>
+    <table>
+      <thead><tr><th>Field</th><th>Default</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><code>NUM_PARTICLES</code></td><td>400</td><td>More = more robust on a symmetric field, but O(N) cost. 300–500 is the sweet spot; it's <code>static constexpr</code> (sizes the array).</td></tr>
+        <tr><td><code>FIELD_HALF</code></td><td>70.4375 in</td><td>Half the inside field dimension. Only changes if the field does.</td></tr>
+        <tr><td><code>SENSOR_MAX_RANGE</code></td><td>78.0 in</td><td>Distance readings past this are dropped (V5 sensor goes unreliable past ~2 m).</td></tr>
+        <tr><td><code>MAX_NO_UPDATE_TIME</code></td><td>2.0 s</td><td>Force an update after this long even if nearly stationary.</td></tr>
+        <tr><td><code>DISTANCE_WEIGHT</code></td><td>1.0</td><td>Global weight on distance votes; only matters if you add other sensor types later.</td></tr>
+        <tr><td><code>TASK_DELAY_MS</code></td><td>20</td><td>mcl task loop period (~50 Hz).</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="bringup">Bring-up order (do not skip)</h2>
+    <ol>
+      <li><strong>Map test.</strong> Place a particle (or just the robot) at a known true pose and print, per sensor, <code>rayToWalls(...)</code> expected vs. the actual reading. They must agree within σ. If not, your <code>SENSOR_*</code> mounts or the heading convention are wrong — fix this <em>before</em> anything else.</li>
+      <li><strong>Scale calibration.</strong> Face each sensor at a wall at a few known distances; set <code>SENSOR_SCALE[i]</code> so reading×scale = truth.</li>
+      <li><strong>Slip measurement.</strong> Weigh the robot (<code>ROBOT_WEIGHT</code>, kg) and the sideways break-loose force (<code>SIDE_PUSH_FORCE</code>, N).</li>
+      <li><strong>Predict-only.</strong> Comment out the weighting; drive a known square; the cloud should follow odometry and spread. Confirms motion + conventions.</li>
+      <li><strong>Full loop, slow → fast.</strong> Watch <code>chassis</code> track. Tune <code>SIDEWAYS_NOISE</code>, then <code>MCL_WEIGHT</code>.</li>
+      <li><strong>Disturb it.</strong> Nudge the robot; confirm it re-converges (via roughening) and that one blocked sensor doesn't wreck it (heavy-tail).</li>
+    </ol>
+    <div class="callout"><span class="tag">Reminder</span><p>Everything here is validated in simulation only (see the <a href="testing.html">Testing Chronicle</a>). The numbers are sane starting points, not robot-specific truth — the measured fields especially must come from <em>your</em> robot.</p></div>
+
+    <div class="pagenav">
+      <a class="prev" href="pipeline.html"><div class="dir">← Back</div><div class="ttl">The Pipeline</div></a>
+      <a class="nx" href="testing.html"><div class="dir">Next →</div><div class="ttl">Testing Chronicle</div></a>
+    </div>
+  </div></main>
+</div>
+</body>
+</html>

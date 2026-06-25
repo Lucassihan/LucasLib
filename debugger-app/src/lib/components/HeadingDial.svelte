@@ -4,7 +4,7 @@
   // shows facing (no separate heading line). Mirrors the field robot via the
   // shared chassisParts geometry.
   import { settings, holesToInches } from '$lib/stores/settings.svelte';
-  import { chassisParts, CHASSIS } from '$lib/field/chassis';
+  import { chassisParts, CHASSIS, trackingSnapYs, clampTrackingIndex } from '$lib/field/chassis';
 
   let { heading, size = 138 }: { heading: number; size?: number } = $props();
 
@@ -61,11 +61,20 @@
   const width = $derived(holesToInches(settings.robotWidthHoles));
   const length = $derived(holesToInches(settings.robotLengthHoles));
   const parts = $derived(
-    chassisParts(width, length, settings.driveWheelCount, settings.intakePosition)
+    chassisParts(width, length, settings.driveWheelCount, settings.intakePosition, settings.sixWheelLayout)
   );
+  // tracking center offset (rotation happens about this point)
+  const tcY = $derived.by(() => {
+    const snaps = trackingSnapYs(length, settings.driveWheelCount, settings.sixWheelLayout);
+    return snaps[clampTrackingIndex(settings.trackingCenterIndex, settings.driveWheelCount)] ?? 0;
+  });
+  // fit the chassis in the ring measured from the (possibly offset) rotation center
   const scale = $derived.by(() => {
-    const bound = Math.hypot(width / 2, length / 2) + CHASSIS.FLEX_LEN / 2;
-    return (R * 0.6) / bound;
+    const extentTop = -length / 2 - CHASSIS.FLEX_LEN / 2;
+    const extentBot = length / 2 + CHASSIS.FLEX_LEN / 2;
+    const maxExtent = Math.max(Math.abs(extentTop - tcY), Math.abs(extentBot - tcY));
+    const bound = Math.hypot(width / 2, maxExtent);
+    return (R * 0.62) / bound;
   });
 </script>
 
@@ -85,7 +94,7 @@
     <text x={c.x} y={c.y} class="card-lbl">{c.t}</text>
   {/each}
 
-  <g transform="translate({CX} {CY}) rotate({heading}) scale({scale})">
+  <g transform="translate({CX} {CY}) rotate({heading}) scale({scale}) translate(0 {-tcY})">
     <rect
       x={-width / 2}
       y={-length / 2}
@@ -103,7 +112,11 @@
     {/each}
   </g>
 
-  <circle cx={CX} cy={CY} r="1.4" class="center" />
+  <!-- tracking center (= dial center = center of rotation) -->
+  <circle cx={CX} cy={CY} r="2.2" class="tc-ring" />
+  <line x1={CX} y1={CY - 3.2} x2={CX} y2={CY + 3.2} class="tc-cross" />
+  <line x1={CX - 3.2} y1={CY} x2={CX + 3.2} y2={CY} class="tc-cross" />
+  <circle cx={CX} cy={CY} r="0.8" class="tc-dot" />
 </svg>
 
 <style>
@@ -143,7 +156,16 @@
     fill: var(--path-actual);
     opacity: 0.85;
   }
-  .center {
-    fill: var(--path-actual);
+  .tc-ring {
+    fill: none;
+    stroke: #fbbf24;
+    stroke-width: 1.2;
+  }
+  .tc-cross {
+    stroke: #fbbf24;
+    stroke-width: 0.9;
+  }
+  .tc-dot {
+    fill: #fbbf24;
   }
 </style>

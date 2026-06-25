@@ -28,7 +28,7 @@ void initializePIDConstants() {
 
   //LyPosePID
   lyPosePID.setProfile(normal);
-  lyPosePID.addStep(99999, 0.01, 0, 0); //LyPose PID shouldn't have any kI or kD. 
+  lyPosePID.addStep(99999, 0.03, 0, 0); //LyPose PID shouldn't have any kI or kD. 
 }
 
 void autonSettings() {

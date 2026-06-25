@@ -12,7 +12,8 @@ const PRETTY: Record<string, string> = {
   driveBackward: 'Drive Backward',
   moveTo: 'Move To',
   boomerangTo: 'Boomerang',
-  lyPose: 'lyPose'
+  lyPose: 'lyPose',
+  voldrive: 'Voltage Drive'
 };
 
 export function prettyMovement(type: string): string {
@@ -48,6 +49,11 @@ export function isLyPose(type: string): boolean {
   return type === 'lyPose';
 }
 
+/** voldrive — open-loop voltage command (no PID, no exit, no governing). */
+export function isVolDrive(type: string): boolean {
+  return type === 'voldrive';
+}
+
 // Vibrant palette, by movement type:
 //   face → red, swing → orange, drive fwd/bwd → blue, moveTo → green, boomerang → yellow
 const COLORS: Record<string, string> = {
@@ -61,7 +67,8 @@ const COLORS: Record<string, string> = {
   driveBackward: '#3b82f6',
   moveTo: '#22c55e',
   boomerangTo: '#eab308',
-  lyPose: '#2dd4bf'
+  lyPose: '#2dd4bf',
+  voldrive: '#a855f7'
 };
 
 export function movementColor(type: string): string {

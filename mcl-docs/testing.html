@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Testing Chronicle — LucasLib MCL</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<button class="menu-btn" onclick="document.querySelector('.sidebar').classList.toggle('open')">☰ Menu</button>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">L</div>
+      <div><div class="t">LucasLib · MCL</div><div class="s">Implementation docs</div></div></div>
+    <div class="nav-group"><h4>Docs</h4>
+      <a class="nav-link" href="index.html"><span class="lvl">0</span> Overview</a>
+      <a class="nav-link" href="pipeline.html"><span class="lvl">1</span> The Pipeline</a>
+      <a class="nav-link" href="config.html"><span class="lvl">2</span> Config &amp; Tuning</a>
+      <a class="nav-link active" href="testing.html"><span class="lvl">3</span> Testing Chronicle</a>
+    </div>
+    <div class="nav-group"><h4>On this page</h4>
+      <a class="nav-link" href="#harness" style="font-size:13px">The test harness</a>
+      <a class="nav-link" href="#p1" style="font-size:13px">Bug 1 · Collapse</a>
+      <a class="nav-link" href="#p2" style="font-size:13px">Bug 2 · Reinit hijack</a>
+      <a class="nav-link" href="#p3" style="font-size:13px">Bug 3 · Deprivation</a>
+      <a class="nav-link" href="#p4" style="font-size:13px">Bug 4 · Injection bias</a>
+      <a class="nav-link" href="#insight" style="font-size:13px">The real lesson</a>
+      <a class="nav-link" href="#final" style="font-size:13px">Final validation</a>
+    </div>
+  </aside>
+
+  <main class="content"><div class="content-inner">
+    <span class="eyebrow">Implementation · how we know it works</span>
+    <h1>Testing Chronicle</h1>
+    <p class="lead">The filter did not work the first time — or the second, or the third. This is the honest record of every failure, what caused it, and the fix, because the bugs <em>are</em> the design rationale: each robustness feature in the code exists because a specific test broke without it. All results are from off-robot simulation (it has not yet run on hardware).</p>
+
+    <h2 id="harness">The test harness</h2>
+    <p>There's no VEX SDK off the robot, so the real <code>mcl.h</code> + <code>mclConfig.cpp</code> are compiled with <code>clang++</code> against a tiny stub <code>vex.h</code> — a programmable <code>vex::distance</code> (you set what it reads), a no-op <code>mutex</code>, a fake <code>timer</code>. Then a simulated robot drives a path while we <em>generate</em> the sensor readings from the true pose:</p>
+    <pre><code>// each step: feed the filter the true motion + sensor readings, then measure error
+double td = rayToWalls(trueSensorX, trueSensorY, trueSensorAngle);  // what the wall really is
+device._mm = (td + noise) * 25.4;                                   // what the sensor "reads"
+pf.step(globalDX, globalDY, headingRad, slipAccel, nowMs);
+double error = hypot(pf.estimate.x - truth.x, pf.estimate.y - truth.y);</code><span class="code-label">test harness (off-robot)</span></pre>
+    <p>This exercises the <em>real</em> filter code end-to-end — the same ray-cast, weighting, and resampling that run on the robot. Two scenarios matter: a <strong>standalone</strong> filter (estimate vs. truth, the harshest test) and the <strong>faithful</strong> integration (odometry + 35% blend, measuring the blended <code>chassis</code> pose — what actually ships).</p>
+    <div class="callout"><span class="tag">First good sign</span><p>From the very first run the filter tracked beautifully when well-observed — <strong>0.1–0.5 in</strong> error in the open field. So the core math (ray-cast, convention, weighting) was right early. Every bug below was about <em>robustness</em>, not correctness.</p></div>
+
+    <h2 id="p1">Bug 1 — Particle impoverishment (the cloud collapses)</h2>
+    <div class="card">
+      <p><strong>Symptom.</strong> The standalone filter tracked at 0.1–0.5 in, then suffered episodes of <strong>~11 in</strong> error (avg 10.67), always near a wall. A stationary test was damning: seeded at (10,10) with truth at (0,0), the estimate <strong>never moved</strong> from the seed — stuck at 14.2 in error for 30 cycles.</p>
+      <p><strong>Diagnosis.</strong> With a tight σ the bell-curve likelihood is razor-peaked, so the single particle closest to truth gets almost all the weight and resampling copies <em>it</em> 400 times — the cloud collapses to one point with zero diversity. Once collapsed, if a constraining sensor saturates near a wall, there's nothing left to re-spread and re-estimate, so it drifts. (The static test also showed the flip side: with no particle near truth and no motion, there's nothing to select — you can't find what you never sampled.)</p>
+      <p style="margin-bottom:0"><strong>Fix.</strong> Three things, now core: <strong>roughening</strong> (jitter each particle after resampling so duplicates don't stack), a <strong>σ floor</strong> (<code>SENSOR_STD_FLOOR</code>, stop the likelihood getting razor-thin), and the <strong>heavy-tail floor</strong> (a far-off reading can't drive weight to exactly zero).</p>
+    </div>
+
+    <h2 id="p2">Bug 2 — The out-of-field reinit hijack</h2>
+    <div class="card">
+      <p><strong>Symptom.</strong> Sudden <strong>81-inch</strong> jumps: at one step the estimate teleported clear across the field (truth x = 22, estimate x = −60), then clawed back.</p>
+      <p><strong>Diagnosis.</strong> The first version handled particles that wandered off the field by <em>teleporting them to a random spot anywhere on the field</em>. Near a wall, where only one or two sensors are in range, those random particles could happen to match the few valid readings and get high weight — hijacking the estimate to a random location.</p>
+      <p style="margin-bottom:0"><strong>Fix.</strong> Stop teleporting. A robot physically can't leave the field, so a valid hypothesis can't either — <strong>clamp every particle to ±70.4 in</strong> in Predict (and after roughening). Particles stay local; no random hijack. <em>(Ironically, removing this destructive reinit exposed the next bug — it had been doubling as a crude recovery mechanism.)</em></p>
+    </div>
+
+    <h2 id="p3">Bug 3 — Deprivation after a low-observability moment</h2>
+    <div class="card">
+      <p><strong>Symptom.</strong> After the clamp fix, a new failure: the moment the robot passed through a pose where only <strong>one sensor</strong> was in range, the cloud drifted ~28 in and then sat at a <strong>constant 28-inch offset that never recovered</strong> (avg 26.2), even when all sensors came back.</p>
+      <p><strong>Diagnosis.</strong> During the one-sensor moment the under-constrained axis drifted. With the cloud now tightly clamped and roughened only ±0.4 in, <em>no particle spanned the 28-inch gap to the truth</em> — so when observability returned, there was nothing near the right answer to select. Classic particle deprivation. (The old random reinit had accidentally been the cure, by scattering particles everywhere.)</p>
+      <p style="margin-bottom:0"><strong>Attempted fix.</strong> Augmented MCL — inject a small fraction (2%) of fresh <em>random</em> particles every step, so the filter can rediscover a pose it had ruled out. This led straight to Bug 4.</p>
+    </div>
+
+    <h2 id="p4">Bug 4 — Injection biases unobserved axes</h2>
+    <div class="card">
+      <p><strong>Symptom.</strong> Injection made things <em>worse</em>. In a shove test (an 8-inch push the odometry misses), <code>INJECT_FRAC = 0.02</code> spiked the error to <strong>33 in</strong> mid-recovery before settling — while <code>INJECT_FRAC = 0</code> recovered cleanly and monotonically.</p>
+      <p><strong>Diagnosis.</strong> Injected particles are spread <em>uniformly</em> across the field, so their average sits at field-center. On an axis the sensors can't currently observe, those injected particles aren't pruned, so they drag the estimate's mean toward the center of the field — a systematic bias exactly where you have the least information. Worse, the 35% blend then feeds that biased estimate into the otherwise-good odometry value.</p>
+      <p style="margin-bottom:0"><strong>Fix.</strong> <strong><code>INJECT_FRAC = 0</code> by default.</strong> For tracking from a known autonomous start (the VEX case) you never need global re-discovery, and roughening already provides enough diffusion to recover from a bump. Injection stays as an opt-in knob for teams who specifically want kidnap recovery and can tolerate the bias.</p>
+    </div>
+
+    <h2 id="insight">The real lesson — the standalone test was lying</h2>
+    <p>The wall-hugging, fast-rotating path in the standalone test creates a genuinely hard situation: with 4 sensors at 90° spacing, <strong>near a wall the in-range sensors often all see the same wall</strong>, leaving one axis momentarily unobservable. At one step both valid sensors saw the right wall → x was perfect (55.1 vs 55) and y drifted 45 in. <em>That is not a bug — the filter can't observe what the sensors don't see.</em></p>
+    <div class="callout key"><span class="tag">Why the real robot is fine where the test wasn't</span><p>The standalone test measured the filter <em>alone</em>, with no odometry holding the unobserved axis. On the real robot, <strong>odometry keeps writing <code>chassis.x/y</code></strong> and MCL only nudges it 35%; an axis MCL can't see is held steady by odometry until a sensor can correct it. The fix for the test was to stop testing a fiction and test the <em>actual system</em>: odometry + blend.</p></div>
+
+    <h2 id="final">Final validation</h2>
+    <p>With the robustness features in (clamp, roughening, heavy-tail, σ floor) and injection off, two tests on the <em>real integration</em>:</p>
+    <table>
+      <thead><tr><th>Test</th><th>Result</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Tracking</strong> (odometry + 35% blend, central path)</td><td>blended pose <strong>0.33 in</strong> avg vs. pure-odometry 0.66 in; error stays bounded while pure odom climbs</td><td class="tick">MCL beats odometry 2×</td></tr>
+        <tr><td><strong>Shove recovery</strong> (8 in push odometry misses)</td><td>corrected in <strong>~2 s</strong> (8 in → under 2 in within ~110 cycles), monotonic</td><td class="tick">recovers via roughening diffusion</td></tr>
+        <tr><td><strong>Compile</strong> (filter + task glue, clang++ gnu++2a)</td><td><code>mcl.h</code>, <code>mclConfig.cpp</code>, <code>mcl.cpp</code> all build clean</td><td class="tick">valid C++</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn"><span class="tag">What's NOT yet tested</span><p>This is all simulation. It has <strong>not run on a real robot</strong>. Real-world unknowns the sim can't capture: actual sensor noise/beam behaviour, IMU drift, opponents in the beam, field-tolerance variation, and whether your measured mounts/scale/slip-force are right. Treat the <a href="config.html#bringup">bring-up order</a> as mandatory before trusting it in a match.</p></div>
+
+    <h2 id="summary">Every robustness feature, and the bug it fixes</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>Exists because…</th></tr></thead>
+      <tbody>
+        <tr><td>Roughening after resample</td><td>Bug 1 — the cloud collapsed to one point</td></tr>
+        <tr><td>σ floor + heavy-tail floor</td><td>Bug 1 — razor-peaked likelihood / a saturated sensor zeroing good particles</td></tr>
+        <tr><td>Clamp particles to the field</td><td>Bug 2 — random reinit hijacked the estimate</td></tr>
+        <tr><td>Injection OFF by default</td><td>Bug 4 — uniform injection biases unobserved axes</td></tr>
+        <tr><td>Trust IMU heading + odometry blend</td><td>The insight — odometry must hold axes MCL can't observe</td></tr>
+        <tr><td>Update gate (distance/time)</td><td>Resampling while stationary collapses the cloud</td></tr>
+      </tbody>
+    </table>
+
+    <div class="pagenav">
+      <a class="prev" href="config.html"><div class="dir">← Back</div><div class="ttl">Config &amp; Tuning</div></a>
+      <a class="nx" href="index.html"><div class="dir">Next →</div><div class="ttl">Overview</div></a>
+    </div>
+  </div></main>
+</div>
+</body>
+</html>

@@ -30,6 +30,7 @@ SRC_A  =
 INC_F  = include
 INC_F += include/misc
 INC_F += include/movement
+INC_F += include/mcl
 
 # build targets
 all: $(BUILD)/$(PROJECT).bin

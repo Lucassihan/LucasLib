@@ -23,7 +23,7 @@ const STORAGE_KEY = 'lucaslib-debugger.library';
 const MAX_ITEMS = 25;
 // Bump when the sample format changes (e.g. new govern fields) so stale seeded
 // libraries refresh instead of showing samples missing the new columns.
-const SEED_VERSION = 6;
+const SEED_VERSION = 11;
 
 function makeId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);

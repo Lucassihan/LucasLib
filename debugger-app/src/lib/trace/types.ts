@@ -36,7 +36,8 @@ export type MovementType =
   | 'driveBackward'
   | 'moveTo'
   | 'boomerangTo'
-  | 'lyPose';
+  | 'lyPose'
+  | 'voldrive';
 
 export interface Movement {
   index: number;
@@ -53,6 +54,9 @@ export interface Movement {
   gLead: number; // ghost lead [0,1]
   leadChasePowerLimit: number; // centripetal slip cap grip constant; <=0 disabled
   pathHeading: number; // lyPose: fixed line heading (deg) the robot rides
+  turnDisableLength: number; // lyPose: within this dist (in) the turn is disabled
+  leftVolts: number; // voldrive: commanded left-side volts (open loop)
+  rightVolts: number; // voldrive: commanded right-side volts (open loop)
   heading: number;
   cosineScaling: boolean;
   turnPriority: number;

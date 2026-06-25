@@ -8,7 +8,7 @@
   const width = $derived(holesToInches(settings.robotWidthHoles));
   const length = $derived(holesToInches(settings.robotLengthHoles));
   const parts = $derived(
-    chassisParts(width, length, settings.driveWheelCount, settings.intakePosition)
+    chassisParts(width, length, settings.driveWheelCount, settings.intakePosition, settings.sixWheelLayout)
   );
 
   // Symmetric padding (flex overhang counted on both sides) keeps the robot

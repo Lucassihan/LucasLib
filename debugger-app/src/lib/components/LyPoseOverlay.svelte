@@ -38,7 +38,7 @@
     const foot = toScreen(footX, footY, field);
     const robot = toScreen(pose.x, pose.y, field);
 
-    return { a, end, foot, robot };
+    return { a, end, foot, robot, turnDisable: movement.turnDisableLength };
   });
 </script>
 
@@ -50,6 +50,11 @@
   <line x1={geo.robot.sx} y1={geo.robot.sy} x2={geo.foot.sx} y2={geo.foot.sy} stroke={CROSS} stroke-width="1.6" opacity="0.9" vector-effect="non-scaling-stroke" />
   <circle cx={geo.foot.sx} cy={geo.foot.sy} r="1.8" fill="none" stroke={TEAL} stroke-width="1.3" vector-effect="non-scaling-stroke" />
 
-  <!-- target pose -->
-  <circle cx={geo.end.sx} cy={geo.end.sy} r="2.8" fill={TEAL} />
+  <!-- turn-disable zone: dotted circle (radius = lyapunovTurnDisableLength) -->
+  {#if geo.turnDisable > 0}
+    <circle cx={geo.end.sx} cy={geo.end.sy} r={geo.turnDisable} fill="none" stroke={TEAL} stroke-width="1" stroke-dasharray="2 2" opacity="0.55" vector-effect="non-scaling-stroke" />
+  {/if}
+
+  <!-- target dot — same grey marker boomerang/moveTo use (Waypoint .dot) -->
+  <circle cx={geo.end.sx} cy={geo.end.sy} r="1.6" style="fill: var(--text-secondary)" />
 {/if}

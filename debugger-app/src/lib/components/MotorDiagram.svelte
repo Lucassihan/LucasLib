@@ -64,7 +64,6 @@
   {#each parts.flex as f}
     <rect x={f.x} y={f.y} width={f.w} height={f.h} rx="0.4" class="flex" />
   {/each}
-  <circle cx="0" cy="0" r="1.3" class="center" />
 </svg>
 
 <style>
@@ -104,8 +103,5 @@
   .flex {
     fill: var(--path-actual);
     opacity: 0.85;
-  }
-  .center {
-    fill: var(--path-actual);
   }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { traceState, movementAt, poseAt, tickAt } from '$lib/stores/trace.svelte';
-  import { prettyMovement, movementColor, isTurn } from '$lib/trace/labels';
+  import { prettyMovement, movementColor, isTurn, isVolDrive } from '$lib/trace/labels';
   import ExitGlyph from './ExitGlyph.svelte';
   import HeadingDial from './HeadingDial.svelte';
   import GovernorsCard from './GovernorsCard.svelte';
@@ -102,6 +102,11 @@
     }
     if (t === 'lyPose') {
       r.push({ k: 'Path heading', v: `${m.pathHeading.toFixed(1)}°` });
+    }
+    if (t === 'voldrive') {
+      r.push({ k: 'Left', v: `${m.leftVolts} V` });
+      r.push({ k: 'Right', v: `${m.rightVolts} V` });
+      r.push({ k: 'Duration', v: `${((m.endTime - m.startTime) / 1000).toFixed(2)} s` });
     }
     if (t.startsWith('swing')) r.push({ k: 'Partiality', v: `${m.partiality}` });
     if (m.direction !== 0) r.push({ k: 'Direction', v: m.direction > 0 ? 'CW' : 'CCW' });
@@ -255,6 +260,15 @@
       {/if}
     </div>
 
+    {#if isVolDrive(m.type)}
+      <div class="card">
+        <div class="group-label">Termination</div>
+        <div class="exit-reason">
+          <span>Timed</span>
+        </div>
+        <div class="exit-detail">No exit condition — voldrive returns immediately and the caller's delay() holds it for {((m.endTime - m.startTime) / 1000).toFixed(2)} s.</div>
+      </div>
+    {:else}
     <div class="card">
       <div class="group-label">Exit condition</div>
       <div class="exit-reason">
@@ -277,8 +291,11 @@
         {/each}
       </div>
     </div>
+    {/if}
 
-    <GovernorsCard />
+    {#if !isVolDrive(m.type)}
+      <GovernorsCard />
+    {/if}
 
     <div class="card">
       <div class="group-label">Robot Pose</div>

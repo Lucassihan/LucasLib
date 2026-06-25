@@ -1,6 +1,7 @@
 <script lang="ts">
   import { settings, holesToInches, type DriveWheelCount } from '$lib/stores/settings.svelte';
   import RobotPreview from './RobotPreview.svelte';
+  import TrackingCenterPicker from './TrackingCenterPicker.svelte';
 
   let { open = $bindable() }: { open: boolean } = $props();
 
@@ -46,7 +47,6 @@
           <span class="conv">= {holesToInches(settings.robotLengthHoles).toFixed(1)} in</span>
         </div>
 
-        <p class="note">1 hole = 0.5 in (VEX hole spacing). Chassis are counted in holes.</p>
       </section>
 
       <section class="group">
@@ -65,6 +65,29 @@
           </div>
         </div>
 
+        {#if settings.driveWheelCount === 6}
+          <div class="row seg-row">
+            <span class="seg-label">Layout</span>
+            <div class="seg">
+              <button
+                class="seg-btn"
+                class:active={settings.sixWheelLayout === 'centered'}
+                onclick={() => (settings.sixWheelLayout = 'centered')}
+              >Centered</button>
+              <button
+                class="seg-btn"
+                class:active={settings.sixWheelLayout === 'gapFront'}
+                onclick={() => (settings.sixWheelLayout = 'gapFront')}
+              >Gap: front</button>
+              <button
+                class="seg-btn"
+                class:active={settings.sixWheelLayout === 'gapBack'}
+                onclick={() => (settings.sixWheelLayout = 'gapBack')}
+              >Gap: back</button>
+            </div>
+          </div>
+        {/if}
+
         <div class="row seg-row">
           <span class="seg-label">Intake</span>
           <div class="seg">
@@ -81,7 +104,59 @@
           </div>
         </div>
 
-        <p class="note">Wheels spread to the widest wheelbase; flexwheels sit on the intake edge.</p>
+      </section>
+
+      <section class="group">
+        <div class="tc-body">
+          <TrackingCenterPicker />
+          <div class="tc-info">
+            <div class="tc-value">Tracking center</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-label">Field</div>
+        <div class="field-rows">
+          <button
+            type="button"
+            class="field-row solo"
+            class:active={settings.fieldBackdrop === 'perimeter'}
+            onclick={() => (settings.fieldBackdrop = 'perimeter')}
+          >Empty field</button>
+
+          <div class="field-row">
+            <span class="fr-name">Override Match</span>
+            <div class="fr-vars">
+              <button
+                class="fr-var"
+                class:active={settings.fieldBackdrop === 'match-h'}
+                onclick={() => (settings.fieldBackdrop = 'match-h')}
+              >Highlighted</button>
+              <button
+                class="fr-var"
+                class:active={settings.fieldBackdrop === 'match'}
+                onclick={() => (settings.fieldBackdrop = 'match')}
+              >Plain</button>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <span class="fr-name">Override Skills</span>
+            <div class="fr-vars">
+              <button
+                class="fr-var"
+                class:active={settings.fieldBackdrop === 'skills-h'}
+                onclick={() => (settings.fieldBackdrop = 'skills-h')}
+              >Highlighted</button>
+              <button
+                class="fr-var"
+                class:active={settings.fieldBackdrop === 'skills'}
+                onclick={() => (settings.fieldBackdrop = 'skills')}
+              >Plain</button>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   </div>
@@ -99,7 +174,8 @@
   }
 
   .panel {
-    width: 340px;
+    width: 460px;
+    max-width: calc(100vw - 32px);
     background: var(--bg-elevated);
     border-radius: var(--radius-panel);
     box-shadow:
@@ -207,6 +283,28 @@
     line-height: 1.4;
   }
 
+  .tc-body {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .tc-body :global(svg) {
+    width: 116px;
+    flex: 0 0 116px;
+  }
+  .tc-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .tc-value {
+    font-size: 12px;
+    font-weight: 600;
+    color: #fbbf24;
+  }
+  .tc-info .note {
+    margin-top: 6px;
+  }
+
   .seg-row {
     justify-content: flex-start;
   }
@@ -240,5 +338,72 @@
     background: rgba(255, 255, 255, 0.12);
     color: var(--text-emphasis);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  }
+
+  /* field backdrop picker — name on the left, variant toggle on the right */
+  .field-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .field-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--bg-raised);
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 5px 6px 5px 11px;
+    min-height: 34px;
+  }
+  .fr-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .field-row.solo {
+    border: none;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    padding: 9px 11px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .field-row.solo:hover {
+    color: var(--text-primary);
+  }
+  .field-row.solo.active {
+    color: var(--text-emphasis);
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  }
+  .fr-vars {
+    display: flex;
+    gap: 4px;
+  }
+  .fr-var {
+    background: var(--bg-base);
+    color: var(--text-muted);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 5px 10px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .fr-var:hover {
+    color: var(--text-primary);
+  }
+  .fr-var.active {
+    background: #fbbf24;
+    color: #2a2208;
+    box-shadow: none;
   }
 </style>

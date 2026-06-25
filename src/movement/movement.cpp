@@ -21,9 +21,16 @@ void face(double heading, TurnExitConditions ec, int direction) {
     ExitStateVars exitStateVars;
     clearAllValues();
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the target, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedHeadingError(heading, false));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading, false, direction);
+        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -31,11 +38,12 @@ void face(double heading, TurnExitConditions ec, int direction) {
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolveHeadingTarget(heading, false, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
 
         //calculate turn power based on the heading error calculated above
-        turnPow = turnPID.calculateOutput(headingError + turnOvershoot);
+        turnPow = turnPID.calculateOutput(headingError);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
@@ -62,9 +70,16 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
     targetX = x;
     targetY = y;
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the point, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolvePointTarget(targetX, targetY, backward, direction);
+        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -72,11 +87,12 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolvePointTarget(targetX, targetY, backward, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
 
         //calculate turn power based on the heading error calculated above
-        turnPow = turnPID.calculateOutput(headingError + turnOvershoot);
+        turnPow = turnPID.calculateOutput(headingError);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
@@ -101,9 +117,16 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
     ExitStateVars exitStateVars;
     clearAllValues();
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the target, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedHeadingError(heading, false));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading, false, direction);
+        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -111,13 +134,14 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolveHeadingTarget(heading, false, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = turnPID.calculateOutput(headingError);
         } else {
-            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = swingPID.calculateOutput(headingError);
         }
 
         leftOut = -swingPow * partiality;
@@ -137,9 +161,16 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
     ExitStateVars exitStateVars;
     clearAllValues();
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the target, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedHeadingError(heading, false));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading, false, direction);
+        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -147,13 +178,14 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolveHeadingTarget(heading, false, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = turnPID.calculateOutput(headingError);
         } else {
-            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = swingPID.calculateOutput(headingError);
         }
 
         leftOut = swingPow;
@@ -175,9 +207,16 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
     targetX = x;
     targetY = y;
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the point, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolvePointTarget(targetX, targetY, backward, direction);
+        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -185,13 +224,14 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolvePointTarget(targetX, targetY, backward, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = turnPID.calculateOutput(headingError);
         } else {
-            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = swingPID.calculateOutput(headingError);
         }
 
         leftOut = -swingPow * partiality;
@@ -213,9 +253,16 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
     targetX = x;
     targetY = y;
 
+    //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
+    //applied along it: positive overshoots past the point, negative undershoots short of it
+    int turnDir = direction;
+    if (turnDir == 0) {
+        turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
+    }
+
     //convert exitPct to exitAng using the initial heading error
     if (ec.exitPct > 0) {
-        double initialError = resolvePointTarget(targetX, targetY, backward, direction);
+        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
         double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
         if (pctExitAng > ec.exitAng) {
             ec.exitAng = pctExitAng;
@@ -223,13 +270,14 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
     }
 
     while (not exitConditionFulfilled) {
-        //heading error determination
-        headingError = resolvePointTarget(targetX, targetY, backward, direction);
+        //live error to the target heading (base + turnOvershoot along the turn direction),
+        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
+        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
 
         if (partiality < 0) {
-            swingPow = turnPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = turnPID.calculateOutput(headingError);
         } else {
-            swingPow = swingPID.calculateOutput(headingError + turnOvershoot);
+            swingPow = swingPID.calculateOutput(headingError);
         }
 
         leftOut = swingPow;
@@ -267,7 +315,7 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
     while (not exitConditionFulfilled) {
         lateralError = distance - chassis.forwardProgress(startX, startY, targetH);
-        lateralError = lateralError - lateralUndershoot;
+        lateralError = lateralError - driveStopShort;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -289,7 +337,7 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
         delay(10);
     }
-    lateralUndershoot = 0;
+    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -305,7 +353,7 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
     while (not exitConditionFulfilled) {
         lateralError = -(distance + chassis.forwardProgress(startX, startY, targetH));
-        lateralError = lateralError + lateralUndershoot;
+        lateralError = lateralError + driveStopShort;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -327,12 +375,11 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
         delay(10);
     }
-    lateralUndershoot = 0;
+    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
 double turnDisableLength = 6;        // moveTo: within this distance, stop point-aiming and hold a fixed heading
-double lyPoseTurnDisableLength = 3;  // lyPose: within this distance, kill steering and drive straight in
 void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSettings bs) {
     ExitStateVars exitStateVars;
     clearAllValues();
@@ -341,6 +388,11 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
 
     headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
     lateralError = chassis.distanceTo(targetX, targetY, backward);
+
+    double signedStopShort = driveStopShort;
+    if (backward) {
+        signedStopShort = -driveStopShort;
+    }
 
     while (not exitConditionFulfilled) {
         //if we're far from the target, use point based heading error and distance.
@@ -359,11 +411,11 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
 
         // If we're close to the target, no more active point-based heading correction
         if (close) {
-            headingError = chassis.wrappedHeadingError(targetH, false);
+            headingError = chassis.wrappedHeadingError(targetH, backward);
             lateralError = targetStraightDistance - chassis.yInchesTracked;
         }
 
-        drivePow   = drivePID.calculateOutput(lateralError - lateralUndershoot);
+        drivePow   = drivePID.calculateOutput(lateralError - signedStopShort);
         headingPow = headingPID.calculateOutput(headingError);
 
         //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
@@ -376,11 +428,11 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - lateralUndershoot, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - signedStopShort, targetX, targetY, backward);
 
         delay(10);
     }
-    lateralUndershoot = 0;
+    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -389,6 +441,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
 // the bot→target heading is frozen at the first loop (straightline-style steady
 // heading) and held for the whole movement. Gives a consistent final heading at
 // the target. Drives on e_x, so it backs up cleanly if it overshoots.
+double lyPoseTurnDisableLength = 3;
 void lyPose(double x, double y, LateralExitConditions ec, bool backward,
             double heading) {
     ExitStateVars exitStateVars;
@@ -431,14 +484,14 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
         voltageDrive(leftOut, rightOut);
 
         //exit settles on the TRUE distance to the pose (lateralError = dist)
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - lateralUndershoot, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - driveStopShort, targetX, targetY, backward);
 
         delay(10);
     }
 
     drivePID.executingLyapunov   = false;
     headingPID.executingLyapunov = false;
-    lateralUndershoot = 0;
+    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 

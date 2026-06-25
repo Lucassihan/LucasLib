@@ -70,7 +70,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   let pid = { mi: -1, sumLe: 0, lastLe: 0, sumHe: 0, lastHe: 0 };
   let govLast = { lo: 0, ro: 0 };
 
-  function tick(stage, f = {}) {
+  function tick(stage, f = {}, governed = true) {
     const v = {
       le: 0, he: 0, dp: 0, hp: 0, tp: 0, sp: 0, do: 0, to: 0, lo: 0, ro: 0,
       yi: 0, xi: 0, leadX: 0, leadY: 0, leadRetraction: 0, perpDist: 0, ex: 0, ey: 0,
@@ -89,9 +89,17 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     const turnD = (v.he - pid.lastHe) / 0.01;
     pid.lastLe = v.le;
     pid.lastHe = v.he;
-    // govern the motor sides (cap + min floor + slew) so emitted volts are real
-    const glo = governSide(v.lo, govLast.lo);
-    const gro = governSide(v.ro, govLast.ro);
+    // govern the motor sides (cap + min floor + slew) so emitted volts are real.
+    // voldrive is open-loop (voltageDrive bypasses governOutputs), so its volts
+    // pass through raw — only clamped to the ±12 V motor ceiling.
+    let glo, gro;
+    if (governed) {
+      glo = governSide(v.lo, govLast.lo);
+      gro = governSide(v.ro, govLast.ro);
+    } else {
+      glo = clamp(v.lo, 12);
+      gro = clamp(v.ro, 12);
+    }
     govLast = { lo: glo, ro: gro };
     ticks.push([
       t, mi, r(pose.x), r(pose.y), r(pose.h), stage,
@@ -112,7 +120,8 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       exitDist: 0, exitPerpLine: 0, exitAng: 0, exitPct: 0,
       exitReason: 'smallError', startTime: 0, endTime: 0,
       driveKp: 0, driveKi: 0, driveKd: 0, turnKp: 0, turnKi: 0, turnKd: 0,
-      gLead: 0, leadChasePowerLimit: -1, pathHeading: 0,
+      gLead: 0, leadChasePowerLimit: -1, pathHeading: 0, turnDisableLength: 0,
+      leftVolts: 0, rightVolts: 0,
       ...o
     };
     return [
@@ -122,7 +131,8 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       d.exitBigError, d.exitBigTime, d.exitDist, d.exitPerpLine, d.exitAng, d.exitPct,
       d.exitReason, d.startTime, d.endTime,
       d.driveKp, d.driveKi, d.driveKd, d.turnKp, d.turnKi, d.turnKd,
-      r(d.gLead), r(d.leadChasePowerLimit), r(d.pathHeading)
+      r(d.gLead), r(d.leadChasePowerLimit), r(d.pathHeading), r(d.turnDisableLength),
+      r(d.leftVolts), r(d.rightVolts)
     ];
   }
 
@@ -401,11 +411,44 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'lyPose', targetX, targetY, targetH: pathHeading,
-      heading: pathHeading, pathHeading,
+      heading: pathHeading, pathHeading, turnDisableLength,
       exitDist, exitReason: 'exitDist',
       exitSmallError: 0.5, exitSmallTime: 150, exitBigError: 3, exitBigTime: 500,
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0, driveKd: 0.05, turnKp: 0.8, turnKi: 0, turnKd: 0.05
+    }));
+    mi++;
+  }
+
+  // voldrive: open-loop voltage. Unlike every other movement it has NO PID, NO
+  // exit condition, and is NOT its own loop — voldrive(left,right) just commands
+  // the motors and returns; the caller's delay() decides how long it runs. The
+  // sim integrates the unicycle at the fixed left/right volts for that duration.
+  function voldrive(left, right, durationMs) {
+    const startT = t;
+    const driveOut = (left + right) / 2;
+    const turnOut = (left - right) / 2;
+    const steps = Math.round(durationMs / TICK);
+    for (let i = 0; i < steps; i++) {
+      const v = (driveOut / 12) * MAXV;
+      const w = (turnOut / 12) * MAXW; // deg/s, + = clockwise
+      pose.h += w * DT + noise(0.04);
+      const hr = pose.h * D2R;
+      pose.x += v * Math.sin(hr) * DT + noise(0.02);
+      pose.y += v * Math.cos(hr) * DT + noise(0.02);
+      const dsv = Math.abs(v * DT);
+      const dthr = Math.abs(w * DT * D2R);
+      let arcRadius = 1e4;
+      if (dthr > 1e-5 && dsv > 1e-6) arcRadius = dsv / dthr;
+      lastArcRadius = arcRadius;
+      // open loop: no PID terms; volts pass through ungoverned (governed=false)
+      tick(0, { do: driveOut, to: turnOut, lo: left, ro: right, arcRadius }, false);
+      t += TICK;
+    }
+    movements.push(mvRow({
+      index: mi, type: 'voldrive', leftVolts: left, rightVolts: right,
+      exitReason: 'duration', exitTimeout: durationMs,
+      startTime: startT, endTime: t
     }));
     mi++;
   }
@@ -456,11 +499,11 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   }
 
   // Run segments
-  for (const seg of segments) seg({ face, driveForward, moveTo, boomerangTo, swing, lyPose });
+  for (const seg of segments) seg({ face, driveForward, moveTo, boomerangTo, swing, lyPose, voldrive });
 
   // Assemble trace text
   const COLS_M =
-    'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,exitSmallError,exitSmallTime,exitBigError,exitBigTime,exitDist,exitPerpLine,exitAng,exitPct,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading';
+    'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,exitSmallError,exitSmallTime,exitBigError,exitBigTime,exitDist,exitPerpLine,exitAng,exitPct,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
   const COLS_T =
     't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip';
   const COLS_R = 't,mi,wall,sensor,preX,preY,preH,postX,postY,postH';
@@ -495,7 +538,10 @@ autons.push(buildAuton({
     ({ face }) => face(90),
     ({ driveForward }) => driveForward(72),
     ({ boomerangTo }) => boomerangTo(48, 36, 0, { gLead: 0.35, leadChasePowerLimit: 2 }),
-    ({ moveTo }) => moveTo(0, 12)
+    ({ moveTo }) => moveTo(0, 12),
+    // open-loop curve: voldrive(6,3) for 900 ms — left faster than right, so it
+    // arcs clockwise with no PID/exit, running purely on the caller's delay
+    ({ voldrive }) => voldrive(6, 3, 900)
   ]
 }));
 
@@ -525,7 +571,9 @@ autons.push(buildAuton({
     ({ swing }) => swing('left', 135),
     ({ driveForward }) => driveForward(24),
     ({ swing }) => swing('right', 45),
-    ({ driveForward }) => driveForward(20, { backwards: true })
+    ({ driveForward }) => driveForward(20, { backwards: true }),
+    // open-loop ram: voldrive(8,8) for 700 ms — drives straight at fixed volts
+    ({ voldrive }) => voldrive(8, 8, 700)
   ]
 }));
 
@@ -566,6 +614,45 @@ autons.push(buildAuton({
     // start so the cross-track merge is visible the other direction
     ({ face }) => face(90),
     ({ lyPose }) => lyPose(36, 2, { heading: 90 })
+  ]
+}));
+
+// 6. Override Match tour: a grand tour designed for the "Override Match"
+// backdrop. The robot collects cups (the yellow pieces on the tile grid) and
+// navigates AROUND the field's 3D structures — never through them:
+//   • cross/stake clusters sit on the TL–BR diagonal at (-48,47) (-24,23)
+//     (24,-23) (48,-47);
+//   • square goals: blue (25,48) (48,24), red (-23,-48) (-47,-25);
+//   • corner goals at (±62, ±55), edge goals on the walls.
+// The BL–TR diagonal (y = x) threads clean between all of them, so the central
+// pickups ride straight up it. lyPose is used twice to drive UP TO a goal and
+// stop just short (the robot can't overlap the raised goal); boomerang aligns
+// the final score into the blue corner goal.
+autons.push(buildAuton({
+  name: 'override_match',
+  start: { x: -48, y: -60, h: 0 },
+  kLat: 0.25,
+  segments: [
+    // grab the bottom-left cup, then swing onto the clear y = x diagonal
+    ({ moveTo }) => moveTo(-48, -48),
+    ({ swing }) => swing('right', 30),
+    ({ moveTo }) => moveTo(-24, -24),
+    // turn around and lyPose DOWN to the red square goal, stopping ~15in short
+    // (the robot can't overlap the raised goal — it just pulls up to it)
+    ({ face }) => face(180),
+    ({ lyPose }) => lyPose(-23, -33, { heading: 180 }),
+    ({ driveForward }) => driveForward(10, { backwards: true }),
+    // ride the obstacle-free diagonal up through center, collecting cups
+    ({ moveTo }) => moveTo(24, 24),
+    ({ moveTo }) => moveTo(48, 48),
+    // lyPose down to the blue square goal, again pulling up just short of it
+    ({ face }) => face(180),
+    ({ lyPose }) => lyPose(48, 39, { heading: 180 }),
+    ({ driveForward }) => driveForward(10, { backwards: true }),
+    // boomerang in to align the score at the blue corner goal (stops ~16in out),
+    // then a short open-loop nudge — still clear of the goal itself
+    ({ boomerangTo }) => boomerangTo(50, 43, 40),
+    ({ voldrive }) => voldrive(5, 5, 120)
   ]
 }));
 

@@ -32,7 +32,7 @@ bool close;
 bool exitConditionFulfilled;
 double initialHeading;
 
-double lateralUndershoot = 0;
+double driveStopShort = 0;
 double turnOvershoot = 0;
 
 //Stage 2 governor — applies to combined left/right power. Tunable by user.
@@ -163,14 +163,6 @@ double resolveHeadingTarget(double heading, bool backward, int& direction) {
                                 direction);
 }
 
-//Resolves the directional heading error for a target point. Flips the target by 180° if backward.
-double resolvePointTarget(double targetX, double targetY, bool backward, int& direction) {
-    return resolveTurnDirection(chassis.wrappedPointHeadingError(targetX, targetY, backward),
-                                chassis.positivePointHeadingError(targetX, targetY, backward),
-                                chassis.negativePointHeadingError(targetX, targetY, backward),
-                                direction);
-}
-
 // =========================================================================
 // Lyapunov control
 // =========================================================================
@@ -225,7 +217,7 @@ void lyapunovCalculate(double tx, double ty, bool backward, double pathHeading) 
     //    the instant the robot passes the target, so the PID backs it up — no
     //    overshoot — and lateral error never bleeds into the forward command
     //    (the coupling term in step 7 owns lateral recovery).
-    double v_d = drivePID.calculateOutput(e_x - lateralUndershoot);
+    double v_d = drivePID.calculateOutput(e_x - driveStopShort);
 
     // 6. Forward power (cosine-scaled, so the robot slows when badly misaligned).
     //    For backward: negate v so "forward in the rotated frame" is physical reverse.

@@ -7,11 +7,12 @@
   import PidReadout from '$lib/components/PidReadout.svelte';
   import LyapunovReadout from '$lib/components/LyapunovReadout.svelte';
   import ControlPipeline from '$lib/components/ControlPipeline.svelte';
+  import MotorDiagram from '$lib/components/MotorDiagram.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
   import LibraryPanel from '$lib/components/LibraryPanel.svelte';
-  import { traceState, movementAt } from '$lib/stores/trace.svelte';
+  import { traceState, movementAt, tickAt } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
-  import { PID_TERM, isLyPose } from '$lib/trace/labels';
+  import { PID_TERM, isLyPose, isVolDrive } from '$lib/trace/labels';
   import type { Tick } from '$lib/trace/types';
 
   let settingsOpen = $state(false);
@@ -43,6 +44,10 @@
   });
 
   const lyActive = $derived(!!active && isLyPose(active.type));
+  // voldrive is open-loop: nothing changes within the call, so the right column
+  // collapses to just the motor diagram (no readout / graphs / pipeline).
+  const vdActive = $derived(!!active && isVolDrive(active.type));
+  const curTick = $derived(tickAt(traceState.time));
 
   // normal: single governed-output line per channel
   const driveNormal = $derived([
@@ -126,35 +131,49 @@
     </div>
 
     <div class="graphs-col">
-      {#if lyActive}
-        <LyapunovReadout />
+      {#if vdActive}
+        <!-- open-loop voltage: nothing varies within the call, so the column is
+             just the motor diagram showing the fixed left/right command -->
+        <section class="panel vd-panel">
+          <div class="vd-head">
+            <span class="vd-lbl">Motors</span>
+            <span class="vd-sub">open loop · direct voltage</span>
+          </div>
+          <div class="vd-diagram">
+            <MotorDiagram left={curTick ? curTick.leftOut : 0} right={curTick ? curTick.rightOut : 0} />
+          </div>
+        </section>
       {:else}
-        <PidReadout />
-      {/if}
+        {#if lyActive}
+          <LyapunovReadout />
+        {:else}
+          <PidReadout />
+        {/if}
 
-      <GraphPanel
-        title="Drive PID"
-        grow={1.1}
-        accent="#e8e8e8"
-        active={driveActive}
-        series={driveSeries}
-        legend={settings.showBreakdown ? pidLegend : []}
-        {tStart}
-        {tEnd}
-        playheadT={traceState.time}
-      />
-      <GraphPanel
-        title={turnTitle}
-        grow={1.1}
-        accent="#e8e8e8"
-        active={turnActive}
-        series={turnSeries}
-        legend={settings.showBreakdown ? (lyActive ? lyLegend : pidLegend) : []}
-        {tStart}
-        {tEnd}
-        playheadT={traceState.time}
-      />
-      <ControlPipeline />
+        <GraphPanel
+          title="Drive PID"
+          grow={1.1}
+          accent="#e8e8e8"
+          active={driveActive}
+          series={driveSeries}
+          legend={settings.showBreakdown ? pidLegend : []}
+          {tStart}
+          {tEnd}
+          playheadT={traceState.time}
+        />
+        <GraphPanel
+          title={turnTitle}
+          grow={1.1}
+          accent="#e8e8e8"
+          active={turnActive}
+          series={turnSeries}
+          legend={settings.showBreakdown ? (lyActive ? lyLegend : pidLegend) : []}
+          {tStart}
+          {tEnd}
+          playheadT={traceState.time}
+        />
+        <ControlPipeline />
+      {/if}
     </div>
   </div>
 </div>
@@ -195,5 +214,34 @@
     flex-direction: column;
     gap: var(--gap);
     min-width: 0;
+  }
+
+  /* voldrive: the whole column is one panel holding the motor diagram */
+  .vd-panel {
+    flex: 1;
+    min-height: 0;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .vd-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .vd-lbl {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .vd-sub {
+    font-size: 9px;
+    color: var(--text-ghost);
+  }
+  .vd-diagram {
+    flex: 1;
+    min-height: 0;
+    position: relative;
   }
 </style>

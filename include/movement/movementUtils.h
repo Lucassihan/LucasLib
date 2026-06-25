@@ -31,7 +31,7 @@ extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
-extern double lateralUndershoot;
+extern double driveStopShort;
 extern double turnOvershoot;
 
 
@@ -50,7 +50,6 @@ void governOutputs();
 // -------- Heading-error resolvers (choose a turn direction) --------
 double resolveTurnDirection(double wrapped, double positive, double negative, int& direction);
 double resolveHeadingTarget(double heading, bool backward, int& direction);
-double resolvePointTarget(double targetX, double targetY, bool backward, int& direction);
 
 // -------- Lyapunov control law (path-follow) --------
 double sinc(double x);

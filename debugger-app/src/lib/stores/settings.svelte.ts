@@ -12,15 +12,26 @@ export function holesToInches(holes: number): number {
 export type DriveWheelCount = 4 | 6 | 8;
 export type IntakePosition = 'front' | 'back';
 export type GovernScope = 'total' | 'drive' | 'turn';
+export type { FieldBackdrop } from '$lib/field/backdrops';
+import type { FieldBackdrop } from '$lib/field/backdrops';
+// 6-wheel row layout: evenly centred, or an 8-wheel footprint with the 2nd
+// (gapFront) or 3rd (gapBack) slot left empty.
+export type SixWheelLayout = 'centered' | 'gapFront' | 'gapBack';
 
 interface Settings {
   robotWidthHoles: number;
   robotLengthHoles: number;
   driveWheelCount: DriveWheelCount;
+  sixWheelLayout: SixWheelLayout;
   intakePosition: IntakePosition;
   showBreakdown: boolean;
   // which output governor the pipeline + inspector focus on
   governScope: GovernScope;
+  // tracking center (= center of rotation): index into the wheel-row/midpoint
+  // snap positions, front→back. Clamped to the current wheel count on use.
+  trackingCenterIndex: number;
+  // top-down field render shown behind the field map
+  fieldBackdrop: FieldBackdrop;
 }
 
 const STORAGE_KEY = 'lucaslib-debugger.settings';
@@ -30,9 +41,12 @@ const defaults: Settings = {
   robotWidthHoles: 30,
   robotLengthHoles: 30,
   driveWheelCount: 6,
+  sixWheelLayout: 'centered',
   intakePosition: 'front',
   showBreakdown: false,
-  governScope: 'total'
+  governScope: 'total',
+  trackingCenterIndex: 2, // geometric centre for the default 6-wheel drive
+  fieldBackdrop: 'perimeter'
 };
 
 function load(): Settings {

@@ -45,6 +45,13 @@ public:
   double yInchesTracked = 0;
   double xInchesTracked = 0;
 
+  // --- MCL integration ---
+  // track() accumulates its per-cycle GLOBAL displacement here; the MCL task consumes it
+  // (as the predict increment) and blends a correction back into x/y. Guarded by mclMutex.
+  mutex  mclMutex;
+  double mclAccumDX = 0;
+  double mclAccumDY = 0;
+
   Odometry(OdometryConfig config);
 
   void setPos(double newX, double newY, double newH);
@@ -63,6 +70,7 @@ public:
   double wrappedHeadingError(double targetH, bool backward = false);
   double positiveHeadingError(double targetH, bool backward = false);
   double negativeHeadingError(double targetH, bool backward = false);
+  double angleToPoint(double targetX, double targetY, bool backward = false);
   double wrappedPointHeadingError(double targetX, double targetY, bool backward = false);
   double positivePointHeadingError(double targetX, double targetY, bool backward = false);
   double negativePointHeadingError(double targetX, double targetY, bool backward = false);
