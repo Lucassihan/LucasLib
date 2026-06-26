@@ -8,6 +8,23 @@ import type { Trace, TraceHeader, Movement, Tick, ReadWall } from './types';
 
 type Row = Record<string, string>;
 
+// On-robot dumps prefix every trace line with this marker so the importer can
+// pull the trace out of a noisy console (scrambled brain/controller text, etc.).
+const TRACE_MARKER = '~LLT|';
+
+// If the text contains marker-prefixed lines (a console dump), keep ONLY those
+// and strip the marker — discarding any interleaved console noise. Otherwise
+// (a clean generated trace) return the text untouched.
+export function stripMarkers(text: string): string {
+  if (!text.includes(TRACE_MARKER)) return text;
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const i = line.indexOf(TRACE_MARKER);
+    if (i >= 0) out.push(line.slice(i + TRACE_MARKER.length));
+  }
+  return out.join('\n');
+}
+
 function splitSections(text: string) {
   const headerLines: string[] = [];
   const sections: Record<string, string[]> = {};
@@ -26,6 +43,9 @@ function splitSections(text: string) {
 
     if (current === null) {
       headerLines.push(line);
+    } else if (line.startsWith('#')) {
+      // comment / end sentinel (e.g. #END) inside a section — ignore
+      continue;
     } else {
       sections[current].push(line);
     }
@@ -190,7 +210,7 @@ function parseReadWalls(rows: Row[]): ReadWall[] {
 }
 
 export function parseTrace(text: string): Trace {
-  const { headerLines, sections } = splitSections(text);
+  const { headerLines, sections } = splitSections(stripMarkers(text));
   const header = parseHeader(headerLines);
   const movements = parseMovements(toRows(sections['MOVEMENTS']));
   const ticks = parseTicks(toRows(sections['TICKS']));

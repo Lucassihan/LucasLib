@@ -1,5 +1,6 @@
 #include "misc/util.h"
 #include "coreConfigs.h"
+#include "debugger/debugger.h"
 
 #include <cmath>
 
@@ -67,6 +68,7 @@ void voltageDrive(double left, double right, bool offMotorBrake) {
     leftdrive.spin(fwd, left, volt);
     rightdrive.spin(fwd, right, volt);
   }
+  debugger::tick();  // sample a trace tick if capture is armed (no-op otherwise)
 }
 
 void delay(double ms) {

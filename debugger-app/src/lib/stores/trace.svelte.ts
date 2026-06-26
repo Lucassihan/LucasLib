@@ -3,7 +3,7 @@
 // seeded with sample autons on first run). loadTrace() records new imports
 // into the library too.
 
-import { parseTrace } from '$lib/trace/parse';
+import { parseTrace, stripMarkers } from '$lib/trace/parse';
 import type { Trace, Tick, Movement } from '$lib/trace/types';
 import { library, addAuton, setActive, getAuton } from '$lib/stores/library.svelte';
 
@@ -28,7 +28,9 @@ export const traceState = $state<{
 
 /** Load a freshly-imported trace and add it to the library. */
 export function loadTrace(text: string, fallbackName = 'imported') {
-  const entry = addAuton(text, fallbackName);
+  // Strip on-robot console markers up front so the library stores clean text
+  // (name extraction, stats, and re-parse all work on the bare trace).
+  const entry = addAuton(stripMarkers(text), fallbackName);
   traceState.trace = parseTrace(entry.text);
   traceState.time = 0;
   traceState.playing = false;

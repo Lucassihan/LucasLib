@@ -54,6 +54,8 @@ public:
 
   Odometry(OdometryConfig config);
 
+  double getTrackwidth() { return cfg.trackwidth; }  // for trace export
+
   void setPos(double newX, double newY, double newH);
   void track();
   void clearTrackedInches();

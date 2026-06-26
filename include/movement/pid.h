@@ -54,6 +54,13 @@ class PID {
     double output;
     double derivative;
 
+    // readable state for the debugger: the running integral (sumerror) and the
+    // constants locked in for the current movement. Set each calculateOutput().
+    double integral;
+    double activeKP;
+    double activeKI;
+    double activeKD;
+
     private: // stuff that is used by the PID class internally for calculations, and will not be accessible outside
     void determineConstants(double inputError, double& kP, double& kI, double& kD);
 

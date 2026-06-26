@@ -4,19 +4,19 @@ brain Brain;
 controller Controller = controller(primary);
 
 // Chassis
-motor fl = motor(PORT10, ratio6_1, false);
-motor ml = motor(PORT9, ratio6_1, true);
-motor bl = motor(PORT8, ratio6_1, true);
+motor fl = motor(PORT10, ratio18_1, true);
+motor ml = motor(PORT21, ratio6_1, true);////////////////////
+motor bl = motor(PORT20, ratio18_1, true);
 
-motor fr = motor(PORT20, ratio6_1, true);
-motor mr = motor(PORT19, ratio6_1, false);
-motor br = motor(PORT18, ratio6_1, false);
+motor fr = motor(PORT13, ratio18_1, false);
+motor mr = motor(PORT21, ratio6_1, false);///////////////////////
+motor br = motor(PORT15, ratio18_1, false);
 
 motor_group leftdrive = motor_group(fl, ml, bl);
 motor_group rightdrive = motor_group(fr, mr, br);
 
 // Odometry and Heading
-inertial IMU1 = inertial(PORT21);
+inertial IMU1 = inertial(PORT1);
 inertial IMU2 = inertial(PORT4);
 
 rotation TX = rotation(PORT6, false);
@@ -38,11 +38,11 @@ Odometry chassis({
   .xTracker           = nullptr,
 
   //IMUs usually need a multiplier coefficient; they are never 100% accurate. All IMUs have different multipliers.
-  .imu1_multiplier     = 1.01882563365,
+  .imu1_multiplier     = 1.003764115433,
   .imu2_multiplier     = 1,
 
   //Tracker wheel effective diameters
-  .yTrackerDiameter   = 2 * 1.01265822785,
+  .yTrackerDiameter   = 1000 * 0.99625,
   .xTrackerDiameter   = 2,
 
   //Tracking wheel distance from robot tracking center on the corresponding axis.
@@ -51,9 +51,9 @@ Odometry chassis({
 
   //These are used for both motor encoder tracking (if there is no Y tracker), or for expected heading calculation if there are 2 IMUs
   .trackwidth         = 13.5,
-  .driveWheelDiameter = 2.75*1.04347826087,
-  .driveGearRatio     = 36.0 / 48.0,
-  .driveEncoder       = middle,
+  .driveWheelDiameter = 3.25,
+  .driveGearRatio     = 60.0 / 36.0,
+  .driveEncoder       = front,
 
   //Distance sensor reference readings -- park the robot at (48, 48) and record what each sensor reads to the CLOSEST WALL. You will need to rotate the robot to get all the sensors.
   .sensor1Offset      = 18.97,

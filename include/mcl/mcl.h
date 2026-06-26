@@ -1,7 +1,6 @@
 #pragma once
 #include "vex.h"
 #include "mcl/mclConfig.h"
-#include <optional>
 #include <cmath>
 #include <cstdlib>
 
@@ -67,11 +66,18 @@ struct Particle {
 
 // ---------------------------- the Sensor "plug" ------------------------------
 // Each sensor answers: "how likely is my reading if the robot were at (px, py)?"
-// Returns std::nullopt to ABSTAIN (no useful reading) -> it just sits out the vote.
+// It either returns a weight, or ABSTAINS (no useful reading) and sits out the vote.
+
+// A sensor's vote. We use this tiny struct instead of std::optional because the
+// VEX toolchain's libstdc++ (GCC 4.9) predates <optional>.
+struct SensorVote {
+  bool   valid;    // false = abstain (no usable reading this frame) -> skip this sensor
+  double weight;   // the likelihood, used only when valid
+};
 
 class Sensor {
 public:
-  virtual std::optional<double> p(double px, double py, double headingRad) = 0;
+  virtual SensorVote p(double px, double py, double headingRad) = 0;
   virtual void update() = 0;   // read the hardware ONCE per frame
   virtual ~Sensor() {}
 };
@@ -113,9 +119,9 @@ public:
   }
 
   // How well does this particle explain the reading we just took?
-  std::optional<double> p(double px, double py, double headingRad) override {
+  SensorVote p(double px, double py, double headingRad) override {
     if (!hasValidReading) {
-      return std::nullopt;                // abstain this frame
+      return { false, 0.0 };              // abstain this frame
     }
 
     // 1. where is the sensor in the field? (rotate its robot-frame mount by heading)
@@ -135,7 +141,7 @@ public:
     if (score < MCLConfig.HEAVY_TAIL_FLOOR) {
       score = MCLConfig.HEAVY_TAIL_FLOOR;
     }
-    return score * MCLConfig.DISTANCE_WEIGHT;
+    return { true, score * MCLConfig.DISTANCE_WEIGHT };
   }
 
 private:
@@ -287,9 +293,9 @@ private:
     for (int i = 0; i < N; i++) {
       double weight = 1.0;
       for (int s = 0; s < sensorCount; s++) {
-        std::optional<double> vote = sensors[s]->p(particles[i].x, particles[i].y, headingRad);
-        if (vote.has_value()) {
-          weight = weight * vote.value();
+        SensorVote vote = sensors[s]->p(particles[i].x, particles[i].y, headingRad);
+        if (vote.valid) {
+          weight = weight * vote.weight;
         }
         // abstained sensors are simply skipped
       }

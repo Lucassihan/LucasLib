@@ -1,6 +1,7 @@
 #include "movement/odometry.h"
 #include "coreConfigs.h"
 #include "util.h"
+#include "debugger/debugger.h"
 
 #include <cmath>
 
@@ -210,6 +211,8 @@ void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
 
   double newPos = sign * (48.0 + relativeOffset);
 
+  double preX = x, preY = y, preH = h;  // pose before the correction (for the debugger)
+
   // walls 1 & 3 set X, walls 2 & 4 set Y
   //    2
   // 3     1
@@ -219,6 +222,8 @@ void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
   } else if (wall == 2 || wall == 4) {
     setPos(x, newPos, h);
   }
+
+  debugger::readWall(wall, sensor, preX, preY, preH, x, y, h);
 }
 
 //helper math

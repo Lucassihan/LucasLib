@@ -4,6 +4,7 @@
 #include "coreConfigs.h"
 #include "misc/util.h"
 #include "movement/exitConditions.h"
+#include "debugger/debugger.h"
 #include <cmath>
 #include <algorithm>
 
@@ -20,6 +21,7 @@
 void face(double heading, TurnExitConditions ec, int direction) {
     ExitStateVars exitStateVars;
     clearAllValues();
+    debugger::moveTurn("face", heading, ec);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the target, negative undershoots short of it
@@ -69,6 +71,7 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
     clearAllValues();
     targetX = x;
     targetY = y;
+    debugger::movePointTurn("facePoint", x, y, ec);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the point, negative undershoots short of it
@@ -116,6 +119,7 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
 void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int direction) {
     ExitStateVars exitStateVars;
     clearAllValues();
+    debugger::moveTurn("swingOnLeft", heading, ec, partiality);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the target, negative undershoots short of it
@@ -160,6 +164,7 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
 void swingOnRight(double heading, TurnExitConditions ec, double partiality, int direction) {
     ExitStateVars exitStateVars;
     clearAllValues();
+    debugger::moveTurn("swingOnRight", heading, ec, partiality);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the target, negative undershoots short of it
@@ -206,6 +211,7 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
     clearAllValues();
     targetX = x;
     targetY = y;
+    debugger::movePointTurn("swingOnLeftToPoint", x, y, ec, partiality);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the point, negative undershoots short of it
@@ -252,6 +258,7 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
     clearAllValues();
     targetX = x;
     targetY = y;
+    debugger::movePointTurn("swingOnRightToPoint", x, y, ec, partiality);
 
     //latch the turn direction once (forced direction, else shortest path). turnOvershoot is
     //applied along it: positive overshoots past the point, negative undershoots short of it
@@ -306,6 +313,7 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
     ExitStateVars exitStateVars;
     clearAllValues();
     targetH = heading;
+    debugger::moveStraight("driveForward", distance, heading, ec, false);
 
     //Capture the pose at the start of the move. Error is the gap between the
     //commanded distance and how far we've actually moved along the heading axis
@@ -345,6 +353,7 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
     ExitStateVars exitStateVars;
     clearAllValues();
     targetH = heading;
+    debugger::moveStraight("driveBackward", distance, heading, ec, true);
 
     //Same pose-based error as driveForward, mirrored: the target is -distance
     //along the heading axis, so backing up drives forwardProgress negative.
@@ -385,6 +394,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
     clearAllValues();
     targetX = x;
     targetY = y;
+    debugger::movePoint("moveTo", x, y, ec, backward);
 
     headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
     lateralError = chassis.distanceTo(targetX, targetY, backward);
@@ -456,6 +466,7 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
     if (std::isnan(pathHeading)) {
         pathHeading = atan2(targetX - chassis.x, targetY - chassis.y) * (180.0 / M_PI);
     }
+    debugger::moveLyPose(x, y, pathHeading, lyPoseTurnDisableLength, ec, backward);
 
     // Run drivePID/headingPID raw — governor is the single rate-limiter.
     drivePID.executingLyapunov   = true;
@@ -516,6 +527,7 @@ void boomerangTo(BoomParams bp,
     targetX = x;
     targetY = y;
     targetH = heading;
+    debugger::moveBoomerang(bp, ec, backward);
 
     double headingRad = TO_RAD(heading);
 
@@ -595,8 +607,9 @@ void boomerangTo(BoomParams bp,
         drivePow = drivePID.calculateOutput(lateralError);
 
         // --- Centripetal slip cap: v_max = sqrt(grip * |r|). Skip right at the end. ---
+        double maxSlip = 0;  // 0 = cap inactive (used for debugger telemetry)
         if (bp.leadChasePowerLimit > 0 && (not closeEnd || distEnd >= 0.7)) {
-            double maxSlip = sqrt(bp.leadChasePowerLimit * fabs(chassis.travelArcRadius()));
+            maxSlip = sqrt(bp.leadChasePowerLimit * fabs(chassis.travelArcRadius()));
             if (fabs(drivePow) > maxSlip) {
                 drivePow = sign(drivePow) * maxSlip;
             }
@@ -616,6 +629,8 @@ void boomerangTo(BoomParams bp,
 
         blendOutputs({.cosineScaling = false, .turnPriority = 0});
         governOutputs();
+        debugger::probeBoomerang(carrotX, carrotY, ghostX, ghostY, s, maxSlip,
+                                 closeEnd ? 2 : (closeGhost ? 1 : 0));
         voltageDrive(leftOut, rightOut);
 
         exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError, x, y, backward);
@@ -626,9 +641,11 @@ void boomerangTo(BoomParams bp,
 }
 
 void voldrive(double left, double right) {
+    debugger::moveVoltage(left, right);
     voltageDrive(left,right);
 }
 
 void voldrive(double volts) {
+    debugger::moveVoltage(volts, volts);
     voltageDrive(volts, volts);
 }

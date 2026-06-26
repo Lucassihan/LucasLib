@@ -1,11 +1,35 @@
 <script lang="ts">
   import { library, removeAuton, summarize, formatRelative } from '$lib/stores/library.svelte';
-  import { loadFromLibrary } from '$lib/stores/trace.svelte';
+  import { loadFromLibrary, loadTrace } from '$lib/stores/trace.svelte';
 
   let { open = $bindable() }: { open: boolean } = $props();
 
+  let importText = $state('');
+  let importError = $state('');
+
   function close() {
     open = false;
+  }
+
+  function doImport() {
+    const text = importText.trim();
+    if (!text) return;
+    try {
+      loadTrace(text);
+      importText = '';
+      importError = '';
+      close();
+    } catch {
+      importError = 'Could not parse that trace.';
+    }
+  }
+
+  async function pasteImport() {
+    try {
+      importText = await navigator.clipboard.readText();
+    } catch {
+      importError = 'Clipboard blocked — paste into the box instead.';
+    }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -43,6 +67,20 @@
       </div>
 
       <div class="sub">{library.items.length} auton{library.items.length === 1 ? '' : 's'} · click to load</div>
+
+      <div class="import">
+        <textarea
+          class="import-box"
+          placeholder="Paste a robot trace dump from the console (debugger::stop output)…"
+          bind:value={importText}
+          spellcheck="false"
+        ></textarea>
+        <div class="import-actions">
+          {#if importError}<span class="import-err">{importError}</span>{/if}
+          <button class="ibtn" onclick={pasteImport}>Paste</button>
+          <button class="ibtn primary" onclick={doImport} disabled={!importText.trim()}>Import</button>
+        </div>
+      </div>
 
       <ul class="list">
         {#each library.items as a (a.id)}
@@ -132,6 +170,70 @@
     font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 12px;
+  }
+
+  /* import box */
+  .import {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .import-box {
+    width: 100%;
+    box-sizing: border-box;
+    height: 46px;
+    resize: vertical;
+    background: var(--bg-base);
+    color: var(--text-secondary);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 7px 9px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.4;
+  }
+  .import-box:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  }
+  .import-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .import-err {
+    margin-right: auto;
+    font-size: 9px;
+    color: #f87171;
+  }
+  .ibtn {
+    background: var(--bg-raised);
+    color: var(--text-secondary);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 5px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .ibtn:hover {
+    color: var(--text-primary);
+  }
+  .ibtn.primary {
+    background: #2563eb;
+    color: #fff;
+  }
+  .ibtn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .list {

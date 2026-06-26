@@ -173,5 +173,11 @@ double PID::calculateOutput(double inputError) {
     prevOutput = raw;
     output = raw;
 
+    //mirror internals for the debugger (no effect on control)
+    integral = sumerror;
+    activeKP = kP;
+    activeKI = kI;
+    activeKD = kD;
+
     return raw;
 }

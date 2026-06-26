@@ -10,6 +10,7 @@
 #include "movement/pid.h"
 #include "coreConfigs.h"
 #include "misc/util.h"
+#include "debugger/debugger.h"
 
 #include <cmath>
 #include <algorithm>
@@ -250,6 +251,8 @@ void lyapunovCalculate(double tx, double ty, bool backward, double pathHeading) 
     headingPow   = omega;
     driveOut     = v;
     turnOut      = omega;
+
+    debugger::probeLyapunov(e_x, e_y);  // along-line / cross-track for the overlay
 }
 
 // =========================================================================

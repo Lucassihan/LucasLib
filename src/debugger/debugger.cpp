@@ -1,0 +1,455 @@
+// debugger.cpp — see debugger/debugger.h.
+//
+// Captures movements + a 10ms tick stream into fixed RAM buffers during an
+// auton, then prints a LUCASLIB_TRACE to the console. All hooks are no-ops
+// until start() arms capture, so this is free when unused.
+
+#include "debugger/debugger.h"
+
+#include "coreConfigs.h"
+#include "movement/movementUtils.h"
+#include "movement/pid.h"
+#include "movement/totalOutput.h"
+#include "movement/odometry.h"
+
+#include <cstdio>
+#include <cstdarg>
+#include <cmath>
+
+// External engine state we sample from (defined across movementUtils/movement).
+extern double turnDisableLength;        // moveTo heading-disable radius (header field)
+extern double lyPoseTurnDisableLength;  // lyPose CLOSE-stage radius
+
+namespace debugger {
+
+// ---- Capacity (tune if your autons are longer; ~10ms/tick) ----
+static const int TICK_CAP = 4000;   // 40 s of ticks
+static const int MOVE_CAP = 96;
+static const int WALL_CAP = 64;
+
+// Per-line console marker. The app keeps only lines that start with it and
+// strips it, so screen noise on the terminal is filtered out on import.
+#define DBG_MARK "~LLT|"
+
+enum Kind { K_TURN, K_STRAIGHT, K_POINT, K_LYPOSE, K_BOOMERANG, K_VOLTAGE };
+
+struct Mv {
+    int          index;
+    const char*  type;        // string literal (static lifetime)
+    Kind         kind;
+    float        targetX, targetY, targetH, distance, heading, partiality;
+    int          backwards, direction;
+    float        dLead, gLead, leadChase, pathHeading, turnDisable, turnPriority;
+    bool         cosineScaling;
+    // armed exit conditions
+    float        exTimeout, exSmallErr, exSmallTime, exBigErr, exBigTime;
+    float        exDist, exPerp, exAng, exPct;
+    const char*  exReason;
+    uint32_t     startTime, endTime;
+    // locked PID constants for the channels (captured on the movement's first tick)
+    float        dKp, dKi, dKd, tKp, tKi, tKd;
+    bool         constsCaptured;
+    PID*         drivePidPtr;
+    PID*         turnPidPtr;
+    float        leftVolts, rightVolts;  // voldrive only
+};
+
+struct Tk {
+    uint32_t t;
+    uint16_t mi;
+    uint8_t  stage;
+    float    x, y, h;
+    float    le, he, dp, hp, tp, sp, driveO, turnO, lo, ro;
+    float    yi, xi, ex, ey;
+    float    driveI, driveD, turnI, turnD;
+    float    carrotX, carrotY, ghostX, ghostY, arcRadius, maxSlip, leadRet, perp;
+};
+
+struct Wall {
+    uint32_t t;
+    uint16_t mi;
+    int      wall, sensor;
+    float    preX, preY, preH, postX, postY, postH;
+};
+
+// ---- State ----
+static bool     capturing = false;
+static bool     muted     = false;
+static int      moveCount = 0;
+static int      tickCount = 0;
+static int      wallCount = 0;
+static int      curMi     = -1;
+static uint32_t startMs   = 0;
+
+static Mv   moves[MOVE_CAP];
+static Tk   ticks[TICK_CAP];
+static Wall walls[WALL_CAP];
+
+static char autonName[40] = "auton";
+static float startPoseX = 0, startPoseY = 0, startPoseH = 0;
+
+// Overlay telemetry published by lyPose / boomerang, consumed by the next tick().
+struct Pending {
+    bool  set = false;
+    float ex = 0, ey = 0, carrotX = 0, carrotY = 0, ghostX = 0, ghostY = 0;
+    float leadRet = 0, maxSlip = 0;
+    int   stage = -1;  // -1 = use default staging
+};
+static Pending pending;
+
+static uint32_t nowMs() {
+    return (uint32_t) Brain.timer(msec);
+}
+
+// Start a movement record. Returns a reference to fill in the type-specific bits.
+static Mv& newMove(const char* type, Kind kind) {
+    if (!capturing || moveCount >= MOVE_CAP) {
+        static Mv sink;  // overflow sink — keeps callers safe past capacity
+        return sink;
+    }
+    Mv& m = moves[moveCount];
+    m = Mv{};
+    m.index          = moveCount;
+    m.type           = type;
+    m.kind           = kind;
+    m.exReason       = "smallError";
+    m.startTime      = nowMs() - startMs;
+    m.endTime        = m.startTime;
+    m.cosineScaling  = true;
+    m.leadChase      = -1;
+    m.constsCaptured = false;
+    curMi = moveCount;
+    moveCount++;
+    return m;
+}
+
+static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
+    m.exTimeout   = ec.timeout;
+    m.exSmallErr  = ec.smallError;
+    m.exSmallTime = ec.smallTime;
+    m.exBigErr    = ec.bigError;
+    m.exBigTime   = ec.bigTime;
+    m.exDist      = ec.exitDist;
+    m.exPerp      = ec.perpLine;
+    if (ec.perpLine > 0)      m.exReason = "perpLine";
+    else if (ec.exitDist > 0) m.exReason = "exitDist";
+    else                      m.exReason = "smallError";
+}
+
+static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
+    m.exTimeout   = ec.timeout;
+    m.exSmallErr  = ec.smallError;
+    m.exSmallTime = ec.smallTime;
+    m.exBigErr    = ec.bigError;
+    m.exBigTime   = ec.bigTime;
+    m.exAng       = ec.exitAng;
+    m.exPct       = ec.exitPct;
+    if (ec.exitAng > 0) m.exReason = "exitAng";
+    else                m.exReason = "smallError";
+}
+
+// =========================================================================
+// Lifecycle
+// =========================================================================
+void start(const char* name) {
+    moveCount = tickCount = wallCount = 0;
+    curMi = -1;
+    startMs = nowMs();
+    startPoseX = chassis.x;
+    startPoseY = chassis.y;
+    startPoseH = chassis.h;
+    snprintf(autonName, sizeof(autonName), "%s", name ? name : "auton");
+    pending = Pending{};
+    capturing = true;
+}
+
+// =========================================================================
+// Movement tags
+// =========================================================================
+void moveTurn(const char* type, double targetHeading, const TurnExitConditions& ec, double partiality) {
+    Mv& m = newMove(type, K_TURN);
+    m.targetH     = targetHeading;
+    m.heading     = targetHeading;
+    m.partiality  = partiality;
+    m.turnPidPtr  = (partiality < 0) ? &turnPID : (type[0] == 's' ? &swingPID : &turnPID);
+    copyTurnEC(m, ec);
+}
+
+void movePointTurn(const char* type, double tx, double ty, const TurnExitConditions& ec, double partiality) {
+    Mv& m = newMove(type, K_TURN);
+    m.targetX     = tx;
+    m.targetY     = ty;
+    m.partiality  = partiality;
+    m.turnPidPtr  = (partiality < 0) ? &turnPID : (type[0] == 's' ? &swingPID : &turnPID);
+    copyTurnEC(m, ec);
+}
+
+void moveStraight(const char* type, double distance, double heading, const LateralExitConditions& ec, bool backward) {
+    Mv& m = newMove(type, K_STRAIGHT);
+    m.distance    = distance;
+    m.heading     = heading;
+    m.targetH     = heading;
+    m.backwards   = backward ? 1 : 0;
+    m.drivePidPtr = &drivePID;
+    m.turnPidPtr  = &headingPID;
+    copyLateralEC(m, ec);
+}
+
+void movePoint(const char* type, double tx, double ty, const LateralExitConditions& ec, bool backward) {
+    Mv& m = newMove(type, K_POINT);
+    m.targetX     = tx;
+    m.targetY     = ty;
+    m.backwards   = backward ? 1 : 0;
+    m.drivePidPtr = &drivePID;
+    m.turnPidPtr  = &headingPID;
+    copyLateralEC(m, ec);
+}
+
+void moveLyPose(double tx, double ty, double pathHeading, double turnDisable, const LateralExitConditions& ec, bool backward) {
+    Mv& m = newMove("lyPose", K_LYPOSE);
+    m.targetX     = tx;
+    m.targetY     = ty;
+    m.targetH     = pathHeading;
+    m.heading     = pathHeading;
+    m.pathHeading = pathHeading;
+    m.turnDisable = turnDisable;
+    m.backwards   = backward ? 1 : 0;
+    m.cosineScaling = true;  // the law does its own cosine scaling
+    m.drivePidPtr = &drivePID;
+    m.turnPidPtr  = &lyPosePID;
+    copyLateralEC(m, ec);
+}
+
+void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec, bool backward) {
+    Mv& m = newMove("boomerangTo", K_BOOMERANG);
+    m.targetX     = bp.x;
+    m.targetY     = bp.y;
+    m.targetH     = bp.heading;
+    m.dLead       = bp.lead;
+    m.gLead       = bp.gLead;
+    m.leadChase   = bp.leadChasePowerLimit;
+    m.turnPriority = 0.4f;
+    m.cosineScaling = false;  // boomerang blends with cosine off
+    m.backwards   = backward ? 1 : 0;
+    m.drivePidPtr = &drivePID;
+    m.turnPidPtr  = &headingPID;
+    copyLateralEC(m, ec);
+    if (ec.perpLine <= 0) m.exReason = "perpLine";  // boomerang's natural exit
+}
+
+void moveVoltage(double left, double right) {
+    Mv& m = newMove("voldrive", K_VOLTAGE);
+    m.leftVolts  = left;
+    m.rightVolts = right;
+    m.exReason   = "duration";
+}
+
+// =========================================================================
+// Per-tick sampling (called from voltageDrive)
+// =========================================================================
+void tick() {
+    if (!capturing || curMi < 0 || tickCount >= TICK_CAP) return;
+
+    Mv& m = moves[curMi];
+
+    // Lock in the channels' PID constants on the movement's first sampled tick
+    // (by now each PID has run once, so its locked constants are valid).
+    if (!m.constsCaptured) {
+        if (m.drivePidPtr) { m.dKp = m.drivePidPtr->activeKP; m.dKi = m.drivePidPtr->activeKI; m.dKd = m.drivePidPtr->activeKD; }
+        if (m.turnPidPtr)  { m.tKp = m.turnPidPtr->activeKP;  m.tKi = m.turnPidPtr->activeKI;  m.tKd = m.turnPidPtr->activeKD; }
+        m.constsCaptured = true;
+    }
+
+    Tk& t = ticks[tickCount++];
+    t.t  = nowMs() - startMs;
+    t.mi = (uint16_t) curMi;
+
+    t.x = chassis.x;  t.y = chassis.y;  t.h = chassis.h;
+    t.le = lateralError;  t.he = headingError;
+    t.dp = drivePow;  t.hp = headingPow;  t.tp = turnPow;  t.sp = swingPow;
+    t.driveO = driveOut;  t.turnO = turnOut;  t.lo = leftOut;  t.ro = rightOut;
+    t.yi = chassis.yInchesTracked;  t.xi = chassis.xInchesTracked;
+    t.arcRadius = chassis.travelArcRadius();
+
+    // per-channel integral / derivative for the breakdown graphs
+    if (m.drivePidPtr) { t.driveI = m.drivePidPtr->integral; t.driveD = m.drivePidPtr->derivative; }
+    if (m.turnPidPtr)  { t.turnI  = m.turnPidPtr->integral;  t.turnD  = m.turnPidPtr->derivative; }
+
+    // overlay telemetry (lyPose ex/ey, boomerang carrot/ghost/slip)
+    t.ex = pending.ex;  t.ey = pending.ey;
+    t.carrotX = pending.carrotX;  t.carrotY = pending.carrotY;
+    t.ghostX = pending.ghostX;    t.ghostY = pending.ghostY;
+    t.leadRet = pending.leadRet;  t.maxSlip = pending.maxSlip;
+
+    // stage
+    if (pending.stage >= 0)              t.stage = (uint8_t) pending.stage;
+    else if (m.kind == K_LYPOSE)         t.stage = (lateralError < lyPoseTurnDisableLength) ? 1 : 0;
+    else if (m.kind == K_POINT)          t.stage = close ? 1 : 0;
+    else                                 t.stage = 0;
+
+    m.endTime = t.t;
+    pending = Pending{};
+}
+
+// =========================================================================
+// Overlay telemetry probes
+// =========================================================================
+void probeLyapunov(double ex, double ey) {
+    if (!capturing) return;
+    pending.ex = ex;  pending.ey = ey;  pending.set = true;
+}
+
+void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY,
+                    double leadRetraction, double maxSlip, int stage) {
+    if (!capturing) return;
+    pending.carrotX = carrotX;  pending.carrotY = carrotY;
+    pending.ghostX = ghostX;    pending.ghostY = ghostY;
+    pending.leadRet = leadRetraction;  pending.maxSlip = maxSlip;
+    pending.stage = stage;  pending.set = true;
+}
+
+// =========================================================================
+// Read-wall corrections
+// =========================================================================
+void readWall(int wall, int sensor, double preX, double preY, double preH,
+              double postX, double postY, double postH) {
+    if (!capturing || wallCount >= WALL_CAP) return;
+    Wall& w = walls[wallCount++];
+    w.t = nowMs() - startMs;  w.mi = (uint16_t) (curMi < 0 ? 0 : curMi);
+    w.wall = wall;  w.sensor = sensor;
+    w.preX = preX;  w.preY = preY;  w.preH = preH;
+    w.postX = postX;  w.postY = postY;  w.postH = postH;
+}
+
+bool screensMuted() { return muted; }
+
+// =========================================================================
+// Dump
+// =========================================================================
+// When outFile is set, lines go to the SD card (bare, fast). Otherwise they go
+// to the console with the marker prefix AND a throttle: the V5 serial TX buffer
+// is small and silently DROPS bytes if you printf a whole trace flat-out, so we
+// pause periodically to let it drain.
+static FILE* outFile = nullptr;
+static int   emitCount = 0;
+
+static void emit(const char* s) {
+    if (outFile) {
+        fprintf(outFile, "%s\n", s);
+        return;
+    }
+    printf(DBG_MARK "%s\n", s);
+    if (++emitCount % 8 == 0) {
+        fflush(stdout);
+        vex::this_thread::sleep_for(8);  // let the serial buffer drain
+    }
+}
+
+static void emitf(const char* fmt, ...) {
+    char buf[640];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    emit(buf);
+}
+
+static void dumpTrace() {
+    emit("#LUCASLIB_TRACE v1");
+    emitf("#auton_name=%s", autonName);
+    emitf("#start_pose=%g,%g,%g", startPoseX, startPoseY, startPoseH);
+    emitf("#trackwidth=%g", chassis.getTrackwidth());
+    emitf("#headingDisableDist=%g", turnDisableLength);
+    emitf("#useLyapunov=%d", kLat > 0 ? 1 : 0);
+    emitf("#kLat=%g", kLat);
+    emitf("#gov_total_min=%g", totalOutput.minOutput);
+    emitf("#gov_total_max=%g", totalOutput.maxOutput);
+    emitf("#gov_total_accel=%g", totalOutput.maxAccelRate);
+    emitf("#gov_total_decel=%g", totalOutput.maxDecelRate);
+    emitf("#gov_drive_min=%g", drivePID.minOutput);
+    emitf("#gov_drive_max=%g", drivePID.maxOutput);
+    emitf("#gov_drive_accel=%g", drivePID.maxAccelRate);
+    emitf("#gov_drive_decel=%g", drivePID.maxDecelRate);
+    emitf("#gov_turn_min=%g", turnPID.minOutput);
+    emitf("#gov_turn_max=%g", turnPID.maxOutput);
+    emitf("#gov_turn_accel=%g", turnPID.maxAccelRate);
+    emitf("#gov_turn_decel=%g", turnPID.maxDecelRate);
+
+    emit("");
+    emit("[MOVEMENTS]");
+    emit("index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,"
+         "cosineScaling,turnPriority,exitTimeout,exitSmallError,exitSmallTime,exitBigError,exitBigTime,"
+         "exitDist,exitPerpLine,exitAng,exitPct,exitReason,startTime,endTime,driveKp,driveKi,driveKd,"
+         "turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts");
+    for (int i = 0; i < moveCount; i++) {
+        Mv& m = moves[i];
+        emitf("%d,%s,%g,%g,%g,%g,%d,%d,%g,%g,0,%g,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%s,%u,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+            m.index, m.type, m.targetX, m.targetY, m.targetH, m.distance, m.backwards, m.direction,
+            m.partiality, m.dLead, m.heading, m.cosineScaling ? 1 : 0, m.turnPriority,
+            m.exTimeout, m.exSmallErr, m.exSmallTime, m.exBigErr, m.exBigTime, m.exDist, m.exPerp,
+            m.exAng, m.exPct, m.exReason, m.startTime, m.endTime, m.dKp, m.dKi, m.dKd,
+            m.tKp, m.tKi, m.tKd, m.gLead, m.leadChase, m.pathHeading, m.turnDisable, m.leftVolts, m.rightVolts);
+    }
+
+    emit("");
+    emit("[TICKS]");
+    emit("t,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,"
+         "ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip");
+    for (int i = 0; i < tickCount; i++) {
+        Tk& t = ticks[i];
+        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+            t.t, (unsigned) t.mi, t.x, t.y, t.h, (unsigned) t.stage, t.le, t.he, t.dp, t.hp, t.tp, t.sp,
+            t.driveO, t.turnO, t.lo, t.ro, t.yi, t.xi, t.leadRet, t.perp,
+            t.ex, t.ey, t.driveI, t.driveD, t.turnI, t.turnD,
+            t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip);
+    }
+
+    emit("");
+    emit("[READWALLS]");
+    emit("t,mi,wall,sensor,preX,preY,preH,postX,postY,postH");
+    for (int i = 0; i < wallCount; i++) {
+        Wall& w = walls[i];
+        emitf("%u,%u,%d,%d,%g,%g,%g,%g,%g,%g",
+            w.t, (unsigned) w.mi, w.wall, w.sensor, w.preX, w.preY, w.preH, w.postX, w.postY, w.postH);
+    }
+
+    emit("#END");
+}
+
+// Console dump: mute the screen tasks, throttle, marker-prefix every line.
+void stop() {
+    if (!capturing) return;
+    capturing = false;
+
+    outFile = nullptr;
+    emitCount = 0;
+    muted = true;                      // quiet the screen tasks for a clean console
+    vex::this_thread::sleep_for(120);  // let them finish their current cycle
+    dumpTrace();
+    fflush(stdout);
+    muted = false;
+}
+
+// SD-card dump: writes the trace to a file on the microSD (no console, no
+// scrambling, no throttle). Falls back to the console dump if the card is
+// missing. Pull the card / read the file and import it into the app.
+void stop(const char* filename) {
+    if (!capturing) return;
+    capturing = false;
+
+    FILE* f = fopen(filename, "w");
+    if (!f) {
+        printf("debugger: no SD card (could not open %s) — dumping to console\n", filename);
+        capturing = true;  // re-arm so the console path runs
+        stop();
+        return;
+    }
+    outFile = f;
+    dumpTrace();
+    fclose(f);
+    outFile = nullptr;
+    printf("debugger: saved %d ticks / %d movements to %s\n", tickCount, moveCount, filename);
+    fflush(stdout);
+}
+
+} // namespace debugger

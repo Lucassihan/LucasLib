@@ -2,6 +2,7 @@
 #include "movement.h"
 #include "coreConfigs.h"
 #include "misc/util.h"
+#include "debugger/debugger.h"
 
 #include <cmath>
 
@@ -9,7 +10,7 @@
 void initializePIDConstants() {
   //TurnPID
   turnPID.setProfile(normal);
-  turnPID.addStep(999999, 0.1, 0.001, 1.506);
+  turnPID.addStep(999999, 0.1, 0.001, 3.644);
   turnPID.setIntegralSettings(10, 3);
 
   //SwingPID
@@ -19,7 +20,7 @@ void initializePIDConstants() {
 
   //DrivePID
   drivePID.setProfile(normal);
-  drivePID.addStep(99999, 1, 0.01, 21.083);
+  drivePID.addStep(99999, 0.5, 0., 9);
   drivePID.setIntegralSettings(2, 3);
 
   //HeadingPID
@@ -28,7 +29,7 @@ void initializePIDConstants() {
 
   //LyPosePID
   lyPosePID.setProfile(normal);
-  lyPosePID.addStep(99999, 0.03, 0, 0); //LyPose PID shouldn't have any kI or kD. 
+  lyPosePID.addStep(99999, 0.1, 0, 1.506); //LyPose PID shouldn't have any kI or kD. 
 }
 
 void autonSettings() {
@@ -42,8 +43,9 @@ void autonSettings() {
 }
 
 void exampleAuton() {
+  debugger::start("example");
   autonSettings();
-  chassis.setPos(0,0,90);
+  chassis.setPos(0,0,0);
 
 //   moveTo(24,24, {.timeout = 50000});
 
@@ -52,15 +54,22 @@ void exampleAuton() {
   // facePoint(0, 24, {.exitPct = 0.8}, true);
   // moveTo(0, 24, {.settle = true},true);
   // facePoint(0,0,{.exitPct = 0.8}, true);
-  // moveTo(0,0,{.timeout = 500000}, true);
+  // // moveTo(0,0,{.timeout = 500000}, true);
+  // BoomParams boom1 {
+  //   .x = 24,
+  //   .y = 12,
+  //   .heading = 90,
+  //   .lead = 0.3,
+  //   .gLead = 0.6,
+  // };
+  // totalOutput.maxAccelRate = 1;
+  // facePoint(getBoomLeadX(boom1, false), getBoomLeadY(boom1, false), {}, false);
+  // boomerangTo(boom1, {}, false);
+  // // lyPose(24,12, {}, false, 90);
 
-    drivePID.maxOutput = 5;
-    moveTo(16, -12, {.settle = true});
-    swingOnRight(180, {.exitPct = 0.3}, 0.5);
-    swingOnRight(180, {.timeout = 700});
-    driveBackward(5, {.exitDist = 2});
-    swingOnRightToPoint(24, 0, {.exitPct = 0.5}, false, 0);
-    moveTo(24, 0, {.settle = true});
+  driveStopShort = 12;
+  moveTo(0,24);
+  debugger::stop();
 
 //   LateralExitConditions yFast = {
 //     .exitDist = 3

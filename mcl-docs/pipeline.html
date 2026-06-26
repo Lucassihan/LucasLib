@@ -181,8 +181,8 @@ mcl.step(globalDX, globalDY, headingRad, slipAccel, vex::timer::system());</code
   for (int i = 0; i &lt; N; i++) {
     double weight = 1.0;
     for (int s = 0; s &lt; sensorCount; s++) {
-      std::optional&lt;double&gt; vote = sensors[s]-&gt;p(particles[i].x, particles[i].y, headingRad);
-      if (vote.has_value()) { weight = weight * vote.value(); }   // abstaining sensors skipped
+      SensorVote vote = sensors[s]-&gt;p(particles[i].x, particles[i].y, headingRad);
+      if (vote.valid) { weight = weight * vote.weight; }   // abstaining sensors skipped
     }
     weights[i] = weight;
     totalWeight += weight;
@@ -190,8 +190,8 @@ mcl.step(globalDX, globalDY, headingRad, slipAccel, vex::timer::system());</code
   return totalWeight;
 }</code><span class="code-label">mcl.h</span></pre>
     <p>The vote itself — this is where the field geometry enters. The sensor's mount is rotated into the field by the particle's pose, a ray is cast to the nearest wall, and the expected distance is scored against the actual reading with a bell curve:</p>
-    <pre><code>std::optional&lt;double&gt; p(double px, double py, double headingRad) override {
-  if (!hasValidReading) { return std::nullopt; }      // abstain: this sensor sits out the vote
+    <pre><code>SensorVote p(double px, double py, double headingRad) override {
+  if (!hasValidReading) { return { false, 0.0 }; }    // abstain: this sensor sits out the vote
 
   // 1. sensor's position in the field (rotate the robot-frame mount by heading)
   double sensorX = px + mountForward * sin(headingRad) + mountSideways * cos(headingRad);
@@ -203,7 +203,7 @@ mcl.step(globalDX, globalDY, headingRad, slipAccel, vex::timer::system());</code
   // 4. score the match, with a floor so one bad reading can't zero a good particle
   double score = bellCurve(expectedInches, measuredInches, standardDeviation);
   if (score &lt; MCLConfig.HEAVY_TAIL_FLOOR) { score = MCLConfig.HEAVY_TAIL_FLOOR; }
-  return score * MCLConfig.DISTANCE_WEIGHT;
+  return { true, score * MCLConfig.DISTANCE_WEIGHT };
 }</code><span class="code-label">mcl.h · MCLDistanceSensor::p()</span></pre>
     <p>The ray-cast is the heart of the measurement model — "from this point, looking this way, how far is the nearest wall?"</p>
     <pre><code>inline double rayToWalls(double sx, double sy, double phiRad) {
@@ -218,7 +218,7 @@ mcl.step(globalDX, globalDY, headingRad, slipAccel, vex::timer::system());</code
 }</code><span class="code-label">mcl.h</span></pre>
     <div class="callout"><span class="tag">Small detail · the convention, baked in</span><p>A ray at VEX heading <code>phi</code> travels in direction <code>(sin phi, cos phi)</code> — that's the same mapping <code>track()</code> uses (forward maps to <code>(sin, cos)</code>). For each of the 4 walls (x = ±H, y = ±H) we solve for the distance <code>t</code> along the ray, keep it only if the hit lands on the actual finite wall segment (<code>fabs(...) &lt;= H</code>), and take the nearest. Capped at <code>SENSOR_MAX_RANGE</code>.</p></div>
     <div class="callout key"><span class="tag">Why the heavy-tail floor</span><p>A pure bell curve drops to ~0 for a big mismatch, so a single bad reading (an opponent in the beam, or a wall just out of range) could zero a particle's whole weight even if it's right about everything else. Flooring each vote at <code>HEAVY_TAIL_FLOOR</code> (0.05) means one wild sensor only knocks a particle down ~20×, not to zero — the other sensors still get a say. This was added after testing; without it the cloud collapsed near walls.</p></div>
-    <div class="callout"><span class="tag">Why <code>std::optional</code></span><p>A sensor with nothing in range returns <code>std::nullopt</code> and is simply skipped in the product — it neither helps nor hurts. This is cleaner than feeding a fake reading, and it's how the filter copes when a sensor faces across the field and sees nothing within 78&nbsp;in.</p></div>
+    <div class="callout"><span class="tag">Why a <code>SensorVote</code> (not <code>std::optional</code>)</span><p>A sensor with nothing in range returns <code>{ false, 0.0 }</code> (abstain) and is simply skipped in the product — it neither helps nor hurts. This is how the filter copes when a sensor faces across the field and sees nothing within 78&nbsp;in. We use a tiny <code>struct SensorVote { bool valid; double weight; }</code> rather than <code>std::optional</code> because the VEX toolchain's libstdc++ (GCC&nbsp;4.9) predates the C++17 <code>&lt;optional&gt;</code> header.</p></div>
 
     <h2 id="resample">Step 7 — Resample (survival of the fittest) + roughening</h2>
     <p>Resampling rebuilds the cloud, copying heavy particles often and dropping light ones, so the population concentrates where the weight is. We use <strong>systematic resampling</strong>: lay all the weights end-to-end, drop N evenly-spaced points, keep whichever particle each lands on.</p>

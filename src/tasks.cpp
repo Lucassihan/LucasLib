@@ -21,11 +21,5 @@ void startTasks() { //Put your tasks in here (or you can just put them directly 
     task controllerScreen(controllerScreenTask);
     task brainScreenTask(brainScreenTaskFcn);
 
-    //Roller control task used in Push Back
-    //Running roller controls in a separate thread allows me to use things like delays without blocking the main driver / auton loop
-    //Being able to run delays makes writing color sort possible 
-    //(there is a way to do it without using delays and a separate thread but its HARD and pointless)
-    task magControlTask(magControlFcn);
-
     //Put your own tasks in here too!
 }
