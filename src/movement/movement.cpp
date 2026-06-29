@@ -30,15 +30,6 @@ void face(double heading, TurnExitConditions ec, int direction) {
         turnDir = sign(chassis.wrappedHeadingError(heading, false));
     }
 
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
-    }
-
     while (not exitConditionFulfilled) {
         //live error to the target heading (base + turnOvershoot along the turn direction),
         //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
@@ -80,15 +71,6 @@ void facePoint(double x, double y, TurnExitConditions ec, bool backward, int dir
         turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
     }
 
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
-    }
-
     while (not exitConditionFulfilled) {
         //live error to the target heading (base + turnOvershoot along the turn direction),
         //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
@@ -128,15 +110,6 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
         turnDir = sign(chassis.wrappedHeadingError(heading, false));
     }
 
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
-    }
-
     while (not exitConditionFulfilled) {
         //live error to the target heading (base + turnOvershoot along the turn direction),
         //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
@@ -171,15 +144,6 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
     int turnDir = direction;
     if (turnDir == 0) {
         turnDir = sign(chassis.wrappedHeadingError(heading, false));
-    }
-
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(heading + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
     }
 
     while (not exitConditionFulfilled) {
@@ -220,15 +184,6 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, bool backward
         turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
     }
 
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
-    }
-
     while (not exitConditionFulfilled) {
         //live error to the target heading (base + turnOvershoot along the turn direction),
         //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
@@ -265,15 +220,6 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, bool backwar
     int turnDir = direction;
     if (turnDir == 0) {
         turnDir = sign(chassis.wrappedPointHeadingError(targetX, targetY, backward));
-    }
-
-    //convert exitPct to exitAng using the initial heading error
-    if (ec.exitPct > 0) {
-        double initialError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnOvershoot * turnDir, false, direction);
-        double pctExitAng = (1.0 - ec.exitPct) * fabs(initialError);
-        if (pctExitAng > ec.exitAng) {
-            ec.exitAng = pctExitAng;
-        }
     }
 
     while (not exitConditionFulfilled) {
@@ -323,7 +269,6 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
     while (not exitConditionFulfilled) {
         lateralError = distance - chassis.forwardProgress(startX, startY, targetH);
-        lateralError = lateralError - driveStopShort;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -345,7 +290,6 @@ void driveForward(double distance, LateralExitConditions ec, BlendSettings bs, d
 
         delay(10);
     }
-    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -362,7 +306,6 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
     while (not exitConditionFulfilled) {
         lateralError = -(distance + chassis.forwardProgress(startX, startY, targetH));
-        lateralError = lateralError + driveStopShort;
 
         //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
@@ -384,7 +327,6 @@ void driveBackward(double distance, LateralExitConditions ec, BlendSettings bs, 
 
         delay(10);
     }
-    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -398,11 +340,6 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
 
     headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
     lateralError = chassis.distanceTo(targetX, targetY, backward);
-
-    double signedStopShort = driveStopShort;
-    if (backward) {
-        signedStopShort = -driveStopShort;
-    }
 
     while (not exitConditionFulfilled) {
         //if we're far from the target, use point based heading error and distance.
@@ -425,7 +362,7 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
             lateralError = targetStraightDistance - chassis.yInchesTracked;
         }
 
-        drivePow   = drivePID.calculateOutput(lateralError - signedStopShort);
+        drivePow   = drivePID.calculateOutput(lateralError);
         headingPow = headingPID.calculateOutput(headingError);
 
         //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
@@ -438,11 +375,10 @@ void moveTo(double x, double y, LateralExitConditions ec, bool backward, BlendSe
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - signedStopShort, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError, targetX, targetY, backward);
 
         delay(10);
     }
-    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 
@@ -495,14 +431,13 @@ void lyPose(double x, double y, LateralExitConditions ec, bool backward,
         voltageDrive(leftOut, rightOut);
 
         //exit settles on the TRUE distance to the pose (lateralError = dist)
-        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError - driveStopShort, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, exitStateVars, lateralError, targetX, targetY, backward);
 
         delay(10);
     }
 
     drivePID.executingLyapunov   = false;
     headingPID.executingLyapunov = false;
-    driveStopShort = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
 

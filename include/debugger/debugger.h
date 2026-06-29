@@ -22,11 +22,13 @@ namespace debugger {
 
 // ---- Lifecycle: call once around the auton ----
 // start() snapshots the header (pose, trackwidth, gains, governors) and arms
-// capture. stop() prints the trace to the console (throttled + screens muted).
-// stop("trace.txt") instead writes it to the microSD card — faster and immune
-// to console scrambling; recommended for anything but tiny traces.
+// capture. stop() auto-dumps to the console (no input needed) once
+// minSecondsSinceStart have elapsed. It prints the trace SEVERAL times back to
+// back: VEXcode re-opens the USB port mid-stream so the first copy is partial,
+// but the rest stream complete and the importer keeps only the last complete
+// one. stop("trace.txt") instead writes to the microSD card (single clean copy).
 void start(const char* autonName);
-void stop();
+void stop(double minSecondsSinceStart = 3.0);
 void stop(const char* filename);
 
 // ---- Movement tags: one line at the top of each movement ----

@@ -6,31 +6,6 @@
 using namespace vex;
 
 // =========================================================================
-// Mechanism enums
-// =========================================================================
-
-enum IntakeMode {
-  coasting,
-  intake,
-  spit,
-  lowGoal,
-  longGoal,
-  midGoal,
-  midGoalSlow,
-  truncatedIntake,
-  topStageJamInsurance,
-  antiSpill,
-  onlyTopStage,
-  onlyBottomStage
-};
-
-enum ColorSortMode {
-  none,
-  teamRedColorSort,
-  teamBlueColorSort
-};
-
-// =========================================================================
 // Auton tracking
 // =========================================================================
 
@@ -112,9 +87,6 @@ void lowGoalFcn(bool suspendUpper = false);
 // Intake + color-sort runtime state
 // =========================================================================
 
-extern IntakeMode    intakeMode;
-extern ColorSortMode colorSortMode;
-
 extern bool blockOtw;
 extern bool readingRed;
 extern bool readingBlue;
@@ -166,6 +138,7 @@ int delayedIntakeLiftFcn();
 int trackDisplayTask();
 int controllerScreenTask();
 int brainScreenTaskFcn();
+int fourBarControlTask();
 
 // =========================================================================
 // Lifecycle

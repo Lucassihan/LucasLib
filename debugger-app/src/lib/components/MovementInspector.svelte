@@ -116,69 +116,49 @@
 
   const unit = (m: Movement) => (isTurn(m.type) ? '°' : 'in');
 
-  function triggeredCategory(reason: string): string {
-    if (reason === 'smallError' || reason === 'bigError' || reason === 'settle') return 'settle';
-    return reason;
+  // The zone the settle gate operates in: exitAng for turns, exitDist for laterals.
+  function settleZone(m: Movement): { value: number; u: string } {
+    return isTurn(m.type) ? { value: m.exitAng, u: '°' } : { value: m.exitDist, u: 'in' };
   }
 
   function triggeredLabel(reason: string): string {
-    const c = triggeredCategory(reason);
-    return (
-      {
-        settle: 'Settle',
-        timeout: 'Timeout',
-        exitDist: 'Exit dist',
-        perpLine: 'Perp line',
-        exitAng: 'Exit ang'
-      }[c] ?? reason
-    );
+    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line' }[reason] ?? reason;
   }
 
   function triggeredDetail(m: Movement): string {
-    const u = unit(m);
     switch (m.exitReason) {
-      case 'smallError':
-        return `via Small window · ${m.exitSmallError} ${u} for ${m.exitSmallTime} ms`;
-      case 'bigError':
-        return `via Big window · ${m.exitBigError} ${u} for ${m.exitBigTime} ms`;
+      case 'settle': {
+        const z = settleZone(m);
+        const zone = z.value > 0 ? `within ${z.value} ${z.u}` : 'in zone';
+        return m.settleD > 0 ? `${zone}, then |D term| < ${m.settleD}` : `${zone} (no settle gate)`;
+      }
       case 'timeout':
         return `${m.exitTimeout} ms elapsed`;
-      case 'exitDist':
-        return `within ${m.exitDist} in of target`;
       case 'perpLine':
         return `crossed target plane · arm ${m.exitPerpLine} in`;
-      case 'exitAng':
-        return `within ${m.exitAng}° of target`;
       default:
         return '';
     }
   }
 
   function glyphCategory(reason: string): string {
-    if (reason === 'smallError' || reason === 'bigError' || reason === 'settle') return 'settle';
     if (reason === 'timeout') return 'timeout';
     if (reason === 'perpLine') return 'perp';
-    return 'early'; // exitDist, exitAng, exitPct
+    return 'settle';
   }
 
   function armed(m: Movement): { k: string; v: string }[] {
-    const u = unit(m);
-    const cat = triggeredCategory(m.exitReason);
     const out: { k: string; v: string }[] = [];
-    if (m.exitTimeout > 0 && cat !== 'timeout') out.push({ k: 'Timeout', v: `${m.exitTimeout} ms` });
-    if (cat !== 'settle') {
-      out.push({
-        k: 'Settle',
-        v: `${m.exitSmallError}${u}/${m.exitSmallTime}ms · ${m.exitBigError}${u}/${m.exitBigTime}ms`
-      });
-    } else if (m.exitReason === 'smallError') {
-      out.push({ k: 'Big window', v: `${m.exitBigError} ${u} · ${m.exitBigTime} ms` });
-    } else if (m.exitReason === 'bigError') {
-      out.push({ k: 'Small window', v: `${m.exitSmallError} ${u} · ${m.exitSmallTime} ms` });
+    if (m.exitTimeout > 0 && m.exitReason !== 'timeout') {
+      out.push({ k: 'Timeout', v: `${m.exitTimeout} ms` });
     }
-    if (m.exitDist > 0 && cat !== 'exitDist') out.push({ k: 'Exit dist', v: `${m.exitDist} in` });
-    if (m.exitPerpLine > 0 && cat !== 'perpLine') out.push({ k: 'Perp line', v: `${m.exitPerpLine} in` });
-    if (m.exitAng > 0 && cat !== 'exitAng') out.push({ k: 'Exit ang', v: `${m.exitAng}°` });
+    if (m.exitReason !== 'settle') {
+      const z = settleZone(m);
+      if (z.value > 0) out.push({ k: 'Settle', v: `${z.value} ${z.u} · |D| < ${m.settleD}` });
+    }
+    if (m.exitPerpLine > 0 && m.exitReason !== 'perpLine') {
+      out.push({ k: 'Perp line', v: `${m.exitPerpLine} in` });
+    }
     return out;
   }
 
@@ -277,7 +257,7 @@
       </div>
       <div class="exit-detail">{triggeredDetail(m)}</div>
 
-      {#if triggeredCategory(m.exitReason) === 'settle'}
+      {#if m.exitReason === 'settle'}
         <div class="row exit-stat">
           <span class="k">Exit error</span>
           <span class="v">{exitError(m).toFixed(isTurn(m.type) ? 1 : 2)} {unit(m)}</span>

@@ -20,6 +20,7 @@ void startTasks() { //Put your tasks in here (or you can just put them directly 
     //Controller / brain screen data printing, functions are in main. Feel free to change the functions to whatever you want
     task controllerScreen(controllerScreenTask);
     task brainScreenTask(brainScreenTaskFcn);
+    task fourBar(fourBarControlTask);
 
     //Put your own tasks in here too!
 }

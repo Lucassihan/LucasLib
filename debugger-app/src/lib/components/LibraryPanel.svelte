@@ -1,11 +1,35 @@
 <script lang="ts">
   import { library, removeAuton, summarize, formatRelative } from '$lib/stores/library.svelte';
   import { loadFromLibrary, loadTrace } from '$lib/stores/trace.svelte';
+  import { invoke, Channel } from '@tauri-apps/api/core';
 
   let { open = $bindable() }: { open: boolean } = $props();
 
   let importText = $state('');
   let importError = $state('');
+
+  // Live USB capture is only available in the desktop (Tauri) build.
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  let capturing = $state(false);
+  let captureMsg = $state('');
+
+  async function captureFromRobot() {
+    if (!isTauri || capturing) return;
+    capturing = true;
+    captureMsg = 'Scanning for the V5…';
+    try {
+      const onStatus = new Channel<string>();
+      onStatus.onmessage = (m) => (captureMsg = m);
+      const text = await invoke<string>('capture_trace', { timeoutSecs: 90, onStatus });
+      loadTrace(text);
+      capturing = false;
+      captureMsg = '';
+      close();
+    } catch (e) {
+      captureMsg = String(e);
+      capturing = false;
+    }
+  }
 
   function close() {
     open = false;
@@ -69,6 +93,13 @@
       <div class="sub">{library.items.length} auton{library.items.length === 1 ? '' : 's'} · click to load</div>
 
       <div class="import">
+        {#if isTauri}
+          <button class="capture" onclick={captureFromRobot} disabled={capturing}>
+            {capturing ? 'Capturing…' : '⚡ Capture from robot'}
+          </button>
+          {#if captureMsg}<span class="capture-msg">{captureMsg}</span>{/if}
+          <div class="or">or paste a dump</div>
+        {/if}
         <textarea
           class="import-box"
           placeholder="Paste a robot trace dump from the console (debugger::stop output)…"
@@ -181,6 +212,38 @@
     padding-bottom: 12px;
     border-bottom: 1px solid var(--border-subtle);
   }
+  .capture {
+    width: 100%;
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-small);
+    padding: 9px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .capture:hover {
+    background: #1d4ed8;
+  }
+  .capture:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .capture-msg {
+    font-size: 9px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .or {
+    font-size: 9px;
+    color: var(--text-ghost);
+    text-align: center;
+    margin: 1px 0 -2px;
+  }
+
   .import-box {
     width: 100%;
     box-sizing: border-box;

@@ -54,7 +54,7 @@
   function exitDetail(m: Movement): string {
     if (m.exitPerpLine > 0) return `perp line ${m.exitPerpLine} in`;
     if (m.exitDist > 0) return `exit dist ${m.exitDist} in`;
-    return `settle ${m.exitSmallError} in`;
+    return `settle |D| < ${m.settleD}`;
   }
 </script>
 
@@ -114,7 +114,6 @@
             y={m.targetY}
             exitDist={m.exitDist}
             perpLine={m.exitPerpLine}
-            smallError={m.exitSmallError}
             heading={approachHeading(m)}
             onenter={(e) => showTip(m, e)}
             onmove={moveTip}

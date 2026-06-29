@@ -93,3 +93,4 @@ extern PID turnPID;
 extern PID headingPID;
 extern PID swingPID;
 extern PID lyPosePID;
+extern PID fourBarPID;

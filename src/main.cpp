@@ -6,15 +6,21 @@
 #include "misc/util.h"
 #include "tasks.h"
 #include "debugger/debugger.h"
+#include "pid.h"
 
 #include <cmath>
 #include <cstdio>
 
 std::string currentAuton;
 
-// Rollers
-motor intakeRollers = motor(PORT12, ratio6_1, true);
-motor upperRollers = motor(PORT11, ratio6_1, false);
+// Intake
+motor intakeRoller = motor(PORT9, ratio18_1, false);
+
+//4Bar
+motor fourBarLeft = motor(PORT11, ratio36_1, false);
+motor fourBarRight = motor(PORT12, ratio36_1, true);
+motor_group fourBar = motor_group(fourBarLeft, fourBarRight);
+rotation fourBarRotation = rotation(PORT5, false);
 
 //Mag distance sensors
 distance OtwDistSensor = distance(PORT8);
@@ -25,16 +31,45 @@ optical OtwColorSensor = optical(PORT1);
 
 //Pistons
 digital_out hood = digital_out(Brain.ThreeWirePort.G);
-digital_out hook = digital_out(Brain.ThreeWirePort.A);
-digital_out matchloader = digital_out(Brain.ThreeWirePort.D);
-digital_out midDescore = digital_out(Brain.ThreeWirePort.H);
-digital_out intakeLift = digital_out(Brain.ThreeWirePort.B);
-digital_out odomLift = digital_out(Brain.ThreeWirePort.F);
-digital_out midGoalHook = digital_out(Brain.ThreeWirePort.E);
 
+void intake() {
+  intakeRoller.spin(forward, 100, pct);
+}
+
+void spit() {
+  intakeRoller.spin(reverse, 100, pct);
+}
+
+void stop() {
+  intakeRoller.stop(coast);
+}
+
+//height is 7 in
 // 4bar Control Task
-int fourBarControl() {
+double rotationOffset = 0;
+double L1 = 5;
+double L2 = 5;
+double offset1 = 0;
+double offset2 = 0;
+double calculateHeight(double rotation) {
+  double theta = TO_RAD(rotation + rotationOffset);
+  double height = (L1+L2)*sin(theta) + offset1 + offset2;
+  return height;
+}
+
+double targetLevel = 0;
+double halfCupHeight = 3.5;
+double targetHeight;
+double currentHeight;
+double error;
+int fourBarControlTask() {
   while (true) {
+    currentHeight = calculateHeight(fourBarRotation.position(degrees));
+    targetHeight = targetLevel * halfCupHeight;
+    error = currentHeight - targetHeight;
+
+    fourBarPID.calculateOutput(error);
+    fourBar.spin(forward, fourBarPID.output, volt);
 
     delay(10);
   }
@@ -92,7 +127,7 @@ int controllerScreenTask() {
     Controller.Screen.print("Chassis:%2.f", chassisTempAvg);
 
     Controller.Screen.setCursor(2, 10);
-    Controller.Screen.print("Lower: %.3f", intakeRollers.temperature(celsius));
+    Controller.Screen.print("None");
 
     Controller.Screen.setCursor(3, 13);
     Controller.Screen.print(currentAuton.c_str());
@@ -121,9 +156,28 @@ int brainScreenTaskFcn() {
 }
 
 void initialize() {
-  vexImuDataRateSet(PORT4, 5);
-  vexAbsEncDataRateSet(PORT6, 5);
-  vexAbsEncDataRateSet(PORT21, 5);
+  // Sensor data-rate setup for the 1 ms odometry loop (delay(1) in odometryTask).
+  //
+  // The V5 IMU and rotation sensors round any requested data rate to a multiple of 5 ms, so
+  // 5 ms is the hardware floor -- there is no way to request 1 ms. We ask every tracking
+  // sensor for that fastest rate. The 1 ms loop then just oversamples each sensor ~5x and
+  // sees a zero delta on the in-between ticks, which is harmless for integration.
+  //
+  // Ports come from the coreConfigs device objects via .index() (the same 0-based port value
+  // the device was constructed with, which is exactly what the vex*DataRateSet calls expect),
+  // so these can never drift out of sync with the port assignments in coreConfigs. Only the
+  // sensors you actually use need a line; setting one on an empty port is a harmless no-op.
+  int kSensorDataRateMs = 5;  // V5 IMU / rotation-sensor floor (requests round up to multiples of 5 ms)
+
+  vexImuDataRateSet(IMU1.index(), kSensorDataRateMs);
+  vexImuDataRateSet(IMU2.index(), kSensorDataRateMs);
+
+  vexAbsEncDataRateSet(TX.index(), kSensorDataRateMs);
+  vexAbsEncDataRateSet(TY.index(), kSensorDataRateMs);
+
+  // Drive-motor encoders (used for Y when there is no Y tracker) have NO user-settable data
+  // rate -- V5 smart motors stream position over the smart port at a fixed system rate, and
+  // the SDK exposes no vexMotorDataRateSet, so there is nothing to configure for them here.
 
   startTasks();
 }
@@ -132,6 +186,9 @@ competition Competition;
 
 void pre_auton() {
   initialize();
+  fourBarPID.setProfile(normal);
+  fourBarPID.addStep(999999, 0.1, 0.001, 3.644);
+  fourBarPID.setIntegralSettings(10, 3);
 }
 
 bool didAuton = false;
@@ -144,12 +201,11 @@ void autonomous() {
   exampleAuton();
 
   while (Competition.isAutonomous()) {
-    wait(20, msec);
+    delay(20);
   }
 }
 
 void driver() {
-
   if (didAuton) {
 
   } else {
@@ -158,6 +214,28 @@ void driver() {
 
   //The actual LOOP is here. Everything above this will only be run ONCE
   while (true) {
+    arcadeDriveFcn();
+
+    if (r1.NewPress) {
+      targetLevel += 1;
+    }
+
+    if (r2.NewPress) {
+      targetLevel -= 1;
+    }
+
+    if (l2.NewPress) {
+      targetLevel = 0;
+      intake();
+    }
+    
+    if (l1.NewPress) {
+      spit();
+    }
+
+    if (not l1.Pressing and not l2.Pressing) {
+      stop();
+    }
 
     delay(10);
   }

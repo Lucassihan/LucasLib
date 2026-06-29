@@ -61,14 +61,13 @@ export interface Movement {
   cosineScaling: boolean;
   turnPriority: number;
   exitTimeout: number;
-  exitSmallError: number;
-  exitSmallTime: number;
-  exitBigError: number;
-  exitBigTime: number;
+  // settle is now derivative-magnitude based: once inside the exit zone
+  // (exitDist / exitAng), the move waits until |D term| < settleD before exiting.
+  // 0 = no settle gate (exit as soon as the zone is reached).
+  settleD: number;
   exitDist: number;
   exitPerpLine: number;
   exitAng: number;
-  exitPct: number;
   exitReason: string;
   startTime: number;
   endTime: number;

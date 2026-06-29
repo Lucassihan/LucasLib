@@ -31,7 +31,6 @@ extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
-extern double driveStopShort;
 extern double turnOvershoot;
 
 

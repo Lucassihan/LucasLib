@@ -12,17 +12,39 @@ type Row = Record<string, string>;
 // pull the trace out of a noisy console (scrambled brain/controller text, etc.).
 const TRACE_MARKER = '~LLT|';
 
-// If the text contains marker-prefixed lines (a console dump), keep ONLY those
-// and strip the marker — discarding any interleaved console noise. Otherwise
-// (a clean generated trace) return the text untouched.
+// Turn a pasted console capture into a clean trace:
+//   1. If it has marker-prefixed lines (a robot dump), keep ONLY those and strip
+//      the marker — discarding interleaved console noise.
+//   2. If the console accumulated several runs, isolate the LAST COMPLETE trace
+//      (the last "#LUCASLIB_TRACE" header that precedes a "#END"), so stale
+//      earlier dumps don't get mixed in.
+// A clean generated trace (no marker, no #END) passes through unchanged.
 export function stripMarkers(text: string): string {
-  if (!text.includes(TRACE_MARKER)) return text;
-  const out: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const i = line.indexOf(TRACE_MARKER);
-    if (i >= 0) out.push(line.slice(i + TRACE_MARKER.length));
+  let lines: string[];
+  if (text.includes(TRACE_MARKER)) {
+    lines = [];
+    for (const line of text.split(/\r?\n/)) {
+      const i = line.indexOf(TRACE_MARKER);
+      if (i >= 0) lines.push(line.slice(i + TRACE_MARKER.length));
+    }
+  } else {
+    lines = text.split(/\r?\n/);
   }
-  return out.join('\n');
+
+  // last #END (a dump's terminator), then the last header before it
+  let endIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].startsWith('#END')) { endIdx = i; break; }
+  }
+  const limit = endIdx >= 0 ? endIdx : lines.length;
+  let startIdx = -1;
+  for (let i = 0; i < limit; i++) {
+    if (lines[i].startsWith('#LUCASLIB_TRACE')) startIdx = i;
+  }
+  if (startIdx > 0 || endIdx >= 0) {
+    lines = lines.slice(Math.max(startIdx, 0), endIdx >= 0 ? endIdx : undefined);
+  }
+  return lines.join('\n');
 }
 
 function splitSections(text: string) {
@@ -135,14 +157,10 @@ function parseMovements(rows: Row[]): Movement[] {
     cosineScaling: bool(r, 'cosineScaling'),
     turnPriority: num(r, 'turnPriority'),
     exitTimeout: num(r, 'exitTimeout'),
-    exitSmallError: num(r, 'exitSmallError'),
-    exitSmallTime: num(r, 'exitSmallTime'),
-    exitBigError: num(r, 'exitBigError'),
-    exitBigTime: num(r, 'exitBigTime'),
+    settleD: num(r, 'settleD'),
     exitDist: num(r, 'exitDist'),
     exitPerpLine: num(r, 'exitPerpLine'),
     exitAng: num(r, 'exitAng'),
-    exitPct: num(r, 'exitPct'),
     exitReason: r['exitReason'] ?? '',
     startTime: num(r, 'startTime'),
     endTime: num(r, 'endTime'),

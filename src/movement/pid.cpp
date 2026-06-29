@@ -9,6 +9,7 @@ PID turnPID;
 PID headingPID;
 PID swingPID;
 PID lyPosePID;
+PID fourBarPID;
 
 //constructor
 PID::PID()
@@ -153,7 +154,7 @@ double PID::calculateOutput(double inputError) {
         }
     }
 
-    //THE FAMOUS PID EQUATION IS HERE!
+    //THE PID EQUATION IS HERE!
     double raw = kP * error + kI * sumerror + kD * derivative;
 
     //accel/decel rate limiting — skipped under lyapunov (governor slews instead)

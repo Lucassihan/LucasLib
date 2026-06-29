@@ -33,11 +33,16 @@ struct OdometryConfig {
 
 class Odometry {
 public:
-  double x = 0;
+  double x = 0;   // desired tracking point (what movements / MCL read), derived by applyPoseOffsets
   double y = 0;
   double h = 0;
 
-  // Forward velocity in inches/sec, computed each track() cycle from encoder deltas.
+  // Raw integrated pose = the intersection of the two tracker axes, before mount offsets.
+  // trackY/trackX accumulate into these; applyPoseOffsets derives (x, y) from them + heading.
+  double trueX = 0;
+  double trueY = 0;
+
+  // Forward velocity in inches/sec, refreshed on each Y accumulation from encoder deltas.
   double velocity = 0;
 
   //Cumulative wheel-rolled distance in robot's local frame, since last clearTrackedInches() call.
@@ -45,9 +50,22 @@ public:
   double yInchesTracked = 0;
   double xInchesTracked = 0;
 
+  // Per-axis noise floors in RAW sensor degrees (compared before scaling to inches): a raw
+  // delta smaller than this is below the sensor's resolution and treated as noise. Set once
+  // in the constructor from the sensor type (rotation sensor vs drive-motor cartridge).
+  double yNoiseThreshold = 0;
+  double xNoiseThreshold = 0;
+
+  // Tracker mount offsets, copied from config so odometryTask can hand them to applyPoseOffsets.
+  // xTrackerOffset = X tracker's forward (+Y) distance from the desired tracking point;
+  // yTrackerOffset = Y tracker's lateral (+X) distance. Both 0 = track the axis intersection.
+  double xTrackerOffset = 0;
+  double yTrackerOffset = 0;
+
   // --- MCL integration ---
-  // track() accumulates its per-cycle GLOBAL displacement here; the MCL task consumes it
-  // (as the predict increment) and blends a correction back into x/y. Guarded by mclMutex.
+  // trackHeading/trackY/trackX accumulate their per-tick GLOBAL displacement here; the MCL
+  // task consumes it (as the predict increment) and blends a correction back into x/y.
+  // Guarded by mclMutex.
   mutex  mclMutex;
   double mclAccumDX = 0;
   double mclAccumDY = 0;
@@ -57,14 +75,29 @@ public:
   double getTrackwidth() { return cfg.trackwidth; }  // for trace export
 
   void setPos(double newX, double newY, double newH);
-  void track();
+
+  // --- per-tick tracking, driven by odometryTask (HongKou straight-line model) ---
+  // trackHeading: fuse the IMU(s) and advance heading. Runs every tick (never noise-gated).
+  // yRawDeltaDeg / xRawDeltaDeg: raw rotation since the last accumulation, in sensor
+  //   degrees, BEFORE any scaling -- this is what odometryTask gates against the noise floor.
+  // trackY / trackX: scale that raw delta to inches and integrate it into the pose. The point
+  //   they track is the intersection of the two tracker axes (no offsets here).
+  // applyPoseOffsets: translate that intersection point to the desired tracking point using the
+  //   mount offsets + heading. Call after trackY/trackX have accumulated.
+  void   trackHeading();
+  double yRawDeltaDeg();
+  double xRawDeltaDeg();
+  void   trackY(double rawDeltaDeg);
+  void   trackX(double rawDeltaDeg);
+  void   applyPoseOffsets(double offsetX, double offsetY);
+
   void clearTrackedInches();
   void readWall(int wall, int sensor, bool bypassSettleDelay = false);
 
   double wrapAngle(double angle);
   double distanceTo(double targetX, double targetY, bool backward = false);
 
-  //Signed radius (inches) of the arc the robot traced on the last track() cycle: r = ds/dtheta.
+  //Signed radius (inches) of the arc the robot traced over the last Y accumulation: r = ds/dtheta.
   //Sign follows heading change (CW+). Near-straight motion returns a large sentinel (~1e9).
   //Used by boomerang slip-limiting (centripetal: v_max = sqrt(grip * |r|)).
   double travelArcRadius();
@@ -76,6 +109,8 @@ public:
   double wrappedPointHeadingError(double targetX, double targetY, bool backward = false);
   double positivePointHeadingError(double targetX, double targetY, bool backward = false);
   double negativePointHeadingError(double targetX, double targetY, bool backward = false);
+
+  bool noEncodersUpdated;
 
 private:
   OdometryConfig cfg;
@@ -92,19 +127,26 @@ private:
 
   double lastIMU1     = 0;
   double lastIMU2     = 0;
-  double lastYPos     = 0;
-  double lastXPos     = 0;
+  double lastYPos     = 0;   // Y accumulation baseline (raw deg); advances only when Y accumulates
+  double lastXPos     = 0;   // X accumulation baseline (raw deg); advances only when X accumulates
   double lastLeftPos  = 0;
   double lastRightPos = 0;
 
+  // Heading change (deg) banked since the last Y accumulation, so velocity and arc radius
+  // cover the same span as the forward distance they are paired with.
+  double dhAccumDeg = 0;
+
   uint64_t lastTrackTime = 0;
 
-  //Cached arc radius (inches) from the most recent track() cycle. See travelArcRadius().
+  //Cached arc radius (inches) from the most recent Y accumulation. See travelArcRadius().
   double lastArcRadius = 1e9;
 
   double resolveHeading(double dIMU1, double dIMU2, double dLDeg, double dRDeg);
   double motorDegsToInches(double deg);
   double trackerDegsToInches(double deg, double diameter);
+  double motorTickDegrees();   // drive-encoder resolution (deg/tick) from the gear cartridge
+  double yRawPosition();       // current raw Y reading (tracker deg, or avg drive-encoder deg)
+  double xRawPosition();       // current raw X reading (tracker deg, or 0 with no X tracker)
 };
 
 extern Odometry chassis;

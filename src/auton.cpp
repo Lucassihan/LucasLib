@@ -3,6 +3,7 @@
 #include "coreConfigs.h"
 #include "misc/util.h"
 #include "debugger/debugger.h"
+#include "pid.h"
 
 #include <cmath>
 
@@ -49,26 +50,35 @@ void exampleAuton() {
 
 //   moveTo(24,24, {.timeout = 50000});
 
-  // facePoint(24, 24, {.exitPct = 0.8});
+  // facePoint(24, 24, {.exitAng = 10});
   // moveTo(24, 24, {.settle = true});
-  // facePoint(0, 24, {.exitPct = 0.8}, true);
+  // facePoint(0, 24, {.exitAng = 10}, true);
   // moveTo(0, 24, {.settle = true},true);
-  // facePoint(0,0,{.exitPct = 0.8}, true);
+  // facePoint(0,0,{.exitAng = 10}, true);
   // // moveTo(0,0,{.timeout = 500000}, true);
+  // drivePID.maxOutput = 5;
   // BoomParams boom1 {
   //   .x = 24,
   //   .y = 12,
   //   .heading = 90,
-  //   .lead = 0.3,
-  //   .gLead = 0.6,
+  //   .lead = 0.6,
+  //   .gLead = 0.4,
   // };
-  // totalOutput.maxAccelRate = 1;
   // facePoint(getBoomLeadX(boom1, false), getBoomLeadY(boom1, false), {}, false);
-  // boomerangTo(boom1, {}, false);
+  // boomerangTo(boom1, {.exitDist = 0}, false);
+
+  // face(180);
+  // moveTo(0, 48, {}, true);
+
+  // totalOutput.maxOutput = 3;
+  // kLat = 0.05;
+  // lyPose(24, 24, {.exitDist = 0}, false, 45);
+
+  face(180);
+
+  // face(180);
   // // lyPose(24,12, {}, false, 90);
 
-  driveStopShort = 12;
-  moveTo(0,24);
   debugger::stop();
 
 //   LateralExitConditions yFast = {
@@ -76,7 +86,7 @@ void exampleAuton() {
 //   };
 
 //   TurnExitConditions tFast = {
-//     .exitPct = 0.9
+//     .exitAng = 5
 //   };
 
 

@@ -27,6 +27,10 @@ static const int TICK_CAP = 4000;   // 40 s of ticks
 static const int MOVE_CAP = 96;
 static const int WALL_CAP = 64;
 
+// Console dump is repeated this many times: the 1st copy is mangled when VEXcode
+// (re)opens the USB port mid-stream; the rest stream clean once it's connected.
+static const int DUMP_REPEATS = 4;
+
 // Per-line console marker. The app keeps only lines that start with it and
 // strips it, so screen noise on the terminal is filtered out on import.
 #define DBG_MARK "~LLT|"
@@ -41,9 +45,9 @@ struct Mv {
     int          backwards, direction;
     float        dLead, gLead, leadChase, pathHeading, turnDisable, turnPriority;
     bool         cosineScaling;
-    // armed exit conditions
-    float        exTimeout, exSmallErr, exSmallTime, exBigErr, exBigTime;
-    float        exDist, exPerp, exAng, exPct;
+    // armed exit conditions (settle is derivative-magnitude based: once inside
+    // the exit zone, the move waits until |D term| < settleD before exiting)
+    float        exTimeout, settleD, exDist, exPerp, exAng;
     const char*  exReason;
     uint32_t     startTime, endTime;
     // locked PID constants for the channels (captured on the movement's first tick)
@@ -112,7 +116,7 @@ static Mv& newMove(const char* type, Kind kind) {
     m.index          = moveCount;
     m.type           = type;
     m.kind           = kind;
-    m.exReason       = "smallError";
+    m.exReason       = "settle";
     m.startTime      = nowMs() - startMs;
     m.endTime        = m.startTime;
     m.cosineScaling  = true;
@@ -124,28 +128,21 @@ static Mv& newMove(const char* type, Kind kind) {
 }
 
 static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
-    m.exTimeout   = ec.timeout;
-    m.exSmallErr  = ec.smallError;
-    m.exSmallTime = ec.smallTime;
-    m.exBigErr    = ec.bigError;
-    m.exBigTime   = ec.bigTime;
-    m.exDist      = ec.exitDist;
-    m.exPerp      = ec.perpLine;
+    m.exTimeout = ec.timeout;
+    m.settleD   = ec.settleD;
+    m.exDist    = ec.exitDist;
+    m.exPerp    = ec.perpLine;
     if (ec.perpLine > 0)      m.exReason = "perpLine";
-    else if (ec.exitDist > 0) m.exReason = "exitDist";
-    else                      m.exReason = "smallError";
+    else if (ec.exitDist > 0) m.exReason = "settle";
+    else                      m.exReason = "timeout";
 }
 
 static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
-    m.exTimeout   = ec.timeout;
-    m.exSmallErr  = ec.smallError;
-    m.exSmallTime = ec.smallTime;
-    m.exBigErr    = ec.bigError;
-    m.exBigTime   = ec.bigTime;
-    m.exAng       = ec.exitAng;
-    m.exPct       = ec.exitPct;
-    if (ec.exitAng > 0) m.exReason = "exitAng";
-    else                m.exReason = "smallError";
+    m.exTimeout = ec.timeout;
+    m.settleD   = ec.settleD;
+    m.exAng     = ec.exitAng;
+    if (ec.exitAng > 0) m.exReason = "settle";
+    else                m.exReason = "timeout";
 }
 
 // =========================================================================
@@ -331,18 +328,20 @@ bool screensMuted() { return muted; }
 // is small and silently DROPS bytes if you printf a whole trace flat-out, so we
 // pause periodically to let it drain.
 static FILE* outFile = nullptr;
-static int   emitCount = 0;
 
 static void emit(const char* s) {
     if (outFile) {
         fprintf(outFile, "%s\n", s);
         return;
     }
-    printf(DBG_MARK "%s\n", s);
-    if (++emitCount % 8 == 0) {
-        fflush(stdout);
-        vex::this_thread::sleep_for(8);  // let the serial buffer drain
-    }
+    // Console: wait until the serial FIFO (channel 1) has room for the WHOLE
+    // line, THEN write it in one shot — so a line is never split or partially
+    // dropped. The FIFO only frees as the host reads, so this also self-paces to
+    // the host's real read rate (no brain-side overflow).
+    char buf[700];
+    int len = snprintf(buf, sizeof(buf), DBG_MARK "%s\n", s);
+    while (vexSerialWriteFree(1) < len + 16) vex::this_thread::sleep_for(1);
+    vexSerialWriteBuffer(1, (uint8_t*) buf, len);
 }
 
 static void emitf(const char* fmt, ...) {
@@ -378,17 +377,17 @@ static void dumpTrace() {
     emit("");
     emit("[MOVEMENTS]");
     emit("index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,"
-         "cosineScaling,turnPriority,exitTimeout,exitSmallError,exitSmallTime,exitBigError,exitBigTime,"
-         "exitDist,exitPerpLine,exitAng,exitPct,exitReason,startTime,endTime,driveKp,driveKi,driveKd,"
-         "turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts");
+         "cosineScaling,turnPriority,exitTimeout,settleD,exitDist,exitPerpLine,exitAng,exitReason,"
+         "startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,"
+         "pathHeading,turnDisableLength,leftVolts,rightVolts");
     for (int i = 0; i < moveCount; i++) {
         Mv& m = moves[i];
-        emitf("%d,%s,%g,%g,%g,%g,%d,%d,%g,%g,0,%g,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%s,%u,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%d,%s,%g,%g,%g,%g,%d,%d,%g,%g,0,%g,%d,%g,%g,%g,%g,%g,%s,%u,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             m.index, m.type, m.targetX, m.targetY, m.targetH, m.distance, m.backwards, m.direction,
             m.partiality, m.dLead, m.heading, m.cosineScaling ? 1 : 0, m.turnPriority,
-            m.exTimeout, m.exSmallErr, m.exSmallTime, m.exBigErr, m.exBigTime, m.exDist, m.exPerp,
-            m.exAng, m.exPct, m.exReason, m.startTime, m.endTime, m.dKp, m.dKi, m.dKd,
-            m.tKp, m.tKi, m.tKd, m.gLead, m.leadChase, m.pathHeading, m.turnDisable, m.leftVolts, m.rightVolts);
+            m.exTimeout, m.settleD, m.exDist, m.exPerp, m.exAng, m.exReason, m.startTime, m.endTime,
+            m.dKp, m.dKi, m.dKd, m.tKp, m.tKi, m.tKd, m.gLead, m.leadChase, m.pathHeading,
+            m.turnDisable, m.leftVolts, m.rightVolts);
     }
 
     emit("");
@@ -416,17 +415,38 @@ static void dumpTrace() {
     emit("#END");
 }
 
-// Console dump: mute the screen tasks, throttle, marker-prefix every line.
-void stop() {
+// Console dump, fired automatically once minSecondsSinceStart have elapsed since
+// start(). VEXcode opens its terminal a beat AFTER the program starts, so a dump
+// that fires immediately streams the start out before the terminal is connected
+// (header/early ticks get lost). Holding off a few seconds guarantees it's up —
+// no controller/screen input needed (the field disables the controller in auton).
+// Pick a value that lands after your auton finishes but before the period ends.
+// Then every line is written to the serial FIFO with retry-on-full so nothing
+// drops; each carries the marker prefix.
+void stop(double minSecondsSinceStart) {
     if (!capturing) return;
     capturing = false;
 
+    uint32_t target = startMs + (uint32_t)(minSecondsSinceStart * 1000.0);
+    while (nowMs() < target) vex::this_thread::sleep_for(20);
+
+    muted = true;  // clean console + a steady brain status while dumping
+    vex::this_thread::sleep_for(120);
+    Brain.Screen.clearScreen();
+    Brain.Screen.printAt(10, 30, "Exporting trace (hold ~10s)...");
+
     outFile = nullptr;
-    emitCount = 0;
-    muted = true;                      // quiet the screen tasks for a clean console
-    vex::this_thread::sleep_for(120);  // let them finish their current cycle
-    dumpTrace();
-    fflush(stdout);
+    // Dump several times. The 1st copy blocks until VEXcode (re)opens the USB
+    // port, and the brain flushes the buffered start on connect, so that copy is
+    // partial. Once the port is open the link is stable, so the later copies
+    // stream complete — and the app imports only the LAST complete one.
+    for (int i = 0; i < DUMP_REPEATS; i++) {
+        dumpTrace();
+        fflush(stdout);
+        vex::this_thread::sleep_for(400);
+    }
+
+    Brain.Screen.printAt(10, 60, "Done. Select all + import.");
     muted = false;
 }
 
@@ -439,7 +459,9 @@ void stop(const char* filename) {
 
     FILE* f = fopen(filename, "w");
     if (!f) {
-        printf("debugger: no SD card (could not open %s) — dumping to console\n", filename);
+        // no card / open failed — fall back to the console dump so data isn't lost
+        Brain.Screen.clearScreen();
+        Brain.Screen.printAt(10, 30, "No SD card - dumping to console");
         capturing = true;  // re-arm so the console path runs
         stop();
         return;
@@ -448,8 +470,13 @@ void stop(const char* filename) {
     dumpTrace();
     fclose(f);
     outFile = nullptr;
-    printf("debugger: saved %d ticks / %d movements to %s\n", tickCount, moveCount, filename);
-    fflush(stdout);
+
+    // Confirm on the brain screen — no terminal involved on this path.
+    // (printAt's format overload needs the explicit opaque flag to disambiguate
+    // from the bool overload, since a string literal converts to bool.)
+    Brain.Screen.clearScreen();
+    Brain.Screen.printAt(10, 30, false, "Saved %s", filename);
+    Brain.Screen.printAt(10, 60, false, "%d ticks / %d movements", tickCount, moveCount);
 }
 
 } // namespace debugger

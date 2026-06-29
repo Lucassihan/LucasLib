@@ -116,9 +116,8 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       index: 0, type: '', targetX: 0, targetY: 0, targetH: 0, distance: 0,
       backwards: 0, direction: 0, partiality: 0, dLead: 0, n: 0, heading: 0,
       cosineScaling: 1, turnPriority: 0, exitTimeout: 3000,
-      exitSmallError: 0, exitSmallTime: 0, exitBigError: 0, exitBigTime: 0,
-      exitDist: 0, exitPerpLine: 0, exitAng: 0, exitPct: 0,
-      exitReason: 'smallError', startTime: 0, endTime: 0,
+      settleD: 0.5, exitDist: 0, exitPerpLine: 0, exitAng: 0,
+      exitReason: 'settle', startTime: 0, endTime: 0,
       driveKp: 0, driveKi: 0, driveKd: 0, turnKp: 0, turnKi: 0, turnKd: 0,
       gLead: 0, leadChasePowerLimit: -1, pathHeading: 0, turnDisableLength: 0,
       leftVolts: 0, rightVolts: 0,
@@ -127,8 +126,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     return [
       d.index, d.type, r(d.targetX), r(d.targetY), r(d.targetH), r(d.distance),
       d.backwards, d.direction, d.partiality, d.dLead, d.n, r(d.heading),
-      d.cosineScaling, d.turnPriority, d.exitTimeout, d.exitSmallError, d.exitSmallTime,
-      d.exitBigError, d.exitBigTime, d.exitDist, d.exitPerpLine, d.exitAng, d.exitPct,
+      d.cosineScaling, d.turnPriority, d.exitTimeout, d.settleD, d.exitDist, d.exitPerpLine, d.exitAng,
       d.exitReason, d.startTime, d.endTime,
       d.driveKp, d.driveKi, d.driveKd, d.turnKp, d.turnKi, d.turnKd,
       r(d.gLead), r(d.leadChasePowerLimit), r(d.pathHeading), r(d.turnDisableLength),
@@ -179,8 +177,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'face', targetH,
-      exitSmallError: 1, exitSmallTime: 150, exitBigError: 3, exitBigTime: 400,
-      exitAng: 1, startTime: startT, endTime: t,
+      settleD: 0.5, exitAng: 1, startTime: startT, endTime: t,
       turnKp: 0.7, turnKd: 0.05
     }));
     mi++;
@@ -209,8 +206,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     movements.push(mvRow({
       index: mi, type: back ? 'driveBackward' : 'driveForward',
       distance: dist, heading: hHold, backwards: back ? 1 : 0,
-      exitSmallError: 1, exitSmallTime: 100, exitBigError: 3, exitBigTime: 500,
-      startTime: startT, endTime: t,
+      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
     mi++;
@@ -245,8 +241,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'moveTo', targetX, targetY,
-      exitDist, exitReason: 'exitDist',
-      exitSmallError: 1, exitSmallTime: 100, exitBigError: 3, exitBigTime: 500,
+      exitDist, exitReason: 'settle', settleD: 0.5,
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
@@ -344,8 +339,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     movements.push(mvRow({
       index: mi, type: 'boomerangTo', targetX, targetY, targetH,
       dLead: lead, gLead, leadChasePowerLimit: chaseLimit, turnPriority: 0.4,
-      exitSmallError: 0.5, exitSmallTime: 200, exitBigError: 3, exitBigTime: 500,
-      exitPerpLine: 10, exitReason: 'perpLine',
+      settleD: 0.5, exitPerpLine: 10, exitReason: 'perpLine',
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
@@ -412,8 +406,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     movements.push(mvRow({
       index: mi, type: 'lyPose', targetX, targetY, targetH: pathHeading,
       heading: pathHeading, pathHeading, turnDisableLength,
-      exitDist, exitReason: 'exitDist',
-      exitSmallError: 0.5, exitSmallTime: 150, exitBigError: 3, exitBigTime: 500,
+      exitDist, exitReason: 'settle', settleD: 0.5,
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0, driveKd: 0.05, turnKp: 0.8, turnKi: 0, turnKd: 0.05
     }));
@@ -491,8 +484,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     const typeName = side === 'left' ? 'swingOnLeft' : 'swingOnRight';
     movements.push(mvRow({
       index: mi, type: typeName, targetH,
-      exitSmallError: 1, exitSmallTime: 150, exitBigError: 3, exitBigTime: 400,
-      exitAng: 1, startTime: startT, endTime: t,
+      settleD: 0.5, exitAng: 1, startTime: startT, endTime: t,
       turnKp: 0.5, turnKd: 0.04
     }));
     mi++;
@@ -503,7 +495,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
 
   // Assemble trace text
   const COLS_M =
-    'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,exitSmallError,exitSmallTime,exitBigError,exitBigTime,exitDist,exitPerpLine,exitAng,exitPct,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
+    'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,settleD,exitDist,exitPerpLine,exitAng,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
   const COLS_T =
     't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip';
   const COLS_R = 't,mi,wall,sensor,preX,preY,preH,postX,postY,postH';
