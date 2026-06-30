@@ -22,5 +22,6 @@ void startTasks() { //Put your tasks in here (or you can just put them directly 
     task brainScreenTask(brainScreenTaskFcn);
     task fourBar(fourBarControlTask);
 
-    //Put your own tasks in here too!
+    task AutoClamp(autoClampTask);
+    task Scoop(scoopTask);
 }

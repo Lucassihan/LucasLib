@@ -4,13 +4,14 @@ brain Brain;
 controller Controller = controller(primary);
 
 // Chassis
-motor fl = motor(PORT10, ratio18_1, true);
-motor ml = motor(PORT21, ratio6_1, true);////////////////////
-motor bl = motor(PORT20, ratio18_1, true);
+motor fl = motor(PORT20, ratio18_1, false);
+motor ml = motor(PORT18, ratio6_1, true);////////////////////
+motor bl = motor(PORT19, ratio6_1, true);
 
-motor fr = motor(PORT13, ratio18_1, false);
-motor mr = motor(PORT21, ratio6_1, false);///////////////////////
-motor br = motor(PORT15, ratio18_1, false);
+motor fr = motor(PORT11, ratio18_1, true);
+motor mr = motor(PORT13, ratio6_1, false);///////////////////////
+motor br = motor(PORT12, ratio6_1, false);
+// motor br = motor(PORT1, ratio18_1, false);
 
 motor_group leftdrive = motor_group(fl, ml, bl);
 motor_group rightdrive = motor_group(fr, mr, br);
@@ -20,7 +21,7 @@ inertial IMU1 = inertial(PORT1);
 inertial IMU2 = inertial(PORT4);
 
 rotation TX = rotation(PORT6, false);
-rotation TY = rotation(PORT21, true);
+rotation TY = rotation(PORT11, true);
 
 //Wall reading distance sensors
 distance DistSensor1 = distance(PORT8);

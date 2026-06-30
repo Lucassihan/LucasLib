@@ -139,6 +139,8 @@ int trackDisplayTask();
 int controllerScreenTask();
 int brainScreenTaskFcn();
 int fourBarControlTask();
+int autoClampTask();
+int scoopTask();
 
 // =========================================================================
 // Lifecycle
