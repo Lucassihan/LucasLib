@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Debugger — live previews A · B · C</title>
+<style>
+  :root {
+    --bg-deep: #0b0b0b; --bg-base: #101010; --bg-surface: #181818;
+    --bg-elevated: #202020; --bg-raised: #282828;
+    --border-subtle: #303030; --border-light: #404040;
+    --text-ghost: #606060; --text-muted: #7c7c7c; --text-dim: #909090;
+    --text-secondary: #a8a8a8; --text-primary: #cfcfcf; --text-emphasis: #eeeeee;
+    --ring: inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    font-family: 'Manrope Variable', Manrope, system-ui, -apple-system, sans-serif;
+    color: var(--text-secondary);
+    padding: 26px 32px 48px;
+  }
+  header { max-width: 1080px; margin: 0 auto 18px; }
+  h1 { font-size: 16px; font-weight: 800; color: var(--text-emphasis); }
+  .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .deck { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  .card {
+    position: relative; background: var(--bg-surface); border-radius: 8px;
+    box-shadow: var(--ring); padding: 16px 18px 15px;
+  }
+  .letter { position: absolute; top: 12px; right: 16px; font-size: 26px; font-weight: 800; color: #2e2e2e; }
+  h3 { font-size: 13px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .tag { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+         padding: 2px 6px; border-radius: 3px; background: var(--bg-raised); color: #4ade80; }
+  .cap { font-size: 10.5px; color: var(--text-dim); margin-bottom: 12px; }
+  .cap b { color: var(--text-secondary); font-weight: 600; }
+  .demo { background: var(--bg-base); border-radius: 6px; box-shadow: var(--ring); padding: 14px; }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .hint { font-size: 9px; color: var(--text-ghost); margin-top: 8px; }
+
+  /* ============ A · filmstrip ============ */
+  .strip { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chip {
+    display: flex; align-items: center; gap: 6px; border: none; cursor: pointer;
+    background: var(--bg-surface); border-radius: 6px; box-shadow: var(--ring);
+    padding: 6px 11px; font-size: 10px; color: var(--text-dim); font-family: inherit;
+    transition: background .15s ease, box-shadow .15s ease, color .15s ease;
+  }
+  .chip:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .chip .cdot { width: 6px; height: 6px; border-radius: 50%; }
+  .chip .dur { color: var(--text-ghost); font-size: 8.5px; }
+  .chip.on { background: #10222a; box-shadow: inset 0 0 0 1px #22d3ee; color: #b8ecf5; }
+  .chip.on .dur { color: #6cc7d8; }
+  .tl { position: relative; height: 20px; }
+  .tl .rail { position: absolute; top: 50%; left: 0; right: 0; height: 5px; border-radius: 2.5px;
+              background: #151515; box-shadow: var(--ring); transform: translateY(-50%); }
+  .tl .seg { position: absolute; top: 50%; height: 5px; border-radius: 2.5px; transform: translateY(-50%); opacity: .85; }
+  .tl .handle { position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%;
+                background: #999; transform: translate(-50%,-50%); z-index: 2;
+                transition: left .45s cubic-bezier(.25,.9,.3,1); }
+  .tl-clock { font-size: 9px; color: var(--text-dim); margin-top: 8px; font-variant-numeric: tabular-nums; }
+
+  /* ============ B · crosshair ============ */
+  .plot-wrap { position: relative; }
+  .plot-wrap svg { display: block; width: 100%; height: 210px; }
+  .xtag {
+    position: absolute; pointer-events: none; z-index: 3;
+    background: var(--bg-raised); border-radius: 5px; padding: 5px 8px;
+    box-shadow: var(--ring), 0 5px 16px rgba(0,0,0,.5); white-space: nowrap;
+    transform: translate(12px, -50%);
+  }
+  .xtag .t { display: block; font-size: 8.5px; color: var(--text-dim); }
+  .xtag .v { display: block; font-size: 11px; font-weight: 700; color: #93c5fd; }
+
+  /* ============ C · divergence ============ */
+  .fieldrow { display: flex; gap: 14px; align-items: stretch; }
+  .fieldbox { position: relative; flex: 1; }
+  .fieldbox svg { display: block; width: 100%; height: 250px; }
+  .dstats { width: 190px; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+  .dstat { background: var(--bg-surface); border-radius: 6px; box-shadow: var(--ring); padding: 9px 11px; }
+  .dstat .k { font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted); }
+  .dstat .val { font-size: 16px; font-weight: 700; color: var(--text-emphasis); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .dstat .val.hot { color: #f87171; }
+  .dstat .u { font-size: 9px; color: var(--text-dim); font-weight: 400; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live previews — the three survivors</h1>
+  <div class="sub">D / E / F ruled out. These are working sketches of A, B, C in the app's design language — hover and click around.</div>
+</header>
+
+<div class="deck">
+
+  <!-- ================= A ================= -->
+  <div class="card">
+    <div class="letter">A</div>
+    <h3>Movement filmstrip <span class="tag">small</span></h3>
+    <div class="cap">Chips sit between the field and the timeline. <b>Click one</b> — the playhead jumps to that movement's start. It auto-follows the playhead during playback.</div>
+    <div class="demo">
+      <div class="strip" id="strip"></div>
+      <div class="tl" id="tl"><div class="rail"></div></div>
+      <div class="tl-clock mono" id="tlclock">0.00s / 8.43s</div>
+      <div class="hint">demo cycles on its own · clicking a chip takes over</div>
+    </div>
+  </div>
+
+  <!-- ================= B ================= -->
+  <div class="card">
+    <div class="letter">B</div>
+    <h3>Graph crosshair readout <span class="tag">small</span></h3>
+    <div class="cap"><b>Move your mouse over the graph</b> — crosshair + exact (t, V) under the pointer. <b>Click</b> snaps the playhead (bright dashed line) there.</div>
+    <div class="demo">
+      <div class="plot-wrap" id="plotwrap">
+        <svg id="plot" viewBox="0 0 1000 210" preserveAspectRatio="none"></svg>
+        <div class="xtag" id="xtag" style="display:none">
+          <span class="t mono" id="xtag-t">t 0.00 s</span>
+          <span class="v mono" id="xtag-v">+0.00 V</span>
+        </div>
+      </div>
+      <div class="hint">idle: a ghost cursor sweeps the curve so you can see it without touching</div>
+    </div>
+  </div>
+
+  <!-- ================= C ================= -->
+  <div class="card">
+    <div class="letter">C</div>
+    <h3>Ghost divergence readout <span class="tag">small</span></h3>
+    <div class="cap">Two runs of the same auton replay together. The <b>tether</b> connects main robot ↔ ghost; the readout is live. Tether and Δ turn hot when the runs split past 2 in.</div>
+    <div class="demo">
+      <div class="fieldrow">
+        <div class="fieldbox">
+          <svg id="field" viewBox="0 0 460 250"></svg>
+        </div>
+        <div class="dstats">
+          <div class="dstat"><span class="k">Δ position</span><div class="val mono" id="dpos">0.0 <span class="u">in</span></div></div>
+          <div class="dstat"><span class="k">Δ heading</span><div class="val mono" id="dhdg">0.0 <span class="u">°</span></div></div>
+          <div class="dstat"><span class="k">ghost lag</span><div class="val mono" id="dlag">+80 <span class="u">ms</span></div></div>
+        </div>
+      </div>
+      <div class="hint">replays on a loop · in the app this appears whenever a ghost is pinned</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------- shared ----------
+const SVGNS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+// ================= A · filmstrip =================
+(() => {
+  const MOVES = [
+    { name: 'Face',       color: '#ef4444', t0: 0,    t1: 0.73 },
+    { name: 'Drive Fwd',  color: '#3b82f6', t0: 0.73, t1: 3.26 },
+    { name: 'Boomerang',  color: '#eab308', t0: 3.26, t1: 5.91 },
+    { name: 'Move To',    color: '#22c55e', t0: 5.91, t1: 7.53 },
+    { name: 'Voldrive',   color: '#a855f7', t0: 7.53, t1: 8.43 }
+  ];
+  const DUR = 8.43;
+  const strip = document.getElementById('strip');
+  const tl = document.getElementById('tl');
+  const clock = document.getElementById('tlclock');
+  let active = 0, userUntil = 0;
+
+  const handle = document.createElement('div');
+  handle.className = 'handle';
+
+  MOVES.forEach((m, i) => {
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.style.left = (m.t0 / DUR * 100) + '%';
+    seg.style.width = ((m.t1 - m.t0) / DUR * 100) + '%';
+    seg.style.background = m.color;
+    tl.appendChild(seg);
+
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.innerHTML = `<span class="cdot" style="background:${m.color}"></span>${m.name} <span class="dur">${(m.t1 - m.t0).toFixed(1)}s</span>`;
+    chip.onclick = () => { userUntil = performance.now() + 6000; setActive(i); };
+    strip.appendChild(chip);
+  });
+  tl.appendChild(handle);
+
+  function setActive(i) {
+    active = i;
+    [...strip.children].forEach((c, j) => c.classList.toggle('on', j === i));
+    handle.style.left = (MOVES[i].t0 / DUR * 100) + '%';
+    clock.textContent = MOVES[i].t0.toFixed(2) + 's / ' + DUR.toFixed(2) + 's';
+  }
+  setActive(0);
+  setInterval(() => {
+    if (performance.now() < userUntil) return;
+    setActive((active + 1) % MOVES.length);
+  }, 1800);
+})();
+
+// ================= B · crosshair =================
+(() => {
+  const W = 1000, H = 210, L = 46, R = 12, T = 14, B = 26;
+  const TMAX = 3.26;
+  const plot = document.getElementById('plot');
+  const wrap = document.getElementById('plotwrap');
+  const tag = document.getElementById('xtag');
+  const tagT = document.getElementById('xtag-t');
+  const tagV = document.getElementById('xtag-v');
+
+  // governed drive voltage: ramp → plateau → PID decay
+  const volts = (t) => Math.min(12, 30 * t) * (t < 1.9 ? 1 : Math.exp(-(t - 1.9) * 1.6));
+  const X = (t) => L + (t / TMAX) * (W - L - R);
+  const Y = (v) => T + (1 - v / 12) * (H - T - B);
+
+  // frame
+  el('line', { x1: L, y1: T, x2: L, y2: H - B, stroke: '#2c2c2c' }, plot);
+  el('line', { x1: L, y1: Y(0), x2: W - R, y2: Y(0), stroke: '#2c2c2c' }, plot);
+  [12, 6, 0].forEach((v) => {
+    el('line', { x1: L, y1: Y(v), x2: W - R, y2: Y(v), stroke: '#222', 'stroke-dasharray': v === 0 ? 'none' : '3 5' }, plot);
+    const t = el('text', { x: L - 8, y: Y(v) + 3, 'text-anchor': 'end', 'font-size': 9, fill: '#606060' }, plot);
+    t.textContent = v;
+  });
+  const title = el('text', { x: L + 8, y: T + 12, 'font-size': 10, 'font-weight': 600, fill: '#7c7c7c' }, plot);
+  title.textContent = 'Drive PID';
+
+  let pts = [];
+  for (let i = 0; i <= 160; i++) { const t = (i / 160) * TMAX; pts.push(X(t).toFixed(1) + ',' + Y(volts(t)).toFixed(1)); }
+  el('polyline', { points: pts.join(' '), fill: 'none', stroke: '#3b82f6', 'stroke-width': 1.6 }, plot);
+
+  // crosshair bits
+  const vline = el('line', { y1: T, y2: H - B, stroke: '#777', 'stroke-width': 0.8, 'stroke-dasharray': '3 3' }, plot);
+  const hline = el('line', { x1: L, x2: W - R, stroke: '#777', 'stroke-width': 0.8, 'stroke-dasharray': '3 3' }, plot);
+  const dot = el('circle', { r: 3.4, fill: '#93c5fd' }, plot);
+  const playhead = el('line', { y1: T, y2: H - B, stroke: '#cfcfcf', 'stroke-width': 1, 'stroke-dasharray': '4 3', opacity: 0 }, plot);
+
+  let hovering = false;
+  function showAt(t, mouseY) {
+    t = Math.max(0, Math.min(TMAX, t));
+    const v = volts(t), x = X(t), y = Y(v);
+    vline.setAttribute('x1', x); vline.setAttribute('x2', x);
+    hline.setAttribute('y1', y); hline.setAttribute('y2', y);
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+    const rect = wrap.getBoundingClientRect();
+    const px = (x / W) * rect.width;
+    const py = (y / H) * rect.height;
+    tag.style.display = 'block';
+    tag.style.left = Math.min(px, rect.width - 110) + 'px';
+    tag.style.top = py + 'px';
+    tagT.textContent = 't ' + t.toFixed(2) + ' s';
+    tagV.textContent = (v >= 0 ? '+' : '') + v.toFixed(2) + ' V';
+  }
+  wrap.addEventListener('pointermove', (e) => {
+    hovering = true;
+    const rect = wrap.getBoundingClientRect();
+    const t = ((e.clientX - rect.left) / rect.width * W - L) / (W - L - R) * TMAX;
+    showAt(t);
+  });
+  wrap.addEventListener('pointerleave', () => { hovering = false; });
+  wrap.addEventListener('click', (e) => {
+    const rect = wrap.getBoundingClientRect();
+    const t = Math.max(0, Math.min(TMAX, ((e.clientX - rect.left) / rect.width * W - L) / (W - L - R) * TMAX));
+    playhead.setAttribute('x1', X(t)); playhead.setAttribute('x2', X(t));
+    playhead.setAttribute('opacity', 0.8);
+  });
+  // idle ghost-cursor sweep
+  (function sweep(ts) {
+    if (!hovering) {
+      const u = (Math.sin((ts || 0) / 1900) + 1) / 2;
+      showAt(u * TMAX);
+    }
+    requestAnimationFrame(sweep);
+  })(0);
+})();
+
+// ================= C · divergence =================
+(() => {
+  const field = document.getElementById('field');
+  const dpos = document.getElementById('dpos');
+  const dhdg = document.getElementById('dhdg');
+  const dlag = document.getElementById('dlag');
+  const IN_PER_PX = 0.32; // mock scale
+
+  // tile grid
+  for (let x = 60; x < 460; x += 92) el('line', { x1: x, y1: 6, x2: x, y2: 244, stroke: '#1b1b1b' }, field);
+  for (let y = 52; y < 250; y += 92) el('line', { x1: 8, y1: y, x2: 452, y2: y, stroke: '#1b1b1b' }, field);
+
+  // cubic bezier sampling
+  function bez(p0, c1, c2, p3, n) {
+    const out = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, mt = 1 - t;
+      out.push({
+        x: mt*mt*mt*p0.x + 3*mt*mt*t*c1.x + 3*mt*t*t*c2.x + t*t*t*p3.x,
+        y: mt*mt*mt*p0.y + 3*mt*mt*t*c1.y + 3*mt*t*t*c2.y + t*t*t*p3.y
+      });
+    }
+    return out;
+  }
+  const N = 220;
+  const main  = bez({x:40,y:214},{x:170,y:214},{x:225,y:52},{x:410,y:52}, N);
+  const ghost = bez({x:40,y:220},{x:180,y:224},{x:250,y:112},{x:418,y:96}, N);
+
+  const toStr = (pts) => pts.map((p) => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+  el('polyline', { points: toStr(ghost), fill: 'none', stroke: '#b0b0c8', 'stroke-width': 1.2, 'stroke-dasharray': '5 4', opacity: 0.45 }, field);
+  el('polyline', { points: toStr(main), fill: 'none', stroke: '#3b82f6', 'stroke-width': 1.8 }, field);
+
+  const tether = el('line', { stroke: '#909090', 'stroke-width': 1, 'stroke-dasharray': '2 2' }, field);
+  const gBot = el('g', {}, field);
+  const gGhost = el('g', { opacity: 0.35 }, field);
+  function robot(g, w, h) {
+    el('rect', { x: -w/2, y: -h/2, width: w, height: h, rx: 2, fill: 'rgba(204,204,204,0.12)', stroke: '#cccccc', 'stroke-width': 1.4 }, g);
+    el('rect', { x: -w/2 + 2, y: -h/2 - 3, width: 4.5, height: 5, rx: 1, fill: '#cccccc', opacity: 0.85 }, g);
+    el('rect', { x: w/2 - 6.5, y: -h/2 - 3, width: 4.5, height: 5, rx: 1, fill: '#cccccc', opacity: 0.85 }, g);
+  }
+  robot(gBot, 24, 28); robot(gGhost, 24, 28);
+
+  const at = (pts, u) => pts[Math.max(0, Math.min(N, Math.round(u * N)))];
+  function heading(pts, u) {
+    const a = at(pts, Math.max(0, u - 0.01)), b = at(pts, Math.min(1, u + 0.01));
+    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI + 90;
+  }
+
+  const LAG = 0.035; // ghost trails ~ this fraction of the run (~80 ms feel)
+  function frame(ts) {
+    const cycle = (ts / 6500) % 1.18;             // run + hold at end
+    const u = Math.min(1, cycle / 1);
+    const ug = Math.max(0, u - LAG * (u > 0.05 ? 1 : u / 0.05));
+    const m = at(main, u), g = at(ghost, ug);
+    const hm = heading(main, u), hg = heading(ghost, ug);
+
+    gBot.setAttribute('transform', `translate(${m.x} ${m.y}) rotate(${hm})`);
+    gGhost.setAttribute('transform', `translate(${g.x} ${g.y}) rotate(${hg})`);
+    tether.setAttribute('x1', m.x); tether.setAttribute('y1', m.y);
+    tether.setAttribute('x2', g.x); tether.setAttribute('y2', g.y);
+
+    const din = Math.hypot(m.x - g.x, m.y - g.y) * IN_PER_PX;
+    let dh = Math.abs(hm - hg) % 360; if (dh > 180) dh = 360 - dh;
+    const hot = din > 2;
+    tether.setAttribute('stroke', hot ? '#f87171' : '#909090');
+    tether.setAttribute('stroke-width', hot ? 1.4 : 1);
+    dpos.innerHTML = din.toFixed(1) + ' <span class="u">in</span>';
+    dpos.classList.toggle('hot', hot);
+    dhdg.innerHTML = dh.toFixed(1) + ' <span class="u">°</span>';
+    dlag.innerHTML = '+' + Math.round(LAG * 2400) + ' <span class="u">ms</span>';
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

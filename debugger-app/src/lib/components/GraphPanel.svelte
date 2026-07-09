@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { traceState } from '$lib/stores/trace.svelte';
+
   type Series = { data: { t: number; v: number }[]; color: string; dashed?: boolean };
 
   let {
@@ -42,6 +44,72 @@
   }
 
   const playX = $derived(playheadT !== undefined ? sx(playheadT) : null);
+
+  // ---- crosshair inspection + drag-to-scrub ----
+  // Hover = read-only crosshair with per-series values (each PID component's
+  // magnitude in breakdown mode). Press/drag = scrub the shared playhead.
+  let frameEl: HTMLElement | undefined = $state();
+  let hoverT = $state<number | null>(null);
+  let hoverYPct = $state(50);
+  let dragging = $state(false);
+
+  /** Series value at time t (nearest sample, binary search). */
+  function valueAt(s: Series, t: number): number | null {
+    const d = s.data;
+    if (d.length === 0) return null;
+    if (t <= d[0].t) return d[0].v;
+    if (t >= d[d.length - 1].t) return d[d.length - 1].v;
+    let lo = 0;
+    let hi = d.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (d[mid].t <= t) lo = mid;
+      else hi = mid;
+    }
+    return t - d[lo].t < d[hi].t - t ? d[lo].v : d[hi].v;
+  }
+
+  const hoverVals = $derived.by(() => {
+    const t = hoverT;
+    if (t === null) return [];
+    return series.map((s, i) => ({
+      label: legend[i]?.label ?? 'V',
+      color: s.color,
+      v: valueAt(s, t)
+    }));
+  });
+  const hoverX = $derived(hoverT === null ? 0 : Math.max(0, Math.min(100, sx(hoverT))));
+
+  function timeFromEvent(e: PointerEvent): number {
+    const rect = frameEl!.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    hoverYPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    return tStart + u * (tEnd - tStart);
+  }
+
+  function onMove(e: PointerEvent) {
+    if (!frameEl) return;
+    hoverT = timeFromEvent(e);
+    if (dragging) traceState.time = hoverT;
+  }
+  function onDown(e: PointerEvent) {
+    if (!frameEl) return;
+    dragging = true;
+    traceState.playing = false;
+    try {
+      frameEl.setPointerCapture(e.pointerId);
+    } catch {
+      // no active pointer (synthetic events) — window-level up still ends the drag
+    }
+    hoverT = timeFromEvent(e);
+    traceState.time = hoverT;
+  }
+  function onUp() {
+    dragging = false;
+  }
+  function onLeave() {
+    if (!dragging) hoverT = null;
+  }
 </script>
 
 <section class="panel graph" style="flex: {grow}; border: 1px solid {accent}">
@@ -63,7 +131,18 @@
   <div class="plot">
     <span class="y-axis-label">V (±12)</span>
 
-    <div class="frame">
+    <div
+      class="frame"
+      bind:this={frameEl}
+      onpointermove={onMove}
+      onpointerdown={onDown}
+      onpointerup={onUp}
+      onpointerleave={onLeave}
+      role="slider"
+      tabindex="-1"
+      aria-label="{title} — drag to scrub"
+      aria-valuenow={playheadT !== undefined ? Math.round(playheadT) : 0}
+    >
       {#each yTicks as v, i}
         <div class="y-tick" style="top: {(i / (yTicks.length - 1)) * 100}%">
           <span class="y-num">{v}</span>
@@ -93,6 +172,27 @@
           <line x1={playX} y1="0" x2={playX} y2="100" class="playhead" vector-effect="non-scaling-stroke" />
         {/if}
       </svg>
+
+      {#if hoverT !== null}
+        <div class="xline" style="left: {hoverX}%"></div>
+        {#each hoverVals as hv}
+          {#if hv.v !== null}
+            <div class="xdot" style="left: {hoverX}%; top: {sy(hv.v)}%; background: {hv.color}"></div>
+          {/if}
+        {/each}
+        <div class="xtag" class:flip={hoverX > 68} style="left: {hoverX}%; top: {hoverYPct}%">
+          <span class="xt-t">t {(hoverT / 1000).toFixed(2)} s</span>
+          {#each hoverVals as hv}
+            {#if hv.v !== null}
+              <span class="xt-row">
+                <span class="xt-swatch" style="background: {hv.color}"></span>
+                <span class="xt-lbl">{hv.label}</span>
+                <span class="xt-v">{hv.v >= 0 ? '+' : ''}{hv.v.toFixed(2)}{hoverVals.length === 1 ? ' V' : ''}</span>
+              </span>
+            {/if}
+          {/each}
+        </div>
+      {/if}
     </div>
 
     <span class="x-axis-label">Time (ms)</span>
@@ -151,6 +251,9 @@
     inset: 4px 4px 18px 30px;
     border-left: 1px solid var(--border-subtle);
     border-bottom: 1px solid var(--border-subtle);
+    cursor: crosshair;
+    touch-action: none;
+    outline: none;
   }
 
   .y-tick {
@@ -207,6 +310,72 @@
     stroke-width: 1;
     stroke-dasharray: 2 2;
     opacity: 0.55;
+  }
+
+  /* crosshair: vertical hairline + a dot riding each series + value tag */
+  .xline {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #777;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .xdot {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+  }
+  .xtag {
+    position: absolute;
+    z-index: 3;
+    transform: translate(10px, -50%);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 8px;
+    background: var(--bg-raised);
+    border-radius: var(--radius-small);
+    box-shadow:
+      var(--ring),
+      0 5px 16px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .xtag.flip {
+    transform: translate(calc(-100% - 10px), -50%);
+  }
+  .xt-t {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 8px;
+    color: var(--text-dim);
+  }
+  .xt-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .xt-swatch {
+    width: 8px;
+    height: 3px;
+    border-radius: 1.5px;
+  }
+  .xt-lbl {
+    font-size: 8.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    min-width: 10px;
+  }
+  .xt-v {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--text-primary);
   }
 
   .y-axis-label {

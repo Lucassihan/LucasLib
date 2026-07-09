@@ -13,48 +13,54 @@
 
 std::string currentAuton;
 
+
 // Intake
-motor intakeRoller = motor(PORT9, ratio18_1, false);
-motor scoopMotor = motor(PORT10, ratio18_1, false);
+motor intakeMotor = motor(PORT9, ratio18_1, true);
+motor scoopMotor = motor(PORT17, ratio18_1, false);
 
 //4Bar
-motor fourBarLeft = motor(PORT10, ratio36_1, false);
-motor fourBarRight = motor(PORT12, ratio36_1, true);
+motor fourBarLeft = motor(PORT16, ratio36_1, false);
+motor fourBarRight = motor(PORT15, ratio36_1, true);
 motor_group fourBar = motor_group(fourBarLeft, fourBarRight);
-rotation fourBarRotation = rotation(PORT5, false);
+rotation fourBarRotation = rotation(PORT14, false);
 
 //Mag distance sensors
-distance autoClampSens = distance(PORT8);
+distance autoClampSens = distance(PORT21);
 
 //Color sensor
 optical OtwColorSensor = optical(PORT1);
 
 //Pistons
-digital_out zhuazi = digital_out(Brain.ThreeWirePort.G);
+digital_out zhuazi = digital_out(Brain.ThreeWirePort.A);
 
 void intake() {
-  intakeRoller.spin(forward, 100, pct);
+  intakeMotor.spin(forward, 100, pct);
 }
 
 void spit() {
-  intakeRoller.spin(reverse, 100, pct);
+  intakeMotor.spin(reverse, 100, pct);
 }
 
 void stop() {
-  intakeRoller.stop(coast);
+  intakeMotor.stop(coast);
 }
 
 //height is 7 in
 // 4bar Control Task
-double rotationOffset = 0;
-double L1 = 5;
-double L2 = 5;
-double offset1 = 0;
-double offset2 = 0;
-double calculateHeight(double rotation) {
-  double theta = TO_RAD(rotation + rotationOffset);
+double rotationOffset = -228;
+double L1 = 13;
+double L2 = 15;
+double offset1 = 15;
+double offset2 = 4;
+double calculateHeight() {
+  double theta = TO_RAD(fourBarRotation.position(degrees) + rotationOffset);
   double height = (L1+L2)*sin(theta) + offset1 + offset2;
   return height;
+}
+
+double passiveLiftVolts = 1;
+double feedforwardTerm() {
+  return cos(TO_RAD(fourBarRotation.position(degrees) + rotationOffset))*passiveLiftVolts;
 }
 
 double targetLevel = 0;
@@ -62,52 +68,95 @@ double halfCupHeight = 3.5;
 double targetHeight;
 double currentHeight;
 double error;
+double final4barOutput;
 bool fourBarPIDEnabled = false;
 int fourBarControlTask() {
+  currentHeight = calculateHeight();
   while (true) {
     if (fourBarPIDEnabled) {
-      currentHeight = calculateHeight(fourBarRotation.position(degrees));
+      currentHeight = calculateHeight();
       targetHeight = targetLevel * halfCupHeight;
-      error = currentHeight - targetHeight;
+      error = targetHeight - currentHeight;
 
-      fourBarPID.calculateOutput(error);
-      fourBar.spin(forward, fourBarPID.output, volt);
-
-      delay(10);
+      final4barOutput = fourBarPID.calculateOutput(error) + feedforwardTerm();
+      fourBar.spin(forward, final4barOutput, volt);
     }
+    delay(10);
   }
   return 0;
 }
 
 void clamp() {
-  zhuazi.set(true);
-}
-
-void unclamp() {
   zhuazi.set(false);
 }
 
-bool autoClampEnabled;
+void unclamp() {
+  zhuazi.set(true);
+}
 
+bool autoClampEnabled;
+bool clamped;
 int autoClampTask() {
   while (true) {
-    if (autoClampEnabled) {
+    if (autoClampEnabled and not clamped) {
       if (autoClampSens.objectDistance(inches) < 1) {
         clamp();
         Controller.rumble(".");
+        clamped = true;
       } 
     }
+    delay(10);
   }
   return 0;
 }
 
 bool scoop;
+double lowSpeedGate = 200;
+double secondGate = 200;
+double limitAng = 600;
+
+double lastAng;
+double currentAng;
 int scoopTask() {
-  if (scoop) {
-    scoopMotor.spin(forward,5, volt);
-    delay(500);
-    scoopMotor.spin(reverse,5, volt);
-    scoop = false;
+  while (true) {
+    if (scoop) {
+      while (scoopMotor.position(degrees) < lowSpeedGate) {
+        scoopMotor.spin(forward,3, volt);
+        delay(10);
+      }
+
+      scoopMotor.stop(hold);
+      delay(1000);
+
+      while (scoopMotor.position(degrees) < secondGate) {
+        scoopMotor.spin(forward,3, volt);
+        delay(10);
+      }
+
+      while (scoopMotor.position(degrees) < limitAng) {
+        scoopMotor.spin(forward, 12, volt);
+        fourBar.spin(forward, 5, volt);
+        delay(10);
+
+      }
+
+      while (scoopMotor.position(degrees) > 0) {
+        currentAng = scoopMotor.position(degrees);
+        scoopMotor.spin(reverse, 12, volt);
+        delay(20);
+        if (fabs(lastAng-currentAng) < 0.1 and scoopMotor.position(degrees) < 20) {
+          break;
+        } 
+        lastAng = currentAng;
+      }
+
+      delay(100);
+      scoopMotor.spin(forward, 0, volt);
+      
+
+      scoop = false;
+    }
+    delay(10);
   }
   return 0;
 }
@@ -166,10 +215,10 @@ int controllerScreenTask() {
     Controller.Screen.print("Chassis:%2.f", chassisTempAvg);
 
     Controller.Screen.setCursor(2, 10);
-    Controller.Screen.print("None");
+    Controller.Screen.print("Rot: %2.f", fourBarRotation.position(degrees));
 
     Controller.Screen.setCursor(3, 13);
-    Controller.Screen.print(currentAuton.c_str());
+    Controller.Screen.print("H: %2.f", feedforwardTerm());
 
     vex::this_thread::sleep_for(100);
   }
@@ -214,6 +263,8 @@ void initialize() {
   vexAbsEncDataRateSet(TX.index(), kSensorDataRateMs);
   vexAbsEncDataRateSet(TY.index(), kSensorDataRateMs);
 
+  scoopMotor.setPosition(0, degrees);
+
   // Drive-motor encoders (used for Y when there is no Y tracker) have NO user-settable data
   // rate -- V5 smart motors stream position over the smart port at a fixed system rate, and
   // the SDK exposes no vexMotorDataRateSet, so there is nothing to configure for them here.
@@ -237,35 +288,27 @@ void autonomous() {
   didAuton = true;
 
   // Call your auton routine here, e.g. twoMidGoals();
-  exampleAuton();
+  redAuto();
+  // blueAuto();
 
   while (Competition.isAutonomous()) {
     delay(20);
   }
 }
 
-// rotation TY = rotation(11, false);
-motor testMotor = motor(PORT1, ratio6_1, false);
-
 void driver() {
-  double lastPos = TY.position(degrees);
 
-  int row = 2;
-
-  double lastChangeTime = Brain.Timer.systemHighResolution();
-  testMotor.spin(forward,12,volt);
-
-  delay(1000);
-
-  double currentPos;
-
-  fourBarPIDEnabled = true;
+  fourBarPIDEnabled = false;
 
   fourBar.setStopping(hold);
 
-  while (true) {    
-    arcadeDriveFcn();
-    // singleStickDriveFcn();
+  scoopMotor.setStopping(coast);
+
+  while (true) {
+    controllerButtonMonitoringFcn();
+
+    // arcadeDriveFcn();
+    singleStickDriveFcn();
 
     if (r1.Pressed_first) {
       targetLevel = 0;
@@ -286,11 +329,15 @@ void driver() {
     }
 
     if (scoop) {
-      intake();
+      intakeMotor.spin(forward, 3, volt);
     }
 
     if (l1.Pressing) {
       autoClampEnabled = true;
+    }
+
+    if (l1.NewPress) {
+      clamped = false;
     }
     
     if (l1.JustReleased) {
@@ -302,12 +349,23 @@ void driver() {
       unclamp();
     }
 
-    if (Controller.Axis2.position(pct) != 0) {
-      double joypos = Controller.Axis2.position(pct);
-      fourBarPIDEnabled = false;
-      fourBar.spin(forward, (joypos/100)*12, volt);
+    if (scoopMotor.position(degrees) < 0) {
+      scoopMotor.setPosition(0, degrees);
     }
 
+    double powScale = 1.3;
+    if (Controller.Axis2.position(pct) > 0) {
+      // fourBar.spin(forward, (Controller.Axis2.position(pct)/100)*12 + feedforwardTerm(), volt);
+      fourBar.spin(forward, 12, volt);
+    }
+
+    if (Controller.Axis2.position(pct) < 0) {
+      fourBar.spin(forward, -2, volt);
+    }
+
+    if (Controller.Axis2.position(pct) == 0) {
+      fourBar.spin(forward, feedforwardTerm(), volt);
+    }
     delay(1);
   }
 }

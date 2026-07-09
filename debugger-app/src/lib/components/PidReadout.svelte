@@ -2,7 +2,6 @@
   import { traceState, movementAt, tickAt } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
   import { PID_TERM } from '$lib/trace/labels';
-
   const m = $derived(movementAt(traceState.time));
   const tk = $derived(tickAt(traceState.time));
 

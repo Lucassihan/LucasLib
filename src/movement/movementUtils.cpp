@@ -33,8 +33,6 @@ bool close;
 bool exitConditionFulfilled;
 double initialHeading;
 
-double turnOvershoot = 0;
-
 //Stage 2 governor — applies to combined left/right power. Tunable by user.
 TotalOutput totalOutput;
 
@@ -217,7 +215,7 @@ void lyapunovCalculate(double tx, double ty, bool backward, double pathHeading) 
     //    the instant the robot passes the target, so the PID backs it up — no
     //    overshoot — and lateral error never bleeds into the forward command
     //    (the coupling term in step 7 owns lateral recovery).
-    double v_d = drivePID.calculateOutput(e_x);
+    double v_d = drivePID.calculateOutput(e_x + drivePID.targetOffset);
 
     // 6. Forward power (cosine-scaled, so the robot slows when badly misaligned).
     //    For backward: negate v so "forward in the rotated frame" is physical reverse.

@@ -4,6 +4,7 @@
 #include "misc/util.h"
 #include "debugger/debugger.h"
 #include "pid.h"
+#include "main.h"
 
 #include <cmath>
 
@@ -48,6 +49,12 @@ void exampleAuton() {
   autonSettings();
   chassis.setPos(0,0,0);
 
+  voldrive(5);
+  delay(500);
+  fourBar.spin(forward, 12, volt);
+  delay(1000);
+  fourBar.stop(coast);
+
 //   moveTo(24,24, {.timeout = 50000});
 
   // facePoint(24, 24, {.exitAng = 10});
@@ -65,16 +72,14 @@ void exampleAuton() {
   //   .gLead = 0.4,
   // };
   // facePoint(getBoomLeadX(boom1, false), getBoomLeadY(boom1, false), {}, false);
-  // boomerangTo(boom1, {.exitDist = 0}, false);
+  // boomerangTo(boom1, {.extD = 0}, false);
 
   // face(180);
   // moveTo(0, 48, {}, true);
 
   // totalOutput.maxOutput = 3;
   // kLat = 0.05;
-  // lyPose(24, 24, {.exitDist = 0}, false, 45);
-
-  face(180);
+  // lyPose(24, 24, {.extD = 0}, false, 45);
 
   // face(180);
   // // lyPose(24,12, {}, false, 90);
@@ -82,7 +87,7 @@ void exampleAuton() {
   debugger::stop();
 
 //   LateralExitConditions yFast = {
-//     .exitDist = 3
+//     .extD = 3
 //   };
 
 //   TurnExitConditions tFast = {
@@ -96,3 +101,44 @@ void exampleAuton() {
 //   delay(100);
 }
 
+void blueAuto() {
+  fourBar.spin(forward, -12, volt);
+  voldrive(2);
+  delay(500);
+  fourBar.spin(forward, 12, volt);
+  delay(500);
+  voldrive(-1);
+  fourBar.stop(coast);
+  delay(500);
+  fourBar.spin(forward, -12, volt);
+  delay(500);
+
+  voldrive(-2);
+  delay(1000);
+  voldrive(0);
+}
+
+void redAuto() {
+  fourBar.spin(forward, -12, volt);
+  voldrive(2);
+  delay(500);
+  fourBar.spin(forward, 12, volt);
+  delay(500);
+  voldrive(-1);
+  fourBar.stop(coast);
+  delay(500);
+  fourBar.spin(forward, -12, volt);
+  delay(500);
+
+  voldrive(3);
+  delay(500);
+  voldrive(0);
+  fourBar.spin(forward, 12, volt);
+  delay(500);
+  fourBar.stop(coast);
+  voldrive(-1);
+  delay(1000);
+  voldrive(0);
+
+
+}

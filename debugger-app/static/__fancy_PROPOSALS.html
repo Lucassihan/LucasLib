@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Debugger — fancy element proposals</title>
+<style>
+  :root {
+    --bg-deep: #0b0b0b; --bg-base: #101010; --bg-surface: #181818;
+    --bg-elevated: #202020; --bg-raised: #282828;
+    --border-subtle: #303030; --border-light: #404040;
+    --text-ghost: #606060; --text-muted: #7c7c7c; --text-dim: #909090;
+    --text-secondary: #a8a8a8; --text-primary: #cfcfcf; --text-emphasis: #eeeeee;
+    --ring: inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    font-family: 'Manrope Variable', Manrope, system-ui, -apple-system, sans-serif;
+    color: var(--text-secondary);
+    padding: 28px 32px 40px;
+  }
+  header { margin-bottom: 22px; }
+  h1 { font-size: 17px; font-weight: 800; color: var(--text-emphasis); }
+  .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    max-width: 1520px;
+  }
+  .card {
+    position: relative;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    box-shadow: var(--ring);
+    padding: 14px 16px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .num {
+    position: absolute; top: 10px; right: 12px;
+    font-size: 22px; font-weight: 800; color: #2e2e2e;
+  }
+  .mock {
+    height: 158px;
+    background: var(--bg-base);
+    border-radius: 6px;
+    box-shadow: var(--ring);
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  h3 { font-size: 13px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .tag {
+    font-size: 8px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 3px; background: var(--bg-raised); color: var(--text-muted);
+  }
+  .tag.s { color: #4ade80; } .tag.m { color: #fbbf24; }
+  p { font-size: 10.5px; line-height: 1.5; color: var(--text-dim); }
+  b { color: var(--text-secondary); font-weight: 600; }
+
+  /* 1 — comet pulse */
+  @keyframes comet { 0%,100% { opacity: 0.7; r: 3; } 50% { opacity: 1; r: 4; } }
+  .comet-core { animation: comet 1.6s ease-in-out infinite; }
+
+  /* 4 — stage ripple */
+  @keyframes ripple { 0% { r: 8; opacity: 0.7; } 100% { r: 34; opacity: 0; } }
+  .rip1 { animation: ripple 2s ease-out infinite; }
+  .rip2 { animation: ripple 2s ease-out infinite 0.7s; }
+
+  /* 5 — odometer roll */
+  .odo { display: flex; align-items: baseline; gap: 1px; font-variant-numeric: tabular-nums;
+         font-size: 40px; font-weight: 800; color: var(--text-emphasis); }
+  .odo .unit { font-size: 18px; color: var(--text-dim); margin-left: 3px; }
+  .digit { display: inline-block; }
+  .roll { display: inline-block; height: 44px; overflow: hidden; vertical-align: bottom; }
+  .roll .col { display: flex; flex-direction: column; animation: roll 2.6s cubic-bezier(.2,.9,.25,1) infinite; }
+  .roll .col span { height: 44px; line-height: 44px; }
+  @keyframes roll { 0%, 25% { transform: translateY(0); } 45%, 75% { transform: translateY(-44px); } 95%, 100% { transform: translateY(-88px); } }
+  .odo-cap { font-size: 8px; font-weight: 600; letter-spacing: 0.12em; color: var(--text-muted); text-align: center; margin-top: 8px; }
+
+  /* 6 — clamp glow */
+  @keyframes hot { 0%,100% { box-shadow: 0 0 6px rgba(248,113,113,0.5); } 50% { box-shadow: 0 0 14px rgba(248,113,113,0.95); } }
+  .clamp-fill { animation: hot 1.4s ease-in-out infinite; }
+  .pipe { width: 82%; }
+  .pipe .lbl { display: flex; justify-content: space-between; font-size: 9px; color: var(--text-dim); margin-bottom: 5px; }
+  .pipe .lbl .hotk { color: #f87171; font-weight: 700; }
+  .bar { position: relative; height: 10px; border-radius: 5px; background: #151515; box-shadow: var(--ring); }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 64%; border-radius: 5px;
+          background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+  .fill.clamp-fill { background: linear-gradient(90deg, #3b82f6 55%, #f87171); }
+  .capmark { position: absolute; top: -3px; bottom: -3px; left: 64%; width: 2px; background: #f87171; }
+  .pipe .note { font-size: 8.5px; color: #f87171; margin-top: 7px; font-weight: 600; }
+  .pipe .note2 { font-size: 8.5px; color: var(--text-ghost); margin-top: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fancy element proposals</h1>
+  <div class="sub">Six candidates, mocked in the app's design language. Reply with numbers to build (e.g. "1, 2 and 6").</div>
+</header>
+
+<div class="grid">
+
+  <!-- 1 · comet playhead -->
+  <div class="card">
+    <div class="num">1</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <defs>
+          <linearGradient id="trail" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#ef4444" stop-opacity="0"/>
+            <stop offset="1" stop-color="#f87171" stop-opacity="0.9"/>
+          </linearGradient>
+          <radialGradient id="glow">
+            <stop offset="0" stop-color="#fecaca"/>
+            <stop offset="0.35" stop-color="#ef4444"/>
+            <stop offset="1" stop-color="#ef4444" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <line x1="40" y1="20" x2="40" y2="138" stroke="#242424"/>
+        <line x1="40" y1="79" x2="410" y2="79" stroke="#242424"/>
+        <path d="M40 130 C 110 128, 130 34, 205 30 S 340 55, 410 58" fill="none" stroke="#7f1d1d" stroke-width="1.4"/>
+        <path d="M148 62 C 170 40, 185 31, 205 30" fill="none" stroke="url(#trail)" stroke-width="2.4" stroke-linecap="round"/>
+        <line x1="205" y1="20" x2="205" y2="138" stroke="#555" stroke-dasharray="2 3" stroke-width="1"/>
+        <circle cx="205" cy="30" r="11" fill="url(#glow)" opacity="0.55"/>
+        <circle class="comet-core" cx="205" cy="30" r="3.2" fill="#fee2e2"/>
+        <text x="46" y="30" font-size="8" fill="#7c7c7c" font-weight="600">Turn PID</text>
+      </svg>
+    </div>
+    <h3>Comet playhead <span class="tag s">small</span></h3>
+    <p>On the Drive/Turn graphs, a <b>glowing dot rides each series line</b> at the playhead, with a short comet trail fading behind it. Scrubbing feels physical, and the current value is readable right off the curve.</p>
+  </div>
+
+  <!-- 2 · progressive path reveal -->
+  <div class="card">
+    <div class="num">2</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <defs>
+          <radialGradient id="botglow">
+            <stop offset="0" stop-color="#e8e8e8" stop-opacity="0.5"/>
+            <stop offset="1" stop-color="#e8e8e8" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <g stroke="#1c1c1c"><line x1="110" y1="10" x2="110" y2="148"/><line x1="220" y1="10" x2="220" y2="148"/><line x1="330" y1="10" x2="330" y2="148"/><line x1="20" y1="55" x2="420" y2="55"/><line x1="20" y1="110" x2="420" y2="110"/></g>
+        <!-- travelled: bright -->
+        <path d="M60 130 L 180 130 C 210 130, 225 105, 232 88" fill="none" stroke="#3b82f6" stroke-width="2"/>
+        <!-- ahead: dimmed -->
+        <path d="M232 88 C 245 60, 290 38, 340 40 S 395 62, 396 90" fill="none" stroke="#eab308" stroke-width="1.6" opacity="0.16"/>
+        <circle cx="232" cy="88" r="22" fill="url(#botglow)"/>
+        <g transform="translate(232 88) rotate(52)">
+          <rect x="-11" y="-13" width="22" height="26" rx="2" fill="rgba(204,204,204,0.12)" stroke="#cccccc" stroke-width="1.4"/>
+          <rect x="-9" y="-15" width="4" height="4.5" rx="1" fill="#cccccc" opacity="0.85"/>
+          <rect x="5" y="-15" width="4" height="4.5" rx="1" fill="#cccccc" opacity="0.85"/>
+        </g>
+      </svg>
+    </div>
+    <h3>Progressive path reveal <span class="tag s">small</span></h3>
+    <p>The path <b>draws itself as the run plays</b>: full brightness behind the robot, ~15% ahead of it, soft glow at the head. Where the robot has been vs where it's going is legible at a glance. Toggle in settings.</p>
+  </div>
+
+  <!-- 3 · velocity heat path -->
+  <div class="card">
+    <div class="num">3</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <g stroke="#1c1c1c"><line x1="110" y1="10" x2="110" y2="148"/><line x1="220" y1="10" x2="220" y2="148"/><line x1="330" y1="10" x2="330" y2="148"/></g>
+        <path d="M50 125 C 70 122, 85 118, 100 112" fill="none" stroke="#3f3f46" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M100 112 C 130 100, 150 88, 180 78" fill="none" stroke="#155e75" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M180 78 C 230 62, 280 55, 330 57" fill="none" stroke="#22d3ee" stroke-width="3.4" stroke-linecap="round"/>
+        <path d="M330 57 C 360 59, 380 66, 393 76" fill="none" stroke="#0e7490" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M393 76 C 400 84, 403 92, 404 100" fill="none" stroke="#3f3f46" stroke-width="1.5" stroke-linecap="round"/>
+        <g transform="translate(300 120)">
+          <rect x="0" y="0" width="90" height="6" rx="3" fill="url(#vgrad)"/>
+          <defs><linearGradient id="vgrad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#3f3f46"/><stop offset="1" stop-color="#22d3ee"/>
+          </linearGradient></defs>
+          <text x="0" y="16" font-size="7.5" fill="#7c7c7c">0 in/s</text>
+          <text x="66" y="16" font-size="7.5" fill="#7c7c7c">fast</text>
+        </g>
+      </svg>
+    </div>
+    <h3>Velocity heat path <span class="tag m">medium</span></h3>
+    <p>Path stroke <b>width + color encode speed</b> (computed from the 10 ms odometry deltas — no firmware change). Slow creep is thin and dim, full-tilt is thick and cyan. Braking zones and hesitations pop out instantly.</p>
+  </div>
+
+  <!-- 4 · stage-flip pulse -->
+  <div class="card">
+    <div class="num">4</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <path d="M60 120 C 140 110, 190 80, 240 62" fill="none" stroke="#eab308" stroke-width="1.6" opacity="0.7"/>
+        <circle class="rip1" cx="240" cy="62" fill="none" stroke="#22d3ee" stroke-width="1.4"/>
+        <circle class="rip2" cx="240" cy="62" fill="none" stroke="#22d3ee" stroke-width="1.4"/>
+        <g transform="translate(240 62) rotate(68)">
+          <rect x="-10" y="-12" width="20" height="24" rx="2" fill="rgba(204,204,204,0.12)" stroke="#cccccc" stroke-width="1.3"/>
+        </g>
+        <g transform="translate(300 108)" font-size="9" font-weight="700">
+          <rect x="0" y="0" width="42" height="26" rx="4" fill="#151515"/>
+          <text x="21" y="16" text-anchor="middle" fill="#606060">FAR</text>
+          <rect x="48" y="0" width="42" height="26" rx="4" fill="#0c2630" stroke="#22d3ee" stroke-width="1"/>
+          <text x="69" y="16" text-anchor="middle" fill="#22d3ee">MID</text>
+        </g>
+      </svg>
+    </div>
+    <h3>Stage-flip pulse <span class="tag s">small</span></h3>
+    <p>The instant a movement changes stage during playback (boomerang FAR→MID→END, moveTo far→close), a <b>ring ripples out from the robot</b> on the field and the stage badge flashes. You see exactly <b>where on the path</b> each handoff happened.</p>
+  </div>
+
+  <!-- 5 · odometer pose digits -->
+  <div class="card">
+    <div class="num">5</div>
+    <div class="mock">
+      <div>
+        <div class="odo">
+          <span class="digit">1</span><span class="digit">2</span><span class="roll"><span class="col"><span>6</span><span>7</span><span>8</span></span></span><span class="digit">.</span><span class="roll"><span class="col"><span>2</span><span>6</span><span>9</span></span></span><span class="unit">°</span>
+        </div>
+        <div class="odo-cap">HEADING</div>
+      </div>
+    </div>
+    <h3>Odometer pose digits <span class="tag m">medium</span></h3>
+    <p>The pose card's heading / X / Y numbers <b>roll like a mechanical counter</b> instead of snapping, scrubbing or playing. Small masked-column trick, very tactile — the numbers feel connected to the robot's motion.</p>
+  </div>
+
+  <!-- 6 · governor clamp glow -->
+  <div class="card">
+    <div class="num">6</div>
+    <div class="mock">
+      <div class="pipe">
+        <div class="lbl"><span>drivePow → governed</span><span class="hotk">decel clamp</span></div>
+        <div class="bar">
+          <div class="fill clamp-fill"></div>
+          <div class="capmark"></div>
+        </div>
+        <div class="note">output held at the ramp limit · 1.20 V/tick</div>
+        <div class="note2">glows only while a governor is actively binding</div>
+      </div>
+    </div>
+    <h3>Governor clamp glow <span class="tag s">small</span></h3>
+    <p>Whenever a governor is <b>actively limiting</b> the output at the cursor (accel/decel ramp, min/max, slip cap), that bar's edge <b>heats up red</b> in the Control pipeline. Today the clamp is a number you have to notice; this makes it a state you can't miss.</p>
+  </div>
+
+</div>
+</body>
+</html>

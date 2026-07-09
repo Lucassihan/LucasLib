@@ -57,7 +57,7 @@ function governSide(raw, last) {
 }
 
 // Build one auton trace. Returns { name, text }.
-function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kLat = 0, segments }) {
+function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kLat = 0, battery = { pct: 100, volts: 13.1 }, motorTemp = { start: 32, rise: 0.25 }, segments }) {
   const movements = [];
   const ticks = [];
   const readWalls = [];
@@ -101,13 +101,23 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       gro = clamp(v.ro, 12);
     }
     govLast = { lo: glo, ro: gro };
+    // health columns: battery drains slowly; six motors warm at slightly
+    // different rates and (like the V5) report temperature in 5 °C steps.
+    const secs = t / 1000;
+    const bat = Math.max(0, Math.round(battery.pct - secs * (battery.drain ?? 0.08)));
+    let tempSum = 0;
+    for (let i = 0; i < 6; i++) {
+      const raw = motorTemp.start + secs * motorTemp.rise * (1 + 0.12 * ((i % 3) - 1));
+      tempSum += Math.round(raw / 5) * 5;
+    }
     ticks.push([
       t, mi, r(pose.x), r(pose.y), r(pose.h), stage,
       r(v.le), r(v.he), r(v.dp), r(v.hp), r(v.tp), r(v.sp),
       r(v.do), r(v.to), r(glo), r(gro), r(v.yi), r(v.xi),
       r(v.leadX), r(v.leadY), r(v.leadRetraction), r(v.perpDist), r(v.ex), r(v.ey),
       r(driveI), r(driveD), r(turnI), r(turnD),
-      r(v.carrotX), r(v.carrotY), r(v.ghostX), r(v.ghostY), r(v.arcRadius), r(v.maxSlip)
+      r(v.carrotX), r(v.carrotY), r(v.ghostX), r(v.ghostY), r(v.arcRadius), r(v.maxSlip),
+      bat, r(tempSum / 6)
     ]);
   }
 
@@ -497,13 +507,15 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   const COLS_M =
     'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,settleD,exitDist,exitPerpLine,exitAng,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
   const COLS_T =
-    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip';
+    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp';
   const COLS_R = 't,mi,wall,sensor,preX,preY,preH,postX,postY,postH';
 
   let out = '';
   out += '#LUCASLIB_TRACE v1\n';
   out += `#auton_name=${name}\n`;
   out += `#start_pose=${r(start.x)},${r(start.y)},${r(start.h)}\n`;
+  out += `#battery_pct=${battery.pct}\n`;
+  out += `#battery_volts=${battery.volts}\n`;
   out += `#trackwidth=${trackwidth}\n`;
   out += `#headingDisableDist=${headingDisableDist}\n`;
   out += `#useLyapunov=${kLat > 0 ? 1 : 0}\n`;
@@ -526,6 +538,8 @@ const autons = [];
 autons.push(buildAuton({
   name: 'sample_demo',
   start: { x: -48, y: -48, h: 0 },
+  battery: { pct: 75, volts: 12.6 },
+  motorTemp: { start: 34, rise: 0.5 },
   segments: [
     ({ face }) => face(90),
     ({ driveForward }) => driveForward(72),
@@ -542,6 +556,8 @@ autons.push(buildAuton({
   name: 'skills_route',
   start: { x: -60, y: -60, h: 0 },
   kLat: 0.25,
+  battery: { pct: 100, volts: 13.2 },
+  motorTemp: { start: 28, rise: 0.2 },
   segments: [
     ({ driveForward }) => driveForward(48),
     ({ face }) => face(90),
@@ -558,6 +574,7 @@ autons.push(buildAuton({
 autons.push(buildAuton({
   name: 'swing_showcase',
   start: { x: -36, y: -24, h: 0 },
+  battery: { pct: 45, volts: 12.2 },
   segments: [
     ({ face }) => face(45),
     ({ swing }) => swing('left', 135),
@@ -574,6 +591,8 @@ autons.push(buildAuton({
   name: 'match_left_red',
   start: { x: -60, y: -36, h: 0 },
   kLat: 0.15,
+  battery: { pct: 87, volts: 12.9 },
+  motorTemp: { start: 37, rise: 0.35 },
   segments: [
     ({ driveForward }) => driveForward(40),
     ({ face }) => face(-90),
@@ -594,6 +613,7 @@ autons.push(buildAuton({
   // sim-tuned coupling (the unicycle's volt->speed scaling needs a higher kLat
   // than the robot's real 0.04 to merge fully before the 3in turn-disable zone)
   kLat: 0.25,
+  battery: { pct: 62, volts: 12.5 },
   segments: [
     // explicit path heading 0 (vertical line x=24): robot starts ~16in west of
     // the line, merges onto it, then rides north to the pose
@@ -624,6 +644,8 @@ autons.push(buildAuton({
   name: 'override_match',
   start: { x: -48, y: -60, h: 0 },
   kLat: 0.25,
+  battery: { pct: 20, volts: 11.8 },
+  motorTemp: { start: 46, rise: 0.45 },
   segments: [
     // grab the bottom-left cup, then swing onto the clear y = x diagonal
     ({ moveTo }) => moveTo(-48, -48),

@@ -1,0 +1,66 @@
+:root {
+  /* UI chrome */
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-2: #1c232d;
+  --border: #2a323d;
+  --border-strong: #3a4655;
+  --text: #e6edf3;
+  --text-dim: #9aa7b4;
+  --text-faint: #6b7684;
+  --accent: #4c9ffe;
+  --accent-soft: rgba(76, 159, 254, 0.15);
+  --danger: #f2545b;
+
+  /* diagram default palette (swatches) */
+  --c-blue: #3b82f6;
+  --c-red: #ef4444;
+  --c-green: #22c55e;
+  --c-amber: #f59e0b;
+  --c-purple: #a855f7;
+  --c-cyan: #06b6d4;
+  --c-white: #f8fafc;
+  --c-slate: #64748b;
+  --c-black: #111827;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+
+  font-family: 'Manrope', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* thin scrollbars for the panels */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

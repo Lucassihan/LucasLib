@@ -106,6 +106,8 @@ function parseHeader(headerLines: string[]): TraceHeader {
     version,
     autonName: kv['auton_name'] ?? 'unnamed',
     startPose: { x: pose[0] || 0, y: pose[1] || 0, h: pose[2] || 0 },
+    batteryPct: Number(kv['battery_pct'] ?? -1),
+    batteryVolts: Number(kv['battery_volts'] ?? 0),
     trackwidth: Number(kv['trackwidth'] ?? 0),
     headingDisableDist: Number(kv['headingDisableDist'] ?? 6),
     useLyapunov: kv['useLyapunov'] === '1',
@@ -208,7 +210,9 @@ function parseTicks(rows: Row[]): Tick[] {
     driveI: num(r, 'driveI'),
     driveD: num(r, 'driveD'),
     turnI: num(r, 'turnI'),
-    turnD: num(r, 'turnD')
+    turnD: num(r, 'turnD'),
+    bat: r['bat'] !== undefined ? num(r, 'bat') : -1,
+    mtemp: r['mtemp'] !== undefined ? num(r, 'mtemp') : -1
   }));
 }
 

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Debugger — UI addition proposals</title>
+<style>
+  :root {
+    --bg-deep: #0b0b0b; --bg-base: #101010; --bg-surface: #181818;
+    --bg-elevated: #202020; --bg-raised: #282828;
+    --border-subtle: #303030; --border-light: #404040;
+    --text-ghost: #606060; --text-muted: #7c7c7c; --text-dim: #909090;
+    --text-secondary: #a8a8a8; --text-primary: #cfcfcf; --text-emphasis: #eeeeee;
+    --ring: inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    font-family: 'Manrope Variable', Manrope, system-ui, -apple-system, sans-serif;
+    color: var(--text-secondary);
+    padding: 28px 32px 40px;
+  }
+  header { margin-bottom: 22px; }
+  h1 { font-size: 17px; font-weight: 800; color: var(--text-emphasis); }
+  .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; max-width: 1520px; }
+  .card {
+    position: relative; background: var(--bg-surface); border-radius: 8px;
+    box-shadow: var(--ring); padding: 14px 16px 15px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .num { position: absolute; top: 10px; right: 12px; font-size: 22px; font-weight: 800; color: #2e2e2e; }
+  .mock {
+    height: 158px; background: var(--bg-base); border-radius: 6px; box-shadow: var(--ring);
+    overflow: hidden; display: flex; align-items: center; justify-content: center;
+  }
+  h3 { font-size: 13px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .tag { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+         padding: 2px 6px; border-radius: 3px; background: var(--bg-raised); color: var(--text-muted); }
+  .tag.s { color: #4ade80; } .tag.m { color: #fbbf24; }
+  p { font-size: 10.5px; line-height: 1.5; color: var(--text-dim); }
+  b { color: var(--text-secondary); font-weight: 600; }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+
+  /* A — filmstrip */
+  .strip { display: flex; gap: 6px; padding: 0 10px; flex-wrap: wrap; justify-content: center; }
+  .chip {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-surface); border-radius: 6px; box-shadow: var(--ring);
+    padding: 6px 10px; font-size: 9.5px; color: var(--text-dim); white-space: nowrap;
+  }
+  .chip .cdot { width: 6px; height: 6px; border-radius: 50%; }
+  .chip .dur { color: var(--text-ghost); font-size: 8.5px; }
+  .chip.on { background: #10222a; box-shadow: inset 0 0 0 1px #22d3ee; color: #b8ecf5; }
+  .chip.on .dur { color: #6cc7d8; }
+
+  /* D — report table */
+  .report { width: 86%; font-size: 9.5px; }
+  .report .rrow { display: grid; grid-template-columns: 18px 1fr 58px 52px 50px; gap: 6px;
+                  padding: 4px 8px; border-radius: 4px; align-items: center; }
+  .report .rhead { color: var(--text-ghost); font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  .report .rrow:nth-child(even):not(.rhead) { background: rgba(255,255,255,0.02); }
+  .report .nm { color: var(--text-secondary); font-weight: 600; }
+  .report .ok { color: #4ade80; } .report .warn { color: #f87171; font-weight: 700; }
+  .report .dim { color: var(--text-ghost); }
+  .report .bad { background: rgba(239,68,68,0.07) !important; box-shadow: inset 0 0 0 1px rgba(239,68,68,0.25); }
+</style>
+</head>
+<body>
+<header>
+  <h1>UI addition proposals</h1>
+  <div class="sub">Functional additions this round (the previous deck was motion & polish). Reply with letters to build (e.g. "A, C and F").</div>
+</header>
+
+<div class="grid">
+
+  <!-- A · movement filmstrip -->
+  <div class="card">
+    <div class="num">A</div>
+    <div class="mock">
+      <div class="strip">
+        <div class="chip"><span class="cdot" style="background:#ef4444"></span>Face <span class="dur">0.7s</span></div>
+        <div class="chip"><span class="cdot" style="background:#3b82f6"></span>Drive Fwd <span class="dur">2.5s</span></div>
+        <div class="chip on"><span class="cdot" style="background:#eab308"></span>Boomerang <span class="dur">2.7s</span></div>
+        <div class="chip"><span class="cdot" style="background:#22c55e"></span>Move To <span class="dur">1.6s</span></div>
+        <div class="chip"><span class="cdot" style="background:#a855f7"></span>Voldrive <span class="dur">0.9s</span></div>
+      </div>
+    </div>
+    <h3>Movement filmstrip <span class="tag s">small</span></h3>
+    <p>A row of <b>clickable movement chips</b> above the timeline — name, color, duration, current one highlighted. One click jumps the playhead to that movement's start; pairs with the <span class="mono">[ ]</span> shortcuts. The colored timeline segments stay for proportion; the chips carry the names.</p>
+  </div>
+
+  <!-- B · graph crosshair -->
+  <div class="card">
+    <div class="num">B</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <line x1="40" y1="18" x2="40" y2="140" stroke="#242424"/>
+        <line x1="40" y1="79" x2="415" y2="79" stroke="#242424"/>
+        <path d="M40 125 C 120 120, 150 40, 230 36 S 360 60, 415 63" fill="none" stroke="#3b82f6" stroke-width="1.4"/>
+        <line x1="230" y1="18" x2="230" y2="140" stroke="#666" stroke-width="0.8" stroke-dasharray="3 3"/>
+        <line x1="40" y1="36" x2="415" y2="36" stroke="#666" stroke-width="0.8" stroke-dasharray="3 3"/>
+        <circle cx="230" cy="36" r="3" fill="#93c5fd"/>
+        <g transform="translate(245 24)">
+          <rect x="0" y="0" width="92" height="30" rx="4" fill="#282828" stroke="rgba(255,255,255,0.08)"/>
+          <text x="8" y="12" font-size="8.5" fill="#909090" font-family="ui-monospace, Menlo, monospace">t 2.41 s</text>
+          <text x="8" y="24" font-size="9" font-weight="700" fill="#93c5fd" font-family="ui-monospace, Menlo, monospace">+7.31 V</text>
+        </g>
+        <text x="46" y="28" font-size="8" fill="#7c7c7c" font-weight="600">Drive PID</text>
+      </svg>
+    </div>
+    <h3>Graph crosshair readout <span class="tag s">small</span></h3>
+    <p>Hovering a PID graph shows a <b>crosshair + value tag</b>: exact time and per-series voltage under the pointer (all series when breakdown is on). Click to <b>snap the playhead</b> there. Turns the graphs from pictures into instruments.</p>
+  </div>
+
+  <!-- C · ghost divergence -->
+  <div class="card">
+    <div class="num">C</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <path d="M60 125 C 140 118, 200 80, 280 62" fill="none" stroke="#3b82f6" stroke-width="1.8"/>
+        <path d="M60 130 C 145 128, 210 98, 292 86" fill="none" stroke="#b0b0c8" stroke-width="1.2" stroke-dasharray="5 4" opacity="0.5"/>
+        <line x1="280" y1="62" x2="292" y2="86" stroke="#f87171" stroke-width="1" stroke-dasharray="2 2"/>
+        <g transform="translate(280 62) rotate(65)">
+          <rect x="-9" y="-11" width="18" height="22" rx="2" fill="rgba(204,204,204,0.12)" stroke="#cccccc" stroke-width="1.3"/>
+        </g>
+        <g transform="translate(292 86) rotate(72)" opacity="0.35">
+          <rect x="-9" y="-11" width="18" height="22" rx="2" fill="rgba(204,204,204,0.12)" stroke="#cccccc" stroke-width="1.3"/>
+        </g>
+        <g transform="translate(316 48)">
+          <rect x="0" y="0" width="104" height="34" rx="5" fill="#282828" stroke="rgba(255,255,255,0.08)"/>
+          <text x="9" y="14" font-size="9" font-weight="700" fill="#f87171" font-family="ui-monospace, Menlo, monospace">Δ 3.2 in</text>
+          <text x="9" y="26" font-size="8.5" fill="#909090" font-family="ui-monospace, Menlo, monospace">Δh 4.5° · +80 ms</text>
+        </g>
+      </svg>
+    </div>
+    <h3>Ghost divergence readout <span class="tag s">small</span></h3>
+    <p>While a ghost is pinned, a thin <b>tether line connects the two robots</b> and a chip reads the live gap: <b>Δ position, Δ heading, and time lead/lag</b>. Instantly answers "where do my two runs split?" — the moment the tether stretches, you've found it.</p>
+  </div>
+
+  <!-- D · run report -->
+  <div class="card">
+    <div class="num">D</div>
+    <div class="mock">
+      <div class="report">
+        <div class="rrow rhead"><span>#</span><span>movement</span><span>exit</span><span>error</span><span>settle</span></div>
+        <div class="rrow"><span class="dim">1</span><span class="nm">Face</span><span class="ok">settle</span><span class="mono">0.4°</span><span class="mono">310 ms</span></div>
+        <div class="rrow"><span class="dim">2</span><span class="nm">Drive Fwd</span><span class="ok">settle</span><span class="mono">0.8 in</span><span class="mono">190 ms</span></div>
+        <div class="rrow"><span class="dim">3</span><span class="nm">Boomerang</span><span class="ok">perp</span><span class="mono">1.1 in</span><span class="dim">—</span></div>
+        <div class="rrow bad"><span class="dim">4</span><span class="nm">Move To</span><span class="warn">TIMEOUT</span><span class="mono">3.2 in</span><span class="dim">—</span></div>
+        <div class="rrow"><span class="dim">5</span><span class="nm">Voldrive</span><span class="dim">timed</span><span class="dim">—</span><span class="dim">—</span></div>
+      </div>
+    </div>
+    <h3>Run report card <span class="tag m">medium</span></h3>
+    <p>One panel (or overlay) that <b>grades the whole run</b>: per movement — exit reason, final error, settle time, duration. Timeouts and fat errors glow red. This is the "which movement do I tune next" view, and it screenshots straight into the notebook.</p>
+  </div>
+
+  <!-- E · velocity graph -->
+  <div class="card">
+    <div class="num">E</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <line x1="40" y1="18" x2="40" y2="140" stroke="#242424"/>
+        <line x1="40" y1="79" x2="415" y2="79" stroke="#242424"/>
+        <path d="M40 122 C 80 122, 95 50, 150 44 L 260 42 C 300 44, 320 70, 350 96 S 400 122, 415 124" fill="none" stroke="#22d3ee" stroke-width="1.6"/>
+        <path d="M40 100 C 70 96, 90 70, 120 74 S 190 96, 240 92 S 340 78, 415 88" fill="none" stroke="#fb923c" stroke-width="1.2" opacity="0.8"/>
+        <g transform="translate(320 22)" font-size="8">
+          <rect x="0" y="0" width="26" height="3" rx="1.5" fill="#22d3ee"/><text x="32" y="4.5" fill="#909090">v  in/s</text>
+          <rect x="0" y="11" width="26" height="3" rx="1.5" fill="#fb923c"/><text x="32" y="15.5" fill="#909090">ω  °/s</text>
+        </g>
+        <text x="46" y="28" font-size="8" fill="#7c7c7c" font-weight="600">Velocity</text>
+        <text x="46" y="136" font-size="7.5" fill="#606060">flat top = voltage-saturated · dips under full V = wheel slip</text>
+      </svg>
+    </div>
+    <h3>Velocity graph <span class="tag m">medium</span></h3>
+    <p><b>Linear + angular velocity</b> derived from the 10 ms odometry deltas — zero firmware changes. Read against the voltage graphs above it: flat-topped v at max V = saturation, v sagging while V is pinned = <b>wheel slip</b>, and decel ramps show whether the governor actually bites.</p>
+  </div>
+
+  <!-- F · notebook export -->
+  <div class="card">
+    <div class="num">F</div>
+    <div class="mock">
+      <svg viewBox="0 0 440 158" width="100%" height="100%">
+        <defs>
+          <pattern id="alpha" width="10" height="10" patternUnits="userSpaceOnUse">
+            <rect width="5" height="5" fill="#2a2a2a"/><rect x="5" y="5" width="5" height="5" fill="#2a2a2a"/>
+            <rect x="5" width="5" height="5" fill="#1b1b1b"/><rect y="5" width="5" height="5" fill="#1b1b1b"/>
+          </pattern>
+        </defs>
+        <g transform="translate(70 14)">
+          <rect x="0" y="0" width="130" height="130" rx="4" fill="url(#alpha)"/>
+          <path d="M18 108 L 62 108 C 84 108, 92 84, 96 62 S 104 30, 112 26" fill="none" stroke="#3b82f6" stroke-width="2"/>
+          <circle cx="112" cy="26" r="3.5" fill="none" stroke="#22c55e" stroke-width="1.4"/>
+          <g transform="translate(18 108) rotate(90)">
+            <rect x="-8" y="-9" width="16" height="18" rx="1.5" fill="rgba(60,60,60,0.35)" stroke="#555" stroke-width="1.2"/>
+          </g>
+        </g>
+        <g transform="translate(240 52)">
+          <rect x="0" y="0" width="118" height="30" rx="6" fill="#2563eb"/>
+          <text x="59" y="19" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Export PNG ⤓</text>
+          <text x="59" y="52" text-anchor="middle" font-size="8.5" fill="#7c7c7c">transparent · path + waypoints + robot</text>
+          <text x="59" y="66" text-anchor="middle" font-size="8.5" fill="#606060">straight into the notebook, same as diagram-app</text>
+        </g>
+      </svg>
+    </div>
+    <h3>Notebook PNG export <span class="tag s">small</span></h3>
+    <p>An export button on the field panel: <b>transparent PNG</b> of the real run — path, waypoints, exit geometry, robot at the playhead — sized to match your diagram-app exports. Real telemetry drops into notebook pages beside the planned-path diagrams.</p>
+  </div>
+
+</div>
+</body>
+</html>

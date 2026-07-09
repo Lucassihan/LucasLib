@@ -1,5 +1,6 @@
 #include "movement/pid.h"
 #include "misc/util.h"
+#include "coreConfigs.h"
 
 #include <cmath>
 
@@ -20,9 +21,10 @@ PID::PID()
       lastTime(0), firstCycle(true),
       lockedKP(0), lockedKI(0), lockedKD(0),
       minOutput(0), maxOutput(12.0),
+      targetOffset(0),
       executingLyapunov(false),
       maxAccelRate(0), maxDecelRate(0),
-      integralBound(2), maxIntegral(2), //integral will only start to accumulate when it is within 2 error units, and its max contribution to output is 2 volts.
+      integralBound(2), maxIntegralOutput(2), //integral will only start to accumulate when it is within 2 error units, and its max contribution to output is 2 volts.
       error(0), output(0), derivative(0)
 {
     for (int i = 0; i < MAX_PROFILES; i++) {
@@ -50,7 +52,7 @@ void PID::addStep(double upperBound, double kP, double kI, double kD) {
 //integral settings
 void PID::setIntegralSettings(double bound, double maxIntegralOutput) {
     integralBound = bound;
-    maxIntegral = maxIntegralOutput;
+    this->maxIntegralOutput = maxIntegralOutput;
 }
 
 //temp override
@@ -63,49 +65,63 @@ void PID::tempConstants(double kP, double kI, double kD) {
 
 //reset
 void PID::clearAllValues() {
-    sumerror         = 0;
-    lastError        = 0;
-    prevOutput       = 0;
-    firstCycle       = true;
+    sumerror = 0;
+    lastError = 0;
+    prevOutput = 0;
+    firstCycle = true;
     useTempConstants = false;
-    lockedKP         = 0;
-    lockedKI         = 0;
-    lockedKD         = 0;
-    error            = 0;
-    output           = 0;
-    derivative       = 0;
+    lockedKP = 0;
+    lockedKI = 0;
+    lockedKD = 0;
+    error = 0;
+    output = 0;
+    derivative = 0;
     executingLyapunov = false;
 }
 
-//determine constants
-void PID::determineConstants(double inputError, double &kP, double &kI, double &kD) {
+//determine constants — writes the matched step's gains straight into lockedKP/KI/KD
+void PID::determineConstants(double inputError) {
     if (useTempConstants) {
-        kP = tempKP;
-        kI = tempKI;
-        kD = tempKD;
+        lockedKP = tempKP;
+        lockedKI = tempKI;
+        lockedKD = tempKD;
         return;
     }
 
-    int    count    = stepCount[activeProfile];
+    int count = stepCount[activeProfile];
     double absError = fabs(inputError);
 
     for (int i = 0; i < count; i++) {
         if (absError <= steps[activeProfile][i].upperBound) {
-            kP = steps[activeProfile][i].kP;
-            kI = steps[activeProfile][i].kI;
-            kD = steps[activeProfile][i].kD;
+            lockedKP = steps[activeProfile][i].kP;
+            lockedKI = steps[activeProfile][i].kI;
+            lockedKD = steps[activeProfile][i].kD;
             return;
         }
     }
 
     //fallback: use last step
     if (count > 0) {
-        kP = steps[activeProfile][count - 1].kP;
-        kI = steps[activeProfile][count - 1].kI;
-        kD = steps[activeProfile][count - 1].kD;
+        lockedKP = steps[activeProfile][count - 1].kP;
+        lockedKI = steps[activeProfile][count - 1].kI;
+        lockedKD = steps[activeProfile][count - 1].kD;
     } else {
-        kP = 0; kI = 0; kD = 0;
+        lockedKP = 0;
+        lockedKI = 0;
+        lockedKD = 0;
     }
+}
+
+double PID::P() {
+    return kP * error;
+}
+
+double PID::I() {
+    return takeSmallerBetween(kI * sumerror, maxIntegralOutput);
+}
+
+double PID::D() {
+    return kD * derivative;
 }
 
 //calculate
@@ -113,8 +129,8 @@ double PID::calculateOutput(double inputError) {
     error = inputError;
 
     //dt
-    uint64_t now = vex::timer::systemHighResolution();
-    double dt    = (now - lastTime) / 1000.0;
+    double now = Brain.timer(msec);
+    double dt = now - lastTime;
     if (firstCycle) {
         dt = 10.0;
     }
@@ -125,37 +141,19 @@ double PID::calculateOutput(double inputError) {
 
     //set pid constants on first cycle, use them for the entire movement
     if (firstCycle) {
-        determineConstants(error, lockedKP, lockedKI, lockedKD);
+        determineConstants(error);
         firstCycle = false;
     }
 
-    double kP = lockedKP;
-    double kI = lockedKI;
-    double kD = lockedKD;
+    kP = lockedKP;
+    kI = lockedKI;
+    kD = lockedKD;
 
-    //derivative
     derivative = (error - lastError) / dt;
-
-    //integral with anti-windup
-    bool saturated = (maxOutput > 0 && fabs(prevOutput) >= maxOutput);
-    bool withinBound = (integralBound == 0 || fabs(error) < integralBound);
-
-    if (!saturated && withinBound) {
-        sumerror += error;
-    }
-
-    //cap integral to maxIntegral so it doesn't cause crazy overshooting
-    if (maxIntegral > 0 && kI > 0) {
-        double maxSum = maxIntegral / kI;
-        if (sumerror > maxSum) {
-            sumerror = maxSum;
-        } else if (sumerror < -maxSum) {
-            sumerror = -maxSum;
-        }
-    }
+    sumerror = fabs(error) < integralBound ? error + sumerror : 0;
 
     //THE PID EQUATION IS HERE!
-    double raw = kP * error + kI * sumerror + kD * derivative;
+    double raw = P() + I() + D();
 
     //accel/decel rate limiting — skipped under lyapunov (governor slews instead)
     if (!executingLyapunov) {

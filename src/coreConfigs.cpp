@@ -5,28 +5,27 @@ controller Controller = controller(primary);
 
 // Chassis
 motor fl = motor(PORT20, ratio18_1, false);
-motor ml = motor(PORT18, ratio6_1, true);////////////////////
+motor ml = motor(PORT18, ratio6_1, true);
 motor bl = motor(PORT19, ratio6_1, true);
 
 motor fr = motor(PORT11, ratio18_1, true);
-motor mr = motor(PORT13, ratio6_1, false);///////////////////////
+motor mr = motor(PORT13, ratio6_1, false);
 motor br = motor(PORT12, ratio6_1, false);
-// motor br = motor(PORT1, ratio18_1, false);
 
 motor_group leftdrive = motor_group(fl, ml, bl);
 motor_group rightdrive = motor_group(fr, mr, br);
 
 // Odometry and Heading
-inertial IMU1 = inertial(PORT1);
-inertial IMU2 = inertial(PORT4);
+inertial IMU1 = inertial(PORT6);
+inertial IMU2 = inertial(PORT7);
 
 rotation TX = rotation(PORT6, false);
-rotation TY = rotation(PORT11, true);
+rotation TY = rotation(PORT6, true);
 
 //Wall reading distance sensors
-distance DistSensor1 = distance(PORT8);
+distance DistSensor1 = distance(PORT7);
 distance DistSensor2 = distance(PORT3);
-distance DistSensor3 = distance(PORT16);
+distance DistSensor3 = distance(PORT7);
 distance DistSensor4 = distance(PORT9);
 
 //Initiation of the odometry class

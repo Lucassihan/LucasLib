@@ -14,6 +14,8 @@ export interface TraceHeader {
   version: string;
   autonName: string;
   startPose: { x: number; y: number; h: number };
+  batteryPct: number; // battery % at debugger::start(); -1 = not in this trace
+  batteryVolts: number; // battery volts at start; 0 = not in this trace
   trackwidth: number;
   headingDisableDist: number;
   useLyapunov: boolean;
@@ -66,6 +68,9 @@ export interface Movement {
   // 0 = no settle gate (exit as soon as the zone is reached).
   settleD: number;
   exitDist: number;
+  // exitPerpLine: robot's exit distance (inches) to the line ⊥ its heading through
+  // the target. Arms once within exitDist of the target, then exits when the robot's
+  // distance to that line drops to this value. 0 = disabled.
   exitPerpLine: number;
   exitAng: number;
   exitReason: string;
@@ -117,6 +122,8 @@ export interface Tick {
   driveD: number; // drive channel derivative
   turnI: number; // turn/heading channel integral
   turnD: number; // turn/heading channel derivative
+  bat: number; // battery % this tick; -1 = not in this trace
+  mtemp: number; // avg drive-motor temp (°C) this tick; -1 = not in this trace
 }
 
 export interface ReadWall {

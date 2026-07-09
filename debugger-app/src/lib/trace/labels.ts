@@ -54,9 +54,7 @@ export function isVolDrive(type: string): boolean {
   return type === 'voldrive';
 }
 
-// Vibrant palette, by movement type:
-//   face → red, swing → orange, drive fwd/bwd → blue, moveTo → green, boomerang → yellow
-const COLORS: Record<string, string> = {
+const MOVEMENT_COLORS: Record<string, string> = {
   face: '#ef4444',
   facePoint: '#ef4444',
   swingOnLeft: '#f97316',
@@ -72,10 +70,9 @@ const COLORS: Record<string, string> = {
 };
 
 export function movementColor(type: string): string {
-  return COLORS[type] ?? '#888888';
+  return MOVEMENT_COLORS[type] ?? '#888888';
 }
 
-// PID term colors — consistent across the readout bars and the breakdown graph
-// lines. P = red, I = white, D = blue. Channel identity (Drive vs Turn) is
-// carried by the panel title/border, so term color never clashes with it.
 export const PID_TERM = { p: '#ef4444', i: '#e8e8e8', d: '#3b82f6' };
+
+export const COLORS = { drive: '#3b82f6', turn: '#ef4444', lyP: '#fb923c', lyLat: '#2dd4bf' };

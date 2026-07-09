@@ -1,0 +1,422 @@
+{
+  "app": "lucaslib-diagram",
+  "version": 2,
+  "name": "Odom Model Comparison",
+  "elements": [
+    {
+      "id": "781d3dd0-68a9-4e5d-9162-68fa38a24a6f",
+      "type": "path",
+      "color": "#2563eb",
+      "width": 1.4,
+      "dash": "solid",
+      "arrows": "end",
+      "opacity": 1,
+      "kind": "arc",
+      "points": [
+        {
+          "x": -47.92661681359847,
+          "y": -23.435172803182354
+        },
+        {
+          "x": -32.93314219102929,
+          "y": 10.539321249693893
+        },
+        {
+          "x": -0.15123168915099505,
+          "y": 23.901933416507184
+        }
+      ]
+    },
+    {
+      "id": "0e32895c-5c99-483f-a5e8-2793cfa7fcb6",
+      "type": "path",
+      "color": "#ef4444",
+      "width": 1.4,
+      "dash": "dashed",
+      "arrows": "none",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": -47.926616813598486,
+          "y": -23.43517280318236
+        },
+        {
+          "x": -0.15123168915100926,
+          "y": 23.901933416507177
+        }
+      ]
+    },
+    {
+      "id": "9e4bd7a9-23c6-4492-9496-4e2bf542f582",
+      "type": "path",
+      "color": "#a855f7",
+      "width": 1.4,
+      "dash": "dotted",
+      "arrows": "none",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": -47.92661681359847,
+          "y": -23.435172803182354
+        },
+        {
+          "x": 0.02906320812320308,
+          "y": -23.54468119816656
+        }
+      ],
+      "headingEnd": null
+    },
+    {
+      "id": "cf4996a7-74b5-4394-8697-10f8f8c42a5b",
+      "type": "path",
+      "color": "#a855f7",
+      "width": 1.4,
+      "dash": "dotted",
+      "arrows": "none",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": 0.02906320812320308,
+          "y": -23.54468119816656
+        },
+        {
+          "x": -0.15123168915099505,
+          "y": 23.901933416507184
+        }
+      ]
+    },
+    {
+      "id": "b1294aab-5ca1-4c10-9a4f-4c21b0698cc0",
+      "type": "text",
+      "x": -20.688882087614104,
+      "y": -29.865567183825164,
+      "text": "X displacement",
+      "size": 3.5,
+      "color": "#1f2937",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "fb6b0df6-e472-4553-8ea9-cffac632d55b",
+      "type": "text",
+      "x": 17.659837915167003,
+      "y": -1.4660886154287809,
+      "text": "Y displacement",
+      "size": 3.5,
+      "color": "#1f2937",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "39113061-f269-4c43-9b8d-6e9084408058",
+      "type": "path",
+      "color": "#a855f7",
+      "width": 1.4,
+      "dash": "dotted",
+      "arrows": "none",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": 47.870958907591714,
+          "y": -19.681504009503847
+        },
+        {
+          "x": 95.82663892931339,
+          "y": -19.79101240448805
+        }
+      ],
+      "headingEnd": null
+    },
+    {
+      "id": "1d557ce9-87d6-4fa7-bf86-5abcbdf923a7",
+      "type": "path",
+      "color": "#a855f7",
+      "width": 1.4,
+      "dash": "dotted",
+      "arrows": "none",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": 95.82663892931339,
+          "y": -19.79101240448805
+        },
+        {
+          "x": 95.6463440320392,
+          "y": 27.65560221018569
+        }
+      ]
+    },
+    {
+      "id": "771a32de-90a2-411e-9015-68ab5f82c7bc",
+      "type": "text",
+      "x": 75.10869363357608,
+      "y": -26.111898390146656,
+      "text": "X displacement",
+      "size": 3.5,
+      "color": "#1f2937",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "3abb614e-515e-40a4-8188-0ef798c919d3",
+      "type": "text",
+      "x": 113.45741363635719,
+      "y": 2.287580178249728,
+      "text": "Y displacement",
+      "size": 3.5,
+      "color": "#1f2937",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "48ac9849-69ce-48c4-98c8-95b376506c8b",
+      "type": "path",
+      "color": "#2563eb",
+      "width": 1.4,
+      "dash": "solid",
+      "arrows": "end",
+      "opacity": 1,
+      "kind": "straight",
+      "points": [
+        {
+          "x": 47.870958907591714,
+          "y": -19.681504009503847
+        },
+        {
+          "x": 95.6463440320392,
+          "y": 27.65560221018569
+        }
+      ]
+    },
+    {
+      "id": "47efda49-5950-43bc-a63b-70118b7a901d",
+      "type": "text",
+      "x": -47.96155061282769,
+      "y": -36.120161786265754,
+      "text": "Pose-last tick",
+      "size": 3.5,
+      "color": "#a855f7",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "1a743f64-1b4b-4f3f-9c67-886ab862228d",
+      "type": "text",
+      "x": 1.5139533873601891,
+      "y": 33.742909635960984,
+      "text": "Pose-current tick",
+      "size": 3.5,
+      "color": "#a855f7",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "baeebb0c-70ef-4735-b485-13af9d43428c",
+      "type": "text",
+      "x": 95.473498712015,
+      "y": 38.744950103231034,
+      "text": "Pose-current tick",
+      "size": 3.5,
+      "color": "#a855f7",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "207c38f1-f91b-4a2e-8d7c-bda67463c0f4",
+      "type": "text",
+      "x": 46.86888341062223,
+      "y": -33.97765350322851,
+      "text": "Pose-last tick",
+      "size": 3.5,
+      "color": "#a855f7",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "1966b6f3-2e5c-408d-b4f3-60398a85f807",
+      "type": "text",
+      "x": -57.369923331431124,
+      "y": 17.018849820572814,
+      "text": "Robot travel\nbetween ticks",
+      "size": 3.5,
+      "color": "#2563eb",
+      "bold": true,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "3d38fe97-5091-48c6-bdfb-9682f14c8f4e",
+      "type": "text",
+      "x": 53.164100020916145,
+      "y": 16.565041509202015,
+      "text": "Robot travel\nbetween ticks",
+      "size": 3.5,
+      "color": "#2563eb",
+      "bold": true,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "f06d0c39-cc8e-40b7-bd55-0964f2399bb9",
+      "type": "robot",
+      "x": 47.870958907591714,
+      "y": -19.681504009503847,
+      "heading": 45.26401741141028,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 1
+    },
+    {
+      "id": "1c1175e7-dd46-4e65-8f4b-e636ea311cfd",
+      "type": "robot",
+      "x": 71.75865146981545,
+      "y": 3.987049100340922,
+      "heading": 45.26401741141028,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 0.64
+    },
+    {
+      "id": "aa53740d-e2ec-4c82-8337-c125f868b7cf",
+      "type": "robot",
+      "x": 95.6463440320392,
+      "y": 27.65560221018569,
+      "heading": 45.26401741141028,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 0.28
+    },
+    {
+      "id": "2fe06643-fefc-4dc7-8f6b-87f6bc0bf08f",
+      "type": "robot",
+      "x": -47.92661681359848,
+      "y": -23.435172803182358,
+      "heading": 2.170386083076254,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 1
+    },
+    {
+      "id": "a2892760-1aa3-45ce-90ea-3546e3ecadb1",
+      "type": "robot",
+      "x": -33.604167402045185,
+      "y": 9.887184939573942,
+      "heading": 45.264017411410315,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 0.64
+    },
+    {
+      "id": "a22e793d-759a-44bb-9e31-e70b49d39185",
+      "type": "robot",
+      "x": -0.15123168915100926,
+      "y": 23.901933416507177,
+      "heading": 88.35764873974459,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 0.28
+    },
+    {
+      "id": "d120ea69-7737-4fd5-9ab2-dda82b58f274",
+      "type": "text",
+      "x": -22.650450871621672,
+      "y": 47.05382290646996,
+      "text": "Arc-Chord",
+      "size": 7,
+      "color": "#1f2937",
+      "bold": true,
+      "italic": true,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "b82ea3af-c1d7-4c52-a0a8-da0e6c3cd5d1",
+      "type": "text",
+      "x": 83.24450301989965,
+      "y": 48.263170795432266,
+      "text": "Euler Integration",
+      "size": 7,
+      "color": "#1f2937",
+      "bold": true,
+      "italic": true,
+      "align": "center",
+      "opacity": 1
+    }
+  ],
+  "view": {
+    "tx": 500.9840026631932,
+    "ty": 456.5975260021879,
+    "s": 4.313477471444638
+  }
+}

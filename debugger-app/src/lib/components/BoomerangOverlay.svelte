@@ -8,7 +8,6 @@
   import { toScreen, defaultField, type FieldConfig } from '../field/coords';
   import type { Movement } from '$lib/trace/types';
   import { traceState, tickPairAt, movementAt, poseAt, movementTicks } from '$lib/stores/trace.svelte';
-
   let { movement, field = defaultField }: { movement: Movement; field?: FieldConfig } = $props();
 
   const D2R = Math.PI / 180;

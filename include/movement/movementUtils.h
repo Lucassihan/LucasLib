@@ -31,9 +31,6 @@ extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
-extern double turnOvershoot;
-
-
 // -------- Lyapunov control gain (user-tunable) --------
 extern double kLat;
 

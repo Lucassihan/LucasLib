@@ -39,6 +39,13 @@
   --readwall-pre: #e74c3c;
   --readwall-post: #22c55e;
 
+  /* UI accent (active chips, stage badges, pulses). Movement/PID data colors
+     are themed in JS (labels.ts) because they land in SVG attributes. */
+  --accent: #22d3ee;
+  --accent-bg: #0c2630;
+  --accent-text: #b8ecf5;
+  --accent-text-dim: #6cc7d8;
+
   /* geometry */
   --radius-shell: 10px;
   --radius-panel: 8px;
@@ -101,3 +108,4 @@ body {
   font-weight: 700;
   color: var(--text-primary);
 }
+

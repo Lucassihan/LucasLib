@@ -4,7 +4,7 @@
   // ω = heading-PID term + the Lyapunov lateral-coupling term kLat·v·e_y·sinc(eθ).
   import { traceState, movementAt, tickAt } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
-  import { PID_TERM } from '$lib/trace/labels';
+  import { PID_TERM, COLORS } from '$lib/trace/labels';
 
   const m = $derived(movementAt(traceState.time));
   const tk = $derived(tickAt(traceState.time));
@@ -15,8 +15,8 @@
   const sinc = (x: number) => (Math.abs(x) < 1e-3 ? 1 - (x * x) / 6 : Math.sin(x) / x);
 
   const D2R = Math.PI / 180;
-  const PROP = '#fb923c'; // heading-PID (proportional) term
-  const LATC = '#2dd4bf'; // Lyapunov lateral-coupling term
+  const PROP = COLORS.lyP;
+  const LATC = COLORS.lyLat;
 
   const law = $derived.by(() => {
     if (!m || !tk) return null;

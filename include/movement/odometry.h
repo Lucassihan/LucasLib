@@ -132,11 +132,15 @@ private:
   double lastLeftPos  = 0;
   double lastRightPos = 0;
 
-  // Heading change (deg) banked since the last Y accumulation, so velocity and arc radius
-  // cover the same span as the forward distance they are paired with.
+  // Heading change (deg) banked since the last Y accumulation. Half of it re-centers the Y step
+  // on its window midpoint (second-order placement); the full swing feeds velocity and arc
+  // radius over that same span as the forward distance they are paired with.
   double dhAccumDeg = 0;
+  // Same idea for the X window (zeroed by trackX, not trackY), so each axis places its step at
+  // its own midpoint heading rather than sharing Y's accumulator.
+  double dhAccumDegX = 0;
 
-  uint64_t lastTrackTime = 0;
+  double lastTrackTime = 0;
 
   //Cached arc radius (inches) from the most recent Y accumulation. See travelArcRadius().
   double lastArcRadius = 1e9;

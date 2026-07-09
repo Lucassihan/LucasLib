@@ -29,11 +29,20 @@ class PID {
     void   tempConstants(double kP, double kI, double kD);
     void   setIntegralSettings(double bound, double maxIntegralOutput);
     void   clearAllValues();
+    double P();
+    double I();
+    double D();
     double calculateOutput(double inputError);
 
     // output limits
     double minOutput;
     double maxOutput;
+
+    // Movement offset applied by the movement functions (e.g. drivePID.targetOffset,
+    // turnPID.targetOffset). Set it before a movement to bias that movement; the
+    // movement zeroes it again on exit. NOT touched by clearAllValues(), so a
+    // value set right before a call survives the movement's start-of-run reset.
+    double targetOffset;
 
     // When true, this PID skips its minOutput floor AND its per-PID slew. Set by
     // lyapunov movements (lyPose / lyapunov moveTo) so the controller works with
@@ -47,7 +56,7 @@ class PID {
 
     // integral windup limits
     double integralBound;
-    double maxIntegral;
+    double maxIntegralOutput;
 
     // readable state for exit conditions
     double error;
@@ -62,7 +71,7 @@ class PID {
     double activeKD;
 
     private: // stuff that is used by the PID class internally for calculations, and will not be accessible outside
-    void determineConstants(double inputError, double& kP, double& kI, double& kD);
+    void determineConstants(double inputError);
 
     PIDStep steps[MAX_PROFILES][MAX_STEPS];
     int     stepCount[MAX_PROFILES];
@@ -77,11 +86,15 @@ class PID {
     double lockedKI;
     double lockedKD;
 
-    double   sumerror;
-    double   lastError;
-    double   prevOutput;
-    uint64_t lastTime;
-    bool     firstCycle;
+    double kP;
+    double kI;
+    double kD;
+
+    double sumerror;
+    double lastError;
+    double prevOutput;
+    double lastTime;
+    bool   firstCycle;
 };
 
 // =========================================================================

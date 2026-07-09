@@ -38,6 +38,19 @@
   });
   const curStage = $derived(tk ? tk.stage : 0);
 
+  // Flash the badge when a stage latches under the playhead (matches the
+  // field's pulse ring). Movement changes reset stage to 0 — no flash.
+  let flashStage = $state(-1);
+  let prevStage = -1;
+  $effect(() => {
+    const s = curStage;
+    if (s > prevStage && prevStage >= 0) {
+      flashStage = s;
+      setTimeout(() => (flashStage = -1), 550);
+    }
+    prevStage = s;
+  });
+
   // Boomerang slip-cap throttle, live at the cursor. Only meaningful when the
   // move sets a leadChasePowerLimit. maxSlip = √(grip·|r|); the cap binds when
   // the drive output sits at it (and the cap is below the motor ceiling).
@@ -135,7 +148,7 @@
       case 'timeout':
         return `${m.exitTimeout} ms elapsed`;
       case 'perpLine':
-        return `crossed target plane · arm ${m.exitPerpLine} in`;
+        return `within ${m.exitPerpLine} in of target plane`;
       default:
         return '';
     }
@@ -187,7 +200,7 @@
           <div class="group-label">Stage</div>
           <div class="stage-badges">
             {#each stageDef as s, i}
-              <div class="stage-badge" class:on={i === curStage}>
+              <div class="stage-badge" class:on={i === curStage} class:flash={i === flashStage}>
                 <div class="sb-t">{s.t}</div>
                 <div class="sb-sub">{s.sub}</div>
               </div>
@@ -392,8 +405,8 @@
     color: var(--text-muted);
   }
   .thr-tag.live {
-    background: #0c2630;
-    color: #22d3ee;
+    background: var(--accent-bg);
+    color: var(--accent-text);
   }
   .thr-name {
     display: block;
@@ -637,10 +650,27 @@
     margin-top: 2px;
   }
   .stage-badge.on {
-    background: #0c2630;
-    box-shadow: inset 0 0 0 1px #22d3ee;
+    background: var(--accent-bg);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
   .stage-badge.on .sb-t {
-    color: #22d3ee;
+    color: var(--accent-text);
+  }
+  .stage-badge.flash {
+    animation: badge-flash 0.5s ease;
+  }
+  @keyframes badge-flash {
+    0% {
+      transform: scale(1);
+    }
+    30% {
+      transform: scale(1.1);
+      box-shadow:
+        inset 0 0 0 1px var(--accent),
+        0 0 16px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    100% {
+      transform: scale(1);
+    }
   }
 </style>

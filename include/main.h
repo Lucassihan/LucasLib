@@ -19,6 +19,7 @@ extern int  autonIndex;
 
 extern motor intakeRollers;
 extern motor upperRollers;
+extern motor_group fourBar;
 
 // =========================================================================
 // Mechanism sensors

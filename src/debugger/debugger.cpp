@@ -67,6 +67,7 @@ struct Tk {
     float    yi, xi, ex, ey;
     float    driveI, driveD, turnI, turnD;
     float    carrotX, carrotY, ghostX, ghostY, arcRadius, maxSlip, leadRet, perp;
+    float    bat, mtemp;  // battery % + drive-motor temp average (°C), per tick
 };
 
 struct Wall {
@@ -91,6 +92,7 @@ static Wall walls[WALL_CAP];
 
 static char autonName[40] = "auton";
 static float startPoseX = 0, startPoseY = 0, startPoseH = 0;
+static float batteryPct = -1, batteryVolts = 0;  // snapshot at start(); -1 = never armed
 
 // Overlay telemetry published by lyPose / boomerang, consumed by the next tick().
 struct Pending {
@@ -128,20 +130,20 @@ static Mv& newMove(const char* type, Kind kind) {
 }
 
 static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
-    m.exTimeout = ec.timeout;
-    m.settleD   = ec.settleD;
-    m.exDist    = ec.exitDist;
-    m.exPerp    = ec.perpLine;
-    if (ec.perpLine > 0)      m.exReason = "perpLine";
-    else if (ec.exitDist > 0) m.exReason = "settle";
-    else                      m.exReason = "timeout";
+    m.exTimeout = ec.tOut;
+    m.settleD   = ec.setD;
+    m.exDist    = ec.extD;
+    m.exPerp    = ec.pLine;
+    if (ec.pLine > 0)      m.exReason = "perpLine";
+    else if (ec.extD > 0)  m.exReason = "settle";
+    else                   m.exReason = "timeout";
 }
 
 static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
-    m.exTimeout = ec.timeout;
-    m.settleD   = ec.settleD;
-    m.exAng     = ec.exitAng;
-    if (ec.exitAng > 0) m.exReason = "settle";
+    m.exTimeout = ec.tOut;
+    m.settleD   = ec.setD;
+    m.exAng     = ec.extA;
+    if (ec.extA > 0) m.exReason = "settle";
     else                m.exReason = "timeout";
 }
 
@@ -155,6 +157,8 @@ void start(const char* name) {
     startPoseX = chassis.x;
     startPoseY = chassis.y;
     startPoseH = chassis.h;
+    batteryPct   = (float) Brain.Battery.capacity();
+    batteryVolts = (float) Brain.Battery.voltage(vex::voltageUnits::volt);
     snprintf(autonName, sizeof(autonName), "%s", name ? name : "auton");
     pending = Pending{};
     capturing = true;
@@ -231,7 +235,7 @@ void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec, bool b
     m.drivePidPtr = &drivePID;
     m.turnPidPtr  = &headingPID;
     copyLateralEC(m, ec);
-    if (ec.perpLine <= 0) m.exReason = "perpLine";  // boomerang's natural exit
+    if (ec.pLine <= 0) m.exReason = "perpLine";  // boomerang's natural exit
 }
 
 void moveVoltage(double left, double right) {
@@ -267,6 +271,12 @@ void tick() {
     t.driveO = driveOut;  t.turnO = turnOut;  t.lo = leftOut;  t.ro = rightOut;
     t.yi = chassis.yInchesTracked;  t.xi = chassis.xInchesTracked;
     t.arcRadius = chassis.travelArcRadius();
+
+    // health: battery % + all six drive temps averaged. Both are reads of the
+    // device-status cache vexos already maintains — no bus traffic, ~µs cost.
+    t.bat   = (float) Brain.Battery.capacity();
+    t.mtemp = (float)((fl.temperature(celsius) + ml.temperature(celsius) + bl.temperature(celsius) +
+                       fr.temperature(celsius) + mr.temperature(celsius) + br.temperature(celsius)) / 6.0);
 
     // per-channel integral / derivative for the breakdown graphs
     if (m.drivePidPtr) { t.driveI = m.drivePidPtr->integral; t.driveD = m.drivePidPtr->derivative; }
@@ -357,6 +367,8 @@ static void dumpTrace() {
     emit("#LUCASLIB_TRACE v1");
     emitf("#auton_name=%s", autonName);
     emitf("#start_pose=%g,%g,%g", startPoseX, startPoseY, startPoseH);
+    emitf("#battery_pct=%g", batteryPct);
+    emitf("#battery_volts=%g", batteryVolts);
     emitf("#trackwidth=%g", chassis.getTrackwidth());
     emitf("#headingDisableDist=%g", turnDisableLength);
     emitf("#useLyapunov=%d", kLat > 0 ? 1 : 0);
@@ -393,14 +405,14 @@ static void dumpTrace() {
     emit("");
     emit("[TICKS]");
     emit("t,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,"
-         "ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip");
+         "ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp");
     for (int i = 0; i < tickCount; i++) {
         Tk& t = ticks[i];
-        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             t.t, (unsigned) t.mi, t.x, t.y, t.h, (unsigned) t.stage, t.le, t.he, t.dp, t.hp, t.tp, t.sp,
             t.driveO, t.turnO, t.lo, t.ro, t.yi, t.xi, t.leadRet, t.perp,
             t.ex, t.ey, t.driveI, t.driveD, t.turnI, t.turnD,
-            t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip);
+            t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip, t.bat, t.mtemp);
     }
 
     emit("");

@@ -23,7 +23,7 @@ const STORAGE_KEY = 'lucaslib-debugger.library';
 const MAX_ITEMS = 25;
 // Bump when the sample format changes (e.g. new govern fields) so stale seeded
 // libraries refresh instead of showing samples missing the new columns.
-const SEED_VERSION = 12;
+const SEED_VERSION = 14;
 
 function makeId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -56,18 +56,23 @@ function load(): LibraryState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as LibraryState;
-      // Reseed if the format version changed (drops stale samples).
-      if (
-        parsed &&
-        Array.isArray(parsed.items) &&
-        parsed.items.length > 0 &&
-        parsed.seedVersion === SEED_VERSION
-      ) {
-        return {
-          items: parsed.items,
-          activeId: parsed.activeId ?? parsed.items[0].id,
-          seedVersion: SEED_VERSION
-        };
+      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        if (parsed.seedVersion === SEED_VERSION) {
+          return {
+            items: parsed.items,
+            activeId: parsed.activeId ?? parsed.items[0].id,
+            seedVersion: SEED_VERSION
+          };
+        }
+        // Format changed: refresh the stale seeded samples but KEEP the user's
+        // own imports (anything not named like a sample), listed first.
+        const sampleNames = new Set(sampleAutons.map((a) => a.name));
+        const kept = parsed.items.filter((a) => !sampleNames.has(a.name));
+        const items = [...kept, ...seedItems()].slice(0, MAX_ITEMS);
+        const activeId = kept.some((a) => a.id === parsed.activeId)
+          ? parsed.activeId!
+          : items[0].id;
+        return { items, activeId, seedVersion: SEED_VERSION };
       }
     }
   } catch {

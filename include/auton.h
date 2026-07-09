@@ -3,3 +3,5 @@
 #include "tuner.h"
 
 void exampleAuton();
+void redAuto();
+void blueAuto();

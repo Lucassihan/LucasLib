@@ -2,6 +2,7 @@
   import TopBar from '$lib/components/TopBar.svelte';
   import FieldPanel from '$lib/components/FieldPanel.svelte';
   import GraphPanel from '$lib/components/GraphPanel.svelte';
+  import MovementStrip from '$lib/components/MovementStrip.svelte';
   import Timeline from '$lib/components/Timeline.svelte';
   import MovementInspector from '$lib/components/MovementInspector.svelte';
   import PidReadout from '$lib/components/PidReadout.svelte';
@@ -10,13 +11,56 @@
   import MotorDiagram from '$lib/components/MotorDiagram.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
   import LibraryPanel from '$lib/components/LibraryPanel.svelte';
-  import { traceState, movementAt, tickAt } from '$lib/stores/trace.svelte';
+  import { traceState, movementAt, tickAt, togglePlay, stepTicks, jumpMovement } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
-  import { PID_TERM, isLyPose, isVolDrive } from '$lib/trace/labels';
+  import { PID_TERM, COLORS, isLyPose, isVolDrive } from '$lib/trace/labels';
   import type { Tick } from '$lib/trace/types';
 
   let settingsOpen = $state(false);
   let libraryOpen = $state(false);
+
+  // Global playback shortcuts (guide lives behind the ⌨ button in the timeline).
+  // Inactive while a dialog is open or the focus is in a text field.
+  function onKey(e: KeyboardEvent) {
+    if (settingsOpen || libraryOpen) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    if (t && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    // a focused button owns Space (avoid double-toggling via the play button)
+    if (e.key === ' ' && t && t.closest('button')) return;
+    switch (e.key) {
+      case ' ':
+        e.preventDefault();
+        togglePlay();
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        stepTicks(e.shiftKey ? -10 : -1);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        stepTicks(e.shiftKey ? 10 : 1);
+        break;
+      case '[':
+        jumpMovement(-1);
+        break;
+      case ']':
+        jumpMovement(1);
+        break;
+      // ↑/↓ = start/end (Mac keyboards have no Home/End; those still work too)
+      case 'ArrowUp':
+      case 'Home':
+        e.preventDefault();
+        traceState.playing = false;
+        traceState.time = 0;
+        break;
+      case 'ArrowDown':
+      case 'End':
+        e.preventDefault();
+        traceState.playing = false;
+        traceState.time = traceState.trace.duration;
+        break;
+    }
+  }
 
   // Graphs scope to the movement under the scrubber.
   const active = $derived(movementAt(traceState.time));
@@ -51,10 +95,10 @@
 
   // normal: single governed-output line per channel
   const driveNormal = $derived([
-    { data: activeTicks.map((t) => ({ t: t.t, v: t.drivePow })), color: '#3b82f6' }
+    { data: activeTicks.map((t) => ({ t: t.t, v: t.drivePow })), color: COLORS.drive }
   ]);
   const turnNormal = $derived([
-    { data: activeTicks.map((t) => ({ t: t.t, v: turnVal(t) })), color: '#ef4444' }
+    { data: activeTicks.map((t) => ({ t: t.t, v: turnVal(t) })), color: COLORS.turn }
   ]);
 
   // breakdown: separate P / I / D term lines (kP·e, kI·∫e, kD·ė)
@@ -88,8 +132,8 @@
   const lyOmegaSeries = $derived(
     lyActive
       ? [
-          { data: activeTicks.map((t) => ({ t: t.t, v: t.turnOut - lyLat(t) })), color: '#fb923c' },
-          { data: activeTicks.map((t) => ({ t: t.t, v: lyLat(t) })), color: '#2dd4bf' }
+          { data: activeTicks.map((t) => ({ t: t.t, v: t.turnOut - lyLat(t) })), color: COLORS.lyP },
+          { data: activeTicks.map((t) => ({ t: t.t, v: lyLat(t) })), color: COLORS.lyLat }
         ]
       : []
   );
@@ -101,19 +145,21 @@
     settings.showBreakdown ? (lyActive ? lyOmegaSeries : turnBreakdown) : turnNormal
   );
 
-  const pidLegend = [
+  const pidLegend = $derived([
     { label: 'P', color: PID_TERM.p },
     { label: 'I', color: PID_TERM.i },
     { label: 'D', color: PID_TERM.d }
-  ];
-  const lyLegend = [
-    { label: 'P', color: '#fb923c' },
-    { label: 'Lyap', color: '#2dd4bf' }
-  ];
+  ]);
+  const lyLegend = $derived([
+    { label: 'P', color: COLORS.lyP },
+    { label: 'Lyap', color: COLORS.lyLat }
+  ]);
 
   const driveActive = $derived(driveNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
   const turnActive = $derived(turnNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 <div class="app">
   <TopBar
@@ -127,6 +173,7 @@
 
     <div class="field-col">
       <FieldPanel />
+      <MovementStrip />
       <Timeline />
     </div>
 

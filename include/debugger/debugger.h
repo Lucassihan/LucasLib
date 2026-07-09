@@ -21,8 +21,8 @@
 namespace debugger {
 
 // ---- Lifecycle: call once around the auton ----
-// start() snapshots the header (pose, trackwidth, gains, governors) and arms
-// capture. stop() auto-dumps to the console (no input needed) once
+// start() snapshots the header (pose, battery, trackwidth, gains, governors)
+// and arms capture. stop() auto-dumps to the console (no input needed) once
 // minSecondsSinceStart have elapsed. It prints the trace SEVERAL times back to
 // back: VEXcode re-opens the USB port mid-stream so the first copy is partial,
 // but the rest stream complete and the importer keeps only the last complete

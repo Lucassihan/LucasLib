@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Debugger — decorative deck (live)</title>
+<style>
+  :root {
+    --bg-deep: #0b0b0b; --bg-base: #101010; --bg-surface: #181818;
+    --bg-elevated: #202020; --bg-raised: #282828;
+    --border-subtle: #303030; --border-light: #404040;
+    --text-ghost: #606060; --text-muted: #7c7c7c; --text-dim: #909090;
+    --text-secondary: #a8a8a8; --text-primary: #cfcfcf; --text-emphasis: #eeeeee;
+    --ring: inset 0 0 0 1px rgba(255,255,255,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    font-family: 'Manrope Variable', Manrope, system-ui, -apple-system, sans-serif;
+    color: var(--text-secondary);
+    padding: 26px 32px 48px;
+  }
+  header { max-width: 1080px; margin: 0 auto 18px; }
+  h1 { font-size: 16px; font-weight: 800; color: var(--text-emphasis); }
+  .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .deck { max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card {
+    position: relative; background: var(--bg-surface); border-radius: 8px;
+    box-shadow: var(--ring); padding: 14px 16px 14px;
+  }
+  .num { position: absolute; top: 10px; right: 14px; font-size: 24px; font-weight: 800; color: #2e2e2e; }
+  h3 { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+  .cap { font-size: 10.5px; line-height: 1.5; color: var(--text-dim); margin-bottom: 10px; }
+  .cap b { color: var(--text-secondary); font-weight: 600; }
+  .demo {
+    position: relative; height: 210px; background: var(--bg-base);
+    border-radius: 6px; box-shadow: var(--ring); overflow: hidden;
+  }
+  .demo svg { display: block; width: 100%; height: 100%; }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+
+  /* 4 · stage badge flash */
+  .stage-badges { position: absolute; top: 10px; left: 12px; display: flex; gap: 5px; }
+  .sbadge {
+    font-size: 9px; font-weight: 700; letter-spacing: .05em; padding: 4px 10px;
+    border-radius: 5px; background: var(--bg-surface); color: var(--text-ghost);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+    transition: all .25s ease;
+  }
+  .sbadge.on { background: #10222a; color: #22d3ee; box-shadow: inset 0 0 0 1px #22d3ee; }
+  .sbadge.flash { animation: badgeflash .5s ease; }
+  @keyframes badgeflash {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.12); box-shadow: inset 0 0 0 1px #22d3ee, 0 0 18px rgba(34,211,238,.5); }
+    100% { transform: scale(1); }
+  }
+
+  /* 5 · odometer */
+  .pose-mock {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+  }
+  .odo-label { font-size: 8px; font-weight: 700; letter-spacing: .12em; color: var(--text-muted); }
+  .odo { display: flex; align-items: baseline; font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .odo .unit { font-size: 18px; color: var(--text-dim); margin-left: 2px; }
+  .digit { position: relative; width: .62em; height: 1em; overflow: hidden; font-size: 34px; font-weight: 700; color: var(--text-emphasis); }
+  .digit .col { position: absolute; left: 0; top: 0; line-height: 1em; text-align: center; width: 100%;
+                transition: transform .38s cubic-bezier(.3,1.4,.4,1); }
+  .digit .col span { display: block; height: 1em; }
+  .odo .dot-sep { font-size: 34px; font-weight: 700; color: var(--text-emphasis); }
+  .xy-row { display: flex; gap: 10px; }
+  .xy-tile { background: var(--bg-surface); border-radius: 6px; box-shadow: var(--ring); padding: 7px 12px; }
+  .xy-tile .k { font-size: 8px; color: var(--text-dim); }
+  .xy-tile .odo-sm { display: flex; font-family: ui-monospace, Menlo, monospace; }
+  .xy-tile .digit { font-size: 15px; font-weight: 600; }
+  .xy-tile .dot-sep { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+
+  /* 6 · load sweep */
+  .scanline {
+    position: absolute; top: 0; bottom: 0; width: 60px; left: -80px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05) 45%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.05) 55%, transparent);
+    pointer-events: none;
+  }
+  .demo.loading .scanline { animation: sweep 1.15s cubic-bezier(.5,0,.4,1) forwards; }
+  @keyframes sweep { to { left: 105%; } }
+  .drawpath { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); }
+  .demo.loading .drawpath { animation: drawin 1s cubic-bezier(.45,0,.3,1) forwards; }
+  @keyframes drawin { to { stroke-dashoffset: 0; } }
+  .wp-pop { opacity: 0; transform-origin: center; transform-box: fill-box; }
+  .demo.loading .wp-pop { animation: pop .4s cubic-bezier(.3,1.6,.5,1) forwards; }
+  @keyframes pop { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Decorative deck — pure eye candy, zero function</h1>
+  <div class="sub">All six run live below (this supersedes the old motion deck). Reply with numbers to build, e.g. "1, 3, 5".</div>
+</header>
+
+<div class="deck">
+
+  <!-- 1 · comet playhead -->
+  <div class="card">
+    <div class="num">1</div>
+    <h3>Comet playhead</h3>
+    <div class="cap">During playback the graph playhead becomes a <b>glowing dot riding the curve</b> with a fading tail. Paused = the plain dashed line you have now.</div>
+    <div class="demo"><svg id="comet" viewBox="0 0 500 210" preserveAspectRatio="none"></svg></div>
+  </div>
+
+  <!-- 2 · onion-skin trail -->
+  <div class="card">
+    <div class="num">2</div>
+    <h3>Onion-skin robot trail</h3>
+    <div class="cap">The field robot leaves <b>fading afterimages</b> (~150 ms apart) while playing — you can read speed and rotation from the spacing, like animation onion skins.</div>
+    <div class="demo"><svg id="onion" viewBox="0 0 500 210"></svg></div>
+  </div>
+
+  <!-- 3 · wheel spin + underglow -->
+  <div class="card">
+    <div class="num">3</div>
+    <h3>Wheel spin + underglow</h3>
+    <div class="cap">The robot's wheels <b>actually spin</b> at each side's commanded voltage (watch them counter-rotate in turns), over a soft glow that breathes with total output.</div>
+    <div class="demo">
+      <svg id="wheels" viewBox="0 0 500 210"></svg>
+    </div>
+  </div>
+
+  <!-- 4 · stage-flip pulse -->
+  <div class="card">
+    <div class="num">4</div>
+    <h3>Stage-flip pulse</h3>
+    <div class="cap">The instant a stage latches (FAR → CLOSE at the heading-disable circle), a <b>ring pulses out of the robot</b> and the stage badge flashes. Blink and you'd miss the moment — this makes it land.</div>
+    <div class="demo">
+      <div class="stage-badges">
+        <span class="sbadge on" id="b-far">FAR</span>
+        <span class="sbadge" id="b-close">CLOSE</span>
+      </div>
+      <svg id="pulse" viewBox="0 0 500 210"></svg>
+    </div>
+  </div>
+
+  <!-- 5 · odometer digits -->
+  <div class="card">
+    <div class="num">5</div>
+    <h3>Rolling odometer digits</h3>
+    <div class="cap">Pose numbers <b>roll like mechanical counters</b> instead of flickering — each digit column slides to its next value. Heading hero + X/Y tiles.</div>
+    <div class="demo">
+      <div class="pose-mock">
+        <div>
+          <div class="odo" id="odo-h"></div>
+        </div>
+        <div class="odo-label">HEADING</div>
+        <div class="xy-row">
+          <div class="xy-tile"><span class="k">X</span><div class="odo-sm" id="odo-x"></div></div>
+          <div class="xy-tile"><span class="k">Y</span><div class="odo-sm" id="odo-y"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 · trace load sweep -->
+  <div class="card">
+    <div class="num">6</div>
+    <h3>Trace load sweep</h3>
+    <div class="cap">When a trace loads, the <b>paths draw themselves in</b> under a quick scanline sweep and the waypoints pop in — a one-second flourish, then it's done.</div>
+    <div class="demo" id="loaddemo">
+      <svg viewBox="0 0 500 210">
+        <line x1="125" y1="10" x2="125" y2="200" stroke="#1b1b1b"/>
+        <line x1="250" y1="10" x2="250" y2="200" stroke="#1b1b1b"/>
+        <line x1="375" y1="10" x2="375" y2="200" stroke="#1b1b1b"/>
+        <line x1="20" y1="105" x2="480" y2="105" stroke="#1b1b1b"/>
+        <path class="drawpath" style="--len:300" d="M60 175 L 220 175" fill="none" stroke="#3b82f6" stroke-width="2"/>
+        <path class="drawpath" style="--len:340; animation-delay:.25s" d="M220 175 C 300 172, 330 90, 400 62" fill="none" stroke="#eab308" stroke-width="2"/>
+        <circle class="wp-pop" style="animation-delay:.85s" cx="220" cy="175" r="7" fill="none" stroke="#3b82f6" stroke-width="1.6"/>
+        <circle class="wp-pop" style="animation-delay:1.05s" cx="400" cy="62" r="7" fill="none" stroke="#eab308" stroke-width="1.6"/>
+      </svg>
+      <div class="scanline"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const SVGNS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+// ---------- 1 · comet playhead ----------
+(() => {
+  const svg = document.getElementById('comet');
+  const W = 500, H = 210, L = 40, R = 14, T = 16, B = 22, TMAX = 3.2;
+  const volts = (t) => Math.min(12, 30 * t) * (t < 1.8 ? 1 : Math.exp(-(t - 1.8) * 1.5));
+  const X = (t) => L + (t / TMAX) * (W - L - R);
+  const Y = (v) => T + (1 - v / 12) * (H - T - B);
+  el('line', { x1: L, y1: T, x2: L, y2: H - B, stroke: '#2a2a2a' }, svg);
+  el('line', { x1: L, y1: Y(0), x2: W - R, y2: Y(0), stroke: '#2a2a2a' }, svg);
+  let pts = [];
+  for (let i = 0; i <= 150; i++) { const t = i / 150 * TMAX; pts.push(X(t) + ',' + Y(volts(t))); }
+  el('polyline', { points: pts.join(' '), fill: 'none', stroke: '#3b82f6', 'stroke-width': 1.5 }, svg);
+  const play = el('line', { y1: T, y2: H - B, stroke: '#909090', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: .5 }, svg);
+  const TRAIL = 9;
+  const trail = [];
+  for (let i = TRAIL - 1; i >= 0; i--) {
+    trail.push(el('circle', { r: 2 + i * 0.28, fill: '#93c5fd', opacity: 0 }, svg));
+  }
+  const head = el('circle', { r: 3.6, fill: '#dbeafe' }, svg);
+  const glow = el('circle', { r: 9, fill: 'rgba(147,197,253,0.14)' }, svg);
+  const hist = [];
+  function frame(ts) {
+    const t = ((ts / 4200) % 1.15) / 1 * TMAX;
+    const tc = Math.min(TMAX, t);
+    const x = X(tc), y = Y(volts(tc));
+    play.setAttribute('x1', x); play.setAttribute('x2', x);
+    hist.unshift({ x, y });
+    if (hist.length > TRAIL * 3) hist.pop();
+    trail.forEach((c, i) => {
+      const h = hist[Math.min(hist.length - 1, (i + 1) * 3)];
+      c.setAttribute('cx', h.x); c.setAttribute('cy', h.y);
+      c.setAttribute('opacity', (0.4 * (1 - i / TRAIL)).toFixed(2));
+    });
+    head.setAttribute('cx', x); head.setAttribute('cy', y);
+    glow.setAttribute('cx', x); glow.setAttribute('cy', y);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+// ---------- shared robot drawing ----------
+function drawBot(parent, w, h, opts = {}) {
+  const g = el('g', {}, parent);
+  el('rect', { x: -w/2, y: -h/2, width: w, height: h, rx: 2.5,
+    fill: 'rgba(204,204,204,0.12)', stroke: '#cccccc', 'stroke-width': opts.sw ?? 1.4 }, g);
+  el('rect', { x: -w/2 + 3, y: -h/2 - 3.5, width: 6, height: 6, rx: 1.4, fill: '#cccccc', opacity: .85 }, g);
+  el('rect', { x: w/2 - 9, y: -h/2 - 3.5, width: 6, height: 6, rx: 1.4, fill: '#cccccc', opacity: .85 }, g);
+  return g;
+}
+
+// ---------- 2 · onion skin ----------
+(() => {
+  const svg = document.getElementById('onion');
+  for (let x = 100; x < 500; x += 100) el('line', { x1: x, y1: 8, x2: x, y2: 202, stroke: '#1b1b1b' }, svg);
+  el('line', { x1: 15, y1: 105, x2: 485, y2: 105, stroke: '#1b1b1b' }, svg);
+  const bez = (p0, c1, c2, p3, u) => {
+    const m = 1 - u;
+    return {
+      x: m*m*m*p0[0] + 3*m*m*u*c1[0] + 3*m*u*u*c2[0] + u*u*u*p3[0],
+      y: m*m*m*p0[1] + 3*m*m*u*c1[1] + 3*m*u*u*c2[1] + u*u*u*p3[1]
+    };
+  };
+  const P = (u) => bez([55,170],[200,175],[240,55],[440,58], u);
+  let path = [];
+  for (let i = 0; i <= 100; i++) { const p = P(i/100); path.push(p.x + ',' + p.y); }
+  el('polyline', { points: path.join(' '), fill: 'none', stroke: '#3b82f6', 'stroke-width': 1.6 }, svg);
+  const hdg = (u) => {
+    const a = P(Math.max(0, u - .01)), b = P(Math.min(1, u + .01));
+    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI + 90;
+  };
+  const GHOSTS = 5;
+  const gs = [];
+  for (let i = GHOSTS; i >= 1; i--) {
+    const g = drawBot(svg, 30, 36, { sw: 1.2 });
+    g.setAttribute('opacity', (0.05 + 0.05 * (GHOSTS - i)).toFixed(2));
+    gs.push({ g, back: i * 0.055 });
+  }
+  const main = drawBot(svg, 30, 36);
+  function frame(ts) {
+    const u = Math.min(1, ((ts / 5200) % 1.2));
+    gs.forEach(({ g, back }) => {
+      const ug = Math.max(0, u - back);
+      const p = P(ug);
+      g.setAttribute('transform', `translate(${p.x} ${p.y}) rotate(${hdg(ug)})`);
+    });
+    const p = P(u);
+    main.setAttribute('transform', `translate(${p.x} ${p.y}) rotate(${hdg(u)})`);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+// ---------- 3 · wheel spin + underglow ----------
+(() => {
+  const svg = document.getElementById('wheels');
+  const cx = 250, cy = 108, W = 96, H = 116;
+  const glow = el('ellipse', { cx, cy: cy + 10, rx: 90, ry: 46, fill: 'rgba(59,130,246,0.10)' }, svg);
+  const g = el('g', { transform: `translate(${cx} ${cy})` }, svg);
+  el('rect', { x: -W/2, y: -H/2, width: W, height: H, rx: 6, fill: 'rgba(204,204,204,0.10)', stroke: '#cccccc', 'stroke-width': 2 }, g);
+  el('rect', { x: -W/2 + 10, y: -H/2 - 9, width: 18, height: 15, rx: 3.5, fill: '#cccccc', opacity: .85 }, g);
+  el('rect', { x: W/2 - 28, y: -H/2 - 9, width: 18, height: 15, rx: 3.5, fill: '#cccccc', opacity: .85 }, g);
+  // 3 wheels per side; each wheel is a rounded rect with an animated tread line
+  const treads = { l: [], r: [] };
+  [-1, 1].forEach((side) => {
+    for (let i = 0; i < 3; i++) {
+      const wx = side * (W/2 - 13), wy = -H/2 + 22 + i * 36;
+      el('rect', { x: wx - 7, y: wy - 14, width: 14, height: 28, rx: 4, fill: 'none', stroke: '#cccccc', 'stroke-width': 1.6, opacity: .75 }, g);
+      const tread = el('line', { x1: wx, y1: wy - 12, x2: wx, y2: wy + 12, stroke: '#cccccc', 'stroke-width': 2.2, 'stroke-dasharray': '3.5 4.5', opacity: .8 }, g);
+      treads[side < 0 ? 'l' : 'r'].push(tread);
+    }
+  });
+  const lv = el('text', { x: cx - 105, y: cy + 4, 'text-anchor': 'end', 'font-size': 13, 'font-weight': 700, fill: '#909090', 'font-family': 'ui-monospace, Menlo, monospace' }, svg);
+  const rv = el('text', { x: cx + 105, y: cy + 4, 'font-size': 13, 'font-weight': 700, fill: '#909090', 'font-family': 'ui-monospace, Menlo, monospace' }, svg);
+  let offL = 0, offR = 0, last = 0;
+  function frame(ts) {
+    const dt = Math.min(50, ts - last); last = ts;
+    const ph = ts / 2400;
+    const vl = 6 + 6 * Math.sin(ph);           // left volts
+    const vr = 6 + 6 * Math.sin(ph + Math.PI * 0.55); // right volts (lags → "turning")
+    offL -= vl * dt * 0.008;
+    offR -= vr * dt * 0.008;
+    treads.l.forEach((t) => t.setAttribute('stroke-dashoffset', offL.toFixed(2)));
+    treads.r.forEach((t) => t.setAttribute('stroke-dashoffset', offR.toFixed(2)));
+    lv.textContent = '+' + vl.toFixed(1) + ' V';
+    rv.textContent = '+' + vr.toFixed(1) + ' V';
+    const total = (vl + vr) / 24;
+    glow.setAttribute('fill', `rgba(59,130,246,${(0.04 + total * 0.14).toFixed(3)})`);
+    glow.setAttribute('rx', (70 + total * 30).toFixed(1));
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+// ---------- 4 · stage pulse ----------
+(() => {
+  const svg = document.getElementById('pulse');
+  const bFar = document.getElementById('b-far');
+  const bClose = document.getElementById('b-close');
+  const tx = 390, ty = 105, HDD = 62;
+  for (let x = 100; x < 500; x += 100) el('line', { x1: x, y1: 8, x2: x, y2: 202, stroke: '#1b1b1b' }, svg);
+  el('circle', { cx: tx, cy: ty, r: HDD, fill: 'none', stroke: '#22c55e', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: .5 }, svg);
+  el('circle', { cx: tx, cy: ty, r: 6, fill: 'none', stroke: '#22c55e', 'stroke-width': 1.6 }, svg);
+  el('line', { x1: 55, y1: 160, x2: tx, y2: ty, stroke: '#22c55e', 'stroke-width': 1.4, opacity: .5 }, svg);
+  const ring = el('circle', { fill: 'none', stroke: '#22d3ee', 'stroke-width': 2, opacity: 0 }, svg);
+  const bot = drawBot(svg, 28, 34);
+  let fired = false, fireT = 0;
+  function frame(ts) {
+    const u = (ts / 4600) % 1.25;
+    const uu = Math.min(1, u);
+    const x = 55 + (tx - 55) * uu, y = 160 + (ty - 160) * uu;
+    const ang = Math.atan2(ty - 160, tx - 55) * 180 / Math.PI + 90;
+    bot.setAttribute('transform', `translate(${x} ${y}) rotate(${ang})`);
+    const d = Math.hypot(tx - x, ty - y);
+    const inside = d < HDD;
+    if (inside && !fired) {
+      fired = true; fireT = ts;
+      bClose.classList.add('on', 'flash');
+      bFar.classList.remove('on');
+      setTimeout(() => bClose.classList.remove('flash'), 550);
+      ring.setAttribute('cx', x); ring.setAttribute('cy', y);
+    }
+    if (u < 0.02 && fired) { fired = false; bFar.classList.add('on'); bClose.classList.remove('on'); }
+    if (fired) {
+      const k = Math.min(1, (ts - fireT) / 700);
+      ring.setAttribute('r', (6 + k * 55).toFixed(1));
+      ring.setAttribute('opacity', (0.7 * (1 - k)).toFixed(2));
+    } else {
+      ring.setAttribute('opacity', 0);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+// ---------- 5 · odometer ----------
+(() => {
+  function makeOdo(host, layout) {
+    // layout: array of 'd' (digit) or '.' — builds columns, returns setter
+    const cols = [];
+    for (const ch of layout) {
+      if (ch === '.') {
+        const d = document.createElement('span');
+        d.className = 'dot-sep';
+        d.textContent = '.';
+        host.appendChild(d);
+        cols.push(null);
+      } else {
+        const digit = document.createElement('span');
+        digit.className = 'digit';
+        const col = document.createElement('span');
+        col.className = 'col';
+        for (let i = 0; i <= 9; i++) {
+          const s = document.createElement('span');
+          s.textContent = String(i);
+          col.appendChild(s);
+        }
+        digit.appendChild(col);
+        host.appendChild(digit);
+        cols.push(col);
+      }
+    }
+    return (str) => {
+      let ci = 0;
+      for (const ch of str) {
+        const col = cols[ci++];
+        if (col && /\d/.test(ch)) col.style.transform = `translateY(-${ch}em)`;
+      }
+    };
+  }
+  const setH = makeOdo(document.getElementById('odo-h'), ['d','d','d','.','d']);
+  document.getElementById('odo-h').insertAdjacentHTML('beforeend', '<span class="unit">°</span>');
+  const setX = makeOdo(document.getElementById('odo-x'), ['d','d','.','d','d']);
+  const setY = makeOdo(document.getElementById('odo-y'), ['d','d','.','d','d']);
+  const pad = (n, w) => String(n).padStart(w, '0');
+  setInterval(() => {
+    const t = performance.now() / 1000;
+    const h = (180 + 175 * Math.sin(t * 0.9)) % 360;
+    const x = 48 + 46 * Math.sin(t * 0.6);
+    const y = 48 + 46 * Math.cos(t * 0.45);
+    setH(pad(Math.round(h * 10), 4));   // ddd.d
+    setX(pad(Math.round(x * 100), 4));  // dd.dd
+    setY(pad(Math.round(y * 100), 4));
+  }, 420);
+})();
+
+// ---------- 6 · load sweep ----------
+(() => {
+  const demo = document.getElementById('loaddemo');
+  function run() {
+    demo.classList.remove('loading');
+    void demo.offsetWidth; // restart CSS animations
+    demo.classList.add('loading');
+  }
+  run();
+  setInterval(run, 3800);
+})();
+</script>
+</body>
+</html>

@@ -142,7 +142,8 @@ void Odometry::trackHeading() {
   double dhDeg = resolveHeading(dIMU1, dIMU2, dLDeg, dRDeg);
 
   h += dhDeg;
-  dhAccumDeg += dhDeg;   // bank heading change for the next Y accumulation's arc radius
+  dhAccumDeg  += dhDeg;  // bank heading change for the next Y accumulation's midpoint + arc radius
+  dhAccumDegX += dhDeg;  // parallel bank so trackX can place its step at the X window midpoint
 
   lastIMU1     = curIMU1;
   lastLeftPos  = curLeft;
@@ -181,13 +182,17 @@ double Odometry::xRawDeltaDeg() {
   return xRawPosition() - lastXPos;
 }
 
-//trackY -- scale the (already past-threshold) raw Y rotation to inches and integrate it into
-//the global pose along the current heading (HongKou straight-line; 0 = north, CW+).
+//trackY -- scale the (already past-threshold) raw Y rotation to inches and integrate it into the
+//global pose. The step is placed along the MIDPOINT heading of the window it accrued over, not the
+//end heading: h is the latest (end-of-window) heading and dhAccumDeg is the swing across the same
+//window, so h - dhAccumDeg/2 is the average. This is second-order accurate on a simultaneous
+//move-and-turn (and on a banked chunk released after several ticks) instead of biasing toward the
+//heading the robot finished at. 0 = north, CW+.
 void Odometry::trackY(double rawDeltaDeg) {
   double dYInches = hasYTracker ? trackerDegsToInches(rawDeltaDeg, cfg.yTrackerDiameter)
                                 : motorDegsToInches(rawDeltaDeg);
 
-  double headingRad = TO_RAD(h);
+  double headingRad = TO_RAD(h - dhAccumDeg / 2.0);  // window midpoint, not end
   double gdx = dYInches * sin(headingRad);
   double gdy = dYInches * cos(headingRad);
 
@@ -202,8 +207,8 @@ void Odometry::trackY(double rawDeltaDeg) {
 
   // Velocity and arc radius over the interval since the last Y accumulation, so forward
   // travel and heading change span the same window. Held (not zeroed) between accumulations.
-  uint64_t now = vex::timer::systemHighResolution();
-  double dtSec = (now - lastTrackTime) / 1000000.0;
+  double now = Brain.timer(msec);
+  double dtSec = (now - lastTrackTime) / 1000.0;
   if (lastTrackTime > 0 && dtSec > 0) velocity = dYInches / dtSec;
   lastTrackTime = now;
 
@@ -215,12 +220,14 @@ void Odometry::trackY(double rawDeltaDeg) {
   lastYPos += rawDeltaDeg;
 }
 
-//trackX -- same as trackY for the lateral axis. Local +X maps to global (cos h, -sin h).
-//Only reached when an X tracker exists (otherwise rawDeltaDeg stays 0 and is filtered).
+//trackX -- same as trackY for the lateral axis, placed along the MIDPOINT heading of its own
+//window (dhAccumDegX is the heading swing banked since the last X accumulation). Local +X maps to
+//global (cos h, -sin h). Only reached when an X tracker exists (otherwise rawDeltaDeg stays 0 and
+//is filtered).
 void Odometry::trackX(double rawDeltaDeg) {
   double dXInches = trackerDegsToInches(rawDeltaDeg, cfg.xTrackerDiameter);
 
-  double headingRad = TO_RAD(h);
+  double headingRad = TO_RAD(h - dhAccumDegX / 2.0);  // window midpoint, not end
   double gdx =  dXInches * cos(headingRad);
   double gdy = -dXInches * sin(headingRad);
 
@@ -234,6 +241,7 @@ void Odometry::trackX(double rawDeltaDeg) {
   xInchesTracked += dXInches;
 
   lastXPos += rawDeltaDeg;
+  dhAccumDegX = 0;  // X window consumed; start banking the heading swing afresh for the next step
 }
 
 //readWall
@@ -281,7 +289,7 @@ void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
 //Absolute field bearing (deg, 0 = +Y, CW+) from the robot to (targetX, targetY),
 //flipped 180 if backward. This is the raw turn TARGET; wrappedPointHeadingError is
 //just this minus current heading, wrapped. Kept separate so callers can offset the
-//target (e.g. turnOvershoot) BEFORE wrapping — adding to an already-wrapped error
+//target (e.g. turnPID.targetOffset) BEFORE wrapping — adding to an already-wrapped error
 //would turn the long way around near the ±180 boundary.
 double Odometry::angleToPoint(double targetX, double targetY, bool backward) {
   double targetH = atan2(targetX - x, targetY - y) * (180.0 / M_PI);

@@ -3,9 +3,10 @@
 
   // A commanded target marker (dot) whose "halo" encodes the movement's spatial
   // exit condition:
-  //   - exitDist  -> a circle of that radius (exit when within it)
+  //   - exitDist  -> a circle of that radius (settle when within it)
   //   - perpLine  -> the perpendicular exit line (⊥ heading) + a fainter
-  //                  activation-radius circle (the check arms inside it)
+  //                  proximity circle of radius perpLine (exits when the robot's
+  //                  distance to the line drops to perpLine)
   //   - otherwise -> a faint settle-tolerance circle (smallError)
   let {
     x,

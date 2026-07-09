@@ -1,6 +1,6 @@
 <script lang="ts">
   import { library, removeAuton, summarize, formatRelative } from '$lib/stores/library.svelte';
-  import { loadFromLibrary, loadTrace } from '$lib/stores/trace.svelte';
+  import { loadFromLibrary, loadTrace, traceState, setGhost, clearGhost } from '$lib/stores/trace.svelte';
   import { invoke, Channel } from '@tauri-apps/api/core';
 
   let { open = $bindable() }: { open: boolean } = $props();
@@ -65,6 +65,12 @@
     close();
   }
 
+  // Pin a run as the comparison ghost (faint overlay on the field).
+  function toggleGhost(id: string) {
+    if (traceState.ghost?.id === id) clearGhost();
+    else setGhost(id);
+  }
+
   function fmtDuration(ms: number): string {
     if (ms < 1000) return `${ms} ms`;
     const s = ms / 1000;
@@ -122,6 +128,7 @@
               <div class="line1">
                 <span class="name">{a.name}</span>
                 {#if active}<span class="badge">loaded</span>{/if}
+                {#if traceState.ghost?.id === a.id}<span class="badge ghost">ghost</span>{/if}
               </div>
               <div class="line2">
                 <span class="stat">{stats.movements} mvmt{stats.movements === 1 ? '' : 's'}</span>
@@ -130,6 +137,17 @@
                 <span class="dot">·</span>
                 <span class="ts" title={fmtAbs(a.importedAt)}>{formatRelative(a.importedAt)}</span>
               </div>
+            </button>
+            <button
+              class="ghostbtn"
+              class:on={traceState.ghost?.id === a.id}
+              onclick={() => toggleGhost(a.id)}
+              aria-label="Pin {a.name} as comparison ghost"
+              title="Overlay this run on the field as a ghost"
+            >
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">
+                <path d="M6 1.2 C3.5 1.2 2 3.1 2 5.4 V10.6 L3.35 9.4 L4.7 10.6 L6 9.4 L7.3 10.6 L8.65 9.4 L10 10.6 V5.4 C10 3.1 8.5 1.2 6 1.2 Z" />
+              </svg>
             </button>
             <button class="del" onclick={() => removeAuton(a.id)} aria-label="Remove {a.name}">×</button>
           </li>
@@ -381,6 +399,33 @@
   }
   .dot {
     color: var(--text-ghost);
+  }
+
+  .badge.ghost {
+    color: #b0b0c8;
+    box-shadow: inset 0 0 0 1px rgba(176, 176, 200, 0.35);
+  }
+
+  .ghostbtn {
+    display: flex;
+    align-items: center;
+    background: none;
+    border: none;
+    color: var(--text-ghost);
+    padding: 0 6px;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .ghostbtn svg {
+    width: 12px;
+    height: 12px;
+  }
+  .ghostbtn:hover {
+    color: var(--text-primary);
+    background: var(--bg-raised);
+  }
+  .ghostbtn.on {
+    color: #b0b0c8;
   }
 
   .del {

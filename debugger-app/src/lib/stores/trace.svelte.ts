@@ -20,10 +20,15 @@ export const traceState = $state<{
   trace: Trace;
   time: number; // current scrub position, ms
   playing: boolean;
+  speed: number; // playback rate multiplier (1 = real time)
+  // pinned comparison run, drawn as a faint second path/robot on the field
+  ghost: { id: string; name: string; trace: Trace } | null;
 }>({
   trace: parseTrace(initialText()),
   time: 0,
-  playing: false
+  playing: false,
+  speed: 1,
+  ghost: null
 });
 
 /** Load a freshly-imported trace and add it to the library. */
@@ -46,6 +51,17 @@ export function loadFromLibrary(id: string) {
   traceState.playing = false;
 }
 
+/** Pin a library entry as the comparison ghost. */
+export function setGhost(id: string) {
+  const a = getAuton(id);
+  if (!a) return;
+  traceState.ghost = { id, name: a.name, trace: parseTrace(a.text) };
+}
+
+export function clearGhost() {
+  traceState.ghost = null;
+}
+
 const wrapDeg = (a: number) => {
   while (a > 180) a -= 360;
   while (a < -180) a += 360;
@@ -55,8 +71,7 @@ const wrapDeg = (a: number) => {
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
 
 /** Index of the last tick at or before `time` (binary search). */
-function indexAt(time: number): number {
-  const ticks = traceState.trace.ticks;
+function indexAtIn(ticks: Tick[], time: number): number {
   if (ticks.length === 0) return -1;
   if (time <= ticks[0].t) return 0;
   if (time >= ticks[ticks.length - 1].t) return ticks.length - 1;
@@ -70,11 +85,15 @@ function indexAt(time: number): number {
   return lo;
 }
 
-/** Interpolated robot pose at `time`. */
-export function poseAt(time: number): { x: number; y: number; h: number } {
-  const ticks = traceState.trace.ticks;
+function indexAt(time: number): number {
+  return indexAtIn(traceState.trace.ticks, time);
+}
+
+/** Interpolated robot pose at `time` in any trace (used for the ghost too). */
+export function poseAtIn(trace: Trace, time: number): { x: number; y: number; h: number } {
+  const ticks = trace.ticks;
   if (ticks.length === 0) return { x: 0, y: 0, h: 0 };
-  const i = indexAt(time);
+  const i = indexAtIn(ticks, time);
   const a = ticks[i];
   const b = ticks[Math.min(i + 1, ticks.length - 1)];
   const span = b.t - a.t;
@@ -84,6 +103,46 @@ export function poseAt(time: number): { x: number; y: number; h: number } {
     y: lerp(a.y, b.y, u),
     h: a.h + wrapDeg(b.h - a.h) * u
   };
+}
+
+/** Interpolated robot pose at `time` in the loaded trace. */
+export function poseAt(time: number): { x: number; y: number; h: number } {
+  return poseAtIn(traceState.trace, time);
+}
+
+/** Play/pause, restarting from the top if the run already finished. */
+export function togglePlay() {
+  if (traceState.time >= traceState.trace.duration) traceState.time = 0;
+  traceState.playing = !traceState.playing;
+}
+
+/** Pause and move the playhead by n recorded ticks (10 ms samples). */
+export function stepTicks(n: number) {
+  const ticks = traceState.trace.ticks;
+  if (ticks.length === 0) return;
+  traceState.playing = false;
+  const i = indexAt(traceState.time);
+  const j = Math.max(0, Math.min(ticks.length - 1, i + n));
+  traceState.time = ticks[j].t;
+}
+
+/** Pause and jump between movement starts. Going back mid-movement first
+ *  snaps to the current movement's start (media-player convention). */
+export function jumpMovement(dir: 1 | -1) {
+  const moves = traceState.trace.movements;
+  if (moves.length === 0) return;
+  traceState.playing = false;
+  const cur = movementAt(traceState.time);
+  if (!cur) return;
+  const idx = moves.findIndex((m) => m.index === cur.index);
+  if (dir > 0) {
+    const next = moves[idx + 1];
+    traceState.time = next ? next.startTime : traceState.trace.duration;
+  } else if (traceState.time - cur.startTime > 120) {
+    traceState.time = cur.startTime;
+  } else {
+    traceState.time = moves[Math.max(0, idx - 1)].startTime;
+  }
 }
 
 /** The tick active at `time` (floor). */
