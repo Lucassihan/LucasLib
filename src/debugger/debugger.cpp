@@ -103,6 +103,24 @@ struct Pending {
 };
 static Pending pending;
 
+// Per-instance PID mirror. calculateOutput() pushes its running integral + locked
+// gains here via samplePID(); tick() reads them back by pointer. This is what lets
+// the PID class stay clean (no debugger-only fields on it). ≤8 slots covers the six
+// shared PIDs. derivative isn't mirrored — it's a real public field tick() reads.
+struct PidSnap {
+    const PID* p;
+    float      integral, kP, kI, kD;
+};
+static PidSnap pidSnaps[8];
+static int     pidSnapCount = 0;
+
+static const PidSnap* findSnap(const PID* p) {
+    for (int i = 0; i < pidSnapCount; i++) {
+        if (pidSnaps[i].p == p) return &pidSnaps[i];
+    }
+    return nullptr;
+}
+
 static uint32_t nowMs() {
     return (uint32_t) Brain.timer(msec);
 }
@@ -132,19 +150,22 @@ static Mv& newMove(const char* type, Kind kind) {
 static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
     m.exTimeout = ec.tOut;
     m.settleD   = ec.setD;
-    m.exDist    = ec.extD;
-    m.exPerp    = ec.pLine;
-    if (ec.pLine > 0)      m.exReason = "perpLine";
-    else if (ec.extD > 0)  m.exReason = "settle";
-    else                   m.exReason = "timeout";
+    m.exDist    = ec.setR;     // settle activation radius
+    m.exPerp    = ec.crossD;   // cross line offset toward the robot (perp-line exit)
+    if (ec.crossD >= 0)   m.exReason = "perpLine";
+    else if (ec.setR > 0) m.exReason = "settle";
+    else                  m.exReason = "timeout";
 }
 
 static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
     m.exTimeout = ec.tOut;
     m.settleD   = ec.setD;
-    m.exAng     = ec.extA;
-    if (ec.extA > 0) m.exReason = "settle";
-    else                m.exReason = "timeout";
+    m.exDist    = ec.setR;     // settle activation zone — DEGREES on a turn
+    m.exAng     = ec.extA;     // ungated "close enough" angle exit
+    // settle's zone is normally the wider of the two, so it trips first
+    if (ec.setR > 0)      m.exReason = "settle";
+    else if (ec.extA > 0) m.exReason = "angle";
+    else                  m.exReason = "timeout";
 }
 
 // =========================================================================
@@ -152,6 +173,7 @@ static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
 // =========================================================================
 void start(const char* name) {
     moveCount = tickCount = wallCount = 0;
+    pidSnapCount = 0;
     curMi = -1;
     startMs = nowMs();
     startPoseX = chassis.x;
@@ -221,7 +243,7 @@ void moveLyPose(double tx, double ty, double pathHeading, double turnDisable, co
     copyLateralEC(m, ec);
 }
 
-void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec, bool backward) {
+void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec) {
     Mv& m = newMove("boomerangTo", K_BOOMERANG);
     m.targetX     = bp.x;
     m.targetY     = bp.y;
@@ -235,7 +257,7 @@ void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec, bool b
     m.drivePidPtr = &drivePID;
     m.turnPidPtr  = &headingPID;
     copyLateralEC(m, ec);
-    if (ec.pLine <= 0) m.exReason = "perpLine";  // boomerang's natural exit
+    if (ec.crossD < 0) m.exReason = "perpLine";  // boomerang's natural exit
 }
 
 void moveVoltage(double left, double right) {
@@ -256,8 +278,8 @@ void tick() {
     // Lock in the channels' PID constants on the movement's first sampled tick
     // (by now each PID has run once, so its locked constants are valid).
     if (!m.constsCaptured) {
-        if (m.drivePidPtr) { m.dKp = m.drivePidPtr->activeKP; m.dKi = m.drivePidPtr->activeKI; m.dKd = m.drivePidPtr->activeKD; }
-        if (m.turnPidPtr)  { m.tKp = m.turnPidPtr->activeKP;  m.tKi = m.turnPidPtr->activeKI;  m.tKd = m.turnPidPtr->activeKD; }
+        if (const PidSnap* s = findSnap(m.drivePidPtr)) { m.dKp = s->kP; m.dKi = s->kI; m.dKd = s->kD; }
+        if (const PidSnap* s = findSnap(m.turnPidPtr))  { m.tKp = s->kP; m.tKi = s->kI; m.tKd = s->kD; }
         m.constsCaptured = true;
     }
 
@@ -278,9 +300,15 @@ void tick() {
     t.mtemp = (float)((fl.temperature(celsius) + ml.temperature(celsius) + bl.temperature(celsius) +
                        fr.temperature(celsius) + mr.temperature(celsius) + br.temperature(celsius)) / 6.0);
 
-    // per-channel integral / derivative for the breakdown graphs
-    if (m.drivePidPtr) { t.driveI = m.drivePidPtr->integral; t.driveD = m.drivePidPtr->derivative; }
-    if (m.turnPidPtr)  { t.turnI  = m.turnPidPtr->integral;  t.turnD  = m.turnPidPtr->derivative; }
+    // per-channel integral (from the samplePID snapshot) + derivative (real PID field)
+    if (m.drivePidPtr) {
+        if (const PidSnap* s = findSnap(m.drivePidPtr)) t.driveI = s->integral;
+        t.driveD = m.drivePidPtr->derivative;
+    }
+    if (m.turnPidPtr) {
+        if (const PidSnap* s = findSnap(m.turnPidPtr)) t.turnI = s->integral;
+        t.turnD = m.turnPidPtr->derivative;
+    }
 
     // overlay telemetry (lyPose ex/ey, boomerang carrot/ghost/slip)
     t.ex = pending.ex;  t.ey = pending.ey;
@@ -296,6 +324,22 @@ void tick() {
 
     m.endTime = t.t;
     pending = Pending{};
+}
+
+// =========================================================================
+// PID internals mirror (called at the end of PID::calculateOutput)
+// =========================================================================
+void samplePID(const PID* pid, double integral, double kP, double kI, double kD) {
+    if (!capturing || !pid) return;
+    for (int i = 0; i < pidSnapCount; i++) {
+        if (pidSnaps[i].p == pid) {
+            pidSnaps[i] = { pid, (float) integral, (float) kP, (float) kI, (float) kD };
+            return;
+        }
+    }
+    if (pidSnapCount < (int) (sizeof(pidSnaps) / sizeof(pidSnaps[0]))) {
+        pidSnaps[pidSnapCount++] = { pid, (float) integral, (float) kP, (float) kI, (float) kD };
+    }
 }
 
 // =========================================================================
@@ -318,14 +362,21 @@ void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY
 // =========================================================================
 // Read-wall corrections
 // =========================================================================
-void readWall(int wall, int sensor, double preX, double preY, double preH,
-              double postX, double postY, double postH) {
+// Pre-correction pose, snapshotted by readWallBefore() just before setPos() runs.
+static float preWallX = 0, preWallY = 0, preWallH = 0;
+
+void readWallBefore() {
+    if (!capturing) return;
+    preWallX = chassis.x;  preWallY = chassis.y;  preWallH = chassis.h;
+}
+
+void readWall(int wall, int sensor) {
     if (!capturing || wallCount >= WALL_CAP) return;
     Wall& w = walls[wallCount++];
     w.t = nowMs() - startMs;  w.mi = (uint16_t) (curMi < 0 ? 0 : curMi);
     w.wall = wall;  w.sensor = sensor;
-    w.preX = preX;  w.preY = preY;  w.preH = preH;
-    w.postX = postX;  w.postY = postY;  w.postH = postH;
+    w.preX = preWallX;    w.preY = preWallY;    w.preH = preWallH;       // from readWallBefore()
+    w.postX = chassis.x;  w.postY = chassis.y;  w.postH = chassis.h;      // corrected pose (exact, post-setPos)
 }
 
 bool screensMuted() { return muted; }

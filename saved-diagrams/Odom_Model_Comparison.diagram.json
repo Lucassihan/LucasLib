@@ -2,6 +2,7 @@
   "app": "lucaslib-diagram",
   "version": 2,
   "name": "Odom Model Comparison",
+  "font": "Georgia",
   "elements": [
     {
       "id": "781d3dd0-68a9-4e5d-9162-68fa38a24a6f",
@@ -14,16 +15,16 @@
       "kind": "arc",
       "points": [
         {
-          "x": -47.92661681359847,
-          "y": -23.435172803182354
+          "x": -47.926616813598486,
+          "y": -23.43517280318236
         },
         {
-          "x": -32.93314219102929,
-          "y": 10.539321249693893
+          "x": -41.2005898809681,
+          "y": 3.9905798200354554
         },
         {
-          "x": -0.15123168915099505,
-          "y": 23.901933416507184
+          "x": -23.50273870312816,
+          "y": 23.56890303130281
         }
       ]
     },
@@ -42,8 +43,8 @@
           "y": -23.43517280318236
         },
         {
-          "x": -0.15123168915100926,
-          "y": 23.901933416507177
+          "x": -23.502738703128145,
+          "y": 23.568903031302813
         }
       ]
     },
@@ -62,8 +63,8 @@
           "y": -23.435172803182354
         },
         {
-          "x": 0.02906320812320308,
-          "y": -23.54468119816656
+          "x": -24.562281155883635,
+          "y": -23.17231419649364
         }
       ],
       "headingEnd": null
@@ -79,23 +80,23 @@
       "kind": "straight",
       "points": [
         {
-          "x": 0.02906320812320308,
-          "y": -23.54468119816656
+          "x": -24.562281155883635,
+          "y": -23.17231419649364
         },
         {
-          "x": -0.15123168915099505,
-          "y": 23.901933416507184
+          "x": -24.742576053157833,
+          "y": 24.274300418180104
         }
       ]
     },
     {
       "id": "b1294aab-5ca1-4c10-9a4f-4c21b0698cc0",
       "type": "text",
-      "x": -20.688882087614104,
-      "y": -29.865567183825164,
-      "text": "X displacement",
+      "x": -34.78919173362204,
+      "y": -34.757086206751126,
+      "text": "Global ΔX",
       "size": 3.5,
-      "color": "#1f2937",
+      "color": "#a855f7",
       "bold": false,
       "italic": false,
       "align": "center",
@@ -104,11 +105,11 @@
     {
       "id": "fb6b0df6-e472-4553-8ea9-cffac632d55b",
       "type": "text",
-      "x": 17.659837915167003,
-      "y": -1.4660886154287809,
-      "text": "Y displacement",
+      "x": -12.439913075264108,
+      "y": -2.962384547853557,
+      "text": "Global ΔY",
       "size": 3.5,
-      "color": "#1f2937",
+      "color": "#a855f7",
       "bold": false,
       "italic": false,
       "align": "center",
@@ -202,32 +203,6 @@
       ]
     },
     {
-      "id": "47efda49-5950-43bc-a63b-70118b7a901d",
-      "type": "text",
-      "x": -47.96155061282769,
-      "y": -36.120161786265754,
-      "text": "Pose-last tick",
-      "size": 3.5,
-      "color": "#a855f7",
-      "bold": false,
-      "italic": false,
-      "align": "center",
-      "opacity": 1
-    },
-    {
-      "id": "1a743f64-1b4b-4f3f-9c67-886ab862228d",
-      "type": "text",
-      "x": 1.5139533873601891,
-      "y": 33.742909635960984,
-      "text": "Pose-current tick",
-      "size": 3.5,
-      "color": "#a855f7",
-      "bold": false,
-      "italic": false,
-      "align": "center",
-      "opacity": 1
-    },
-    {
       "id": "baeebb0c-70ef-4735-b485-13af9d43428c",
       "type": "text",
       "x": 95.473498712015,
@@ -249,19 +224,6 @@
       "size": 3.5,
       "color": "#a855f7",
       "bold": false,
-      "italic": false,
-      "align": "center",
-      "opacity": 1
-    },
-    {
-      "id": "1966b6f3-2e5c-408d-b4f3-60398a85f807",
-      "type": "text",
-      "x": -57.369923331431124,
-      "y": 17.018849820572814,
-      "text": "Robot travel\nbetween ticks",
-      "size": 3.5,
-      "color": "#2563eb",
-      "bold": true,
       "italic": false,
       "align": "center",
       "opacity": 1
@@ -336,9 +298,9 @@
     {
       "id": "2fe06643-fefc-4dc7-8f6b-87f6bc0bf08f",
       "type": "robot",
-      "x": -47.92661681359848,
-      "y": -23.435172803182358,
-      "heading": 2.170386083076254,
+      "x": -47.926616813598486,
+      "y": -23.43517280318236,
+      "heading": -0.8015518251764808,
       "chassis": {
         "widthHoles": 30,
         "lengthHoles": 30,
@@ -349,43 +311,7 @@
       },
       "color": "#1f2937",
       "fill": true,
-      "opacity": 1
-    },
-    {
-      "id": "a2892760-1aa3-45ce-90ea-3546e3ecadb1",
-      "type": "robot",
-      "x": -33.604167402045185,
-      "y": 9.887184939573942,
-      "heading": 45.264017411410315,
-      "chassis": {
-        "widthHoles": 30,
-        "lengthHoles": 30,
-        "driveWheelCount": 6,
-        "sixWheelLayout": "centered",
-        "intakePosition": "front",
-        "trackingCenterIndex": 2
-      },
-      "color": "#1f2937",
-      "fill": true,
-      "opacity": 0.64
-    },
-    {
-      "id": "a22e793d-759a-44bb-9e31-e70b49d39185",
-      "type": "robot",
-      "x": -0.15123168915100926,
-      "y": 23.901933416507177,
-      "heading": 88.35764873974459,
-      "chassis": {
-        "widthHoles": 30,
-        "lengthHoles": 30,
-        "driveWheelCount": 6,
-        "sixWheelLayout": "centered",
-        "intakePosition": "front",
-        "trackingCenterIndex": 2
-      },
-      "color": "#1f2937",
-      "fill": true,
-      "opacity": 0.28
+      "opacity": 0.45
     },
     {
       "id": "d120ea69-7737-4fd5-9ab2-dda82b58f274",
@@ -412,11 +338,144 @@
       "italic": true,
       "align": "center",
       "opacity": 1
+    },
+    {
+      "id": "4c0f97d5-7c2f-402c-8cb4-d15b809d457d",
+      "type": "robot",
+      "x": -23.50273870312817,
+      "y": 23.568903031302785,
+      "heading": 55.19917330052135,
+      "chassis": {
+        "widthHoles": 30,
+        "lengthHoles": 30,
+        "driveWheelCount": 6,
+        "sixWheelLayout": "centered",
+        "intakePosition": "front",
+        "trackingCenterIndex": 2
+      },
+      "color": "#1f2937",
+      "fill": true,
+      "opacity": 1
+    },
+    {
+      "id": "f389d2cd-3105-4fa7-9e74-78bac9d855e2",
+      "type": "path",
+      "color": "#f59e0b",
+      "width": 0.5,
+      "dash": "solid",
+      "arrows": "end",
+      "opacity": 1,
+      "kind": "splineHeading",
+      "points": [
+        {
+          "x": -47.92661681359847,
+          "y": -23.435172803182354
+        },
+        {
+          "x": -47.92661681359847,
+          "y": -4.736833381805866
+        }
+      ],
+      "headingStart": 0,
+      "headingEnd": null
+    },
+    {
+      "id": "41d02048-7962-4d77-af2d-3cd29af9eb9f",
+      "type": "shape",
+      "shape": "circle",
+      "x": -47.926616813598486,
+      "y": -23.43517280318236,
+      "w": 7.1846536911152015,
+      "h": 7.1846536911152015,
+      "rotation": 0,
+      "fill": "none",
+      "stroke": "#f59e0b",
+      "strokeWidth": 0.4,
+      "dash": "solid",
+      "opacity": 1
+    },
+    {
+      "id": "f7e2fdfd-ffab-44d5-87d2-e567c08d6f74",
+      "type": "shape",
+      "shape": "circle",
+      "x": -23.50273870312817,
+      "y": 23.56890303130279,
+      "w": 7.1846536911152015,
+      "h": 7.1846536911152015,
+      "rotation": 0,
+      "fill": "none",
+      "stroke": "#f59e0b",
+      "strokeWidth": 0.4,
+      "dash": "solid",
+      "opacity": 1
+    },
+    {
+      "id": "db06e98e-9fb8-4d0a-9a77-d714821ead0b",
+      "type": "path",
+      "color": "#f59e0b",
+      "width": 0.5,
+      "dash": "solid",
+      "arrows": "end",
+      "opacity": 1,
+      "kind": "splineHeading",
+      "points": [
+        {
+          "x": -23.502738703128166,
+          "y": 23.568903031302785
+        },
+        {
+          "x": -5.822945642057772,
+          "y": 36.153883409945074
+        }
+      ],
+      "headingStart": 56.06067735890697,
+      "headingEnd": null
+    },
+    {
+      "id": "e61a26de-7e4e-4ba8-8b22-3a623be4da4f",
+      "type": "text",
+      "x": -49.07151687089815,
+      "y": 10.601334250703852,
+      "text": "LocalΔY",
+      "size": 3.5,
+      "color": "#2563eb",
+      "bold": false,
+      "italic": false,
+      "align": "center",
+      "opacity": 1
+    },
+    {
+      "id": "d0ce2822-cf44-46e1-b2de-15d94ce1dea3",
+      "type": "text",
+      "x": -55.8947468256,
+      "y": -11.249319286983932,
+      "text": "θ₀ ",
+      "size": 7,
+      "color": "#f59e0b",
+      "bold": false,
+      "italic": false,
+      "align": "left",
+      "rotation": 0,
+      "opacity": 1
+    },
+    {
+      "id": "370c946c-3e9d-457a-a5d7-2655a86d09fb",
+      "type": "text",
+      "x": -17.318287292281795,
+      "y": 35.15670419829631,
+      "text": "θ₁ ",
+      "size": 7,
+      "color": "#f59e0b",
+      "bold": false,
+      "italic": false,
+      "align": "left",
+      "rotation": 0,
+      "opacity": 1
     }
   ],
   "view": {
-    "tx": 500.9840026631932,
-    "ty": 456.5975260021879,
-    "s": 4.313477471444638
+    "tx": 543.8186244664166,
+    "ty": 413.625977003405,
+    "s": 3.425870561667798
   }
 }

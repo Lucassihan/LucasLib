@@ -1,0 +1,141 @@
+//!params {"knobs":{"wheelRpm":450,"wheelDiameter":3.25,"robotWeight":6,"driveKp":0.45,"turnKp":0.5,"swingKp":0.5,"headingKp":1,"lateralMomentum":0.56,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"kLat":0.25,"lyPoseTurnDisableLength":3,"trackwidth":10.5,"ecLatTOut":5000,"ecLatSetR":4,"ecLatSetD":2,"ecLatCrossD":-1,"ecTurnTOut":5000,"ecTurnSetR":5,"ecTurnSetD":1,"ecTurnExtA":0},"efforts":{"91":0.3,"94":0.2,"99":0.5}}
+chassis.setPos(0, -65, 0);
+//drivePID.minOutput = 4;
+
+backward = false;
+moveTo(0,-48, {});
+backward = true;
+//Grab mogo 1
+facePoint(24,-48);
+moveTo(24,-48, {.setD = 0.01, .setR = 1});
+
+//Fill mogo 1
+backward = false;
+facePoint(24,-24);
+moveTo(24,-24, {});
+
+//Get around post
+drivePID.maxOutput = 8;
+BoomParams post1 = {.x = 48, .y = 24, .heading = 0, .lead = 0.6};
+face(45);
+boomerangTo(post1);
+
+//Wallstake 1
+backward = true;
+drivePID.maxOutput = 5;
+moveTo(45,0, {.setR = 0.5});
+backward = false;
+facePoint(60,0);
+driveForward(21, {}, 90);
+delay(100);
+
+//Fill rest of mogo1
+driveBackward(18);
+delay(200);
+facePoint(48, -60);
+moveTo(48, -60);
+face(70);
+BoomParams r1 {.x = 60, .y = -46, .heading = 0, .lead = 0.6};
+boomerangTo(r1);
+backward = true;
+moveTo(62, -58);
+
+//To other side
+backward = false;
+drivePID.maxOutput = 12.7;
+drivePID.targetOffset = -14;
+moveTo(48,48, {.setR = 20});
+drivePID.maxOutput = 4;
+moveTo(48,48);
+
+//Grab next mogo
+drivePID.maxOutput = 8;
+backward = true;
+facePoint(24,60);
+moveTo(24,60);
+
+//Stuff in corner
+face(180, {.setD = 0.01});
+delay(100);
+backward = true;
+facePoint(60,64);
+drivePID.maxOutput = 4;
+moveTo(60,64);
+drivePID.maxOutput = 8;
+
+//Get mogo 2
+backward = false;
+moveTo(24,48);
+backward = true;
+facePoint(-10, 48, {.setD = 0.5});
+moveTo(-10,48, {.setD = 0.01, .setR = 0.5});
+backward = false;
+
+//Alliance stake
+moveTo(0, 48, {.setR = 1, .setD = 0.1});
+facePoint(0,64, {.setD = 0.01, .setR = 0.5});
+moveTo(0,64);
+driveBackward(12);
+delay(100);
+
+//Fill mogo 2
+facePoint(24,24, {.setD = 0.05, .setR = 0.5});
+moveTo(24,24);
+facePoint(-12,-12, {.setD = 0.05, .setR = 0.5});
+moveTo(-16,-16);
+drivePID.targetOffset = 0;
+drivePID.maxOutput = 6;
+moveTo(-48,-48);
+facePoint(-48,-60);
+moveTo(-48,-60);
+facePoint(-60, -48);
+moveTo(-60,-48);
+backward = true;
+facePoint(-63,-60);
+moveTo(-63,-60);
+
+//Grab mogo 3
+drivePID.maxOutput = 8;
+backward = false;
+moveTo(-48,-24);
+backward = true;
+facePoint(-22,-50);
+moveTo(-22,-50);
+
+//Go for wallstake
+backward = false;
+face(0, {.setR = 1});
+delay(100);
+facePoint(-48,0);
+moveTo(-48,0, {.setR = 1});
+facePoint(-60,0);
+driveForward(16,{},-90);
+driveBackward(24);
+
+//Fill mogo 3
+facePoint(-48,24);
+moveTo(-48,24);
+facePoint(-24,24);
+moveTo(-24,24);
+facePoint(-48,48);
+moveTo(-48,48);
+driveBackward(8);
+facePoint(-48,60);
+moveTo(-48,60);
+driveBackward(26,{},0);
+facePoint(-60,48);
+moveTo(-60,48);
+drivePID.minOutput = 3;
+drivePID.maxOutput = 2;
+driveForward(12,{.setR = 2, .setD = 2},0);
+drivePID.minOutput = 0;
+drivePID.maxOutput = 8;
+backward = true;
+swingOnRightToPoint(-62,59.5, {},0.5);
+driveBackward(7, {.setD = 0.1});
+delay(100);
+
+//HANGGGGG
+driveForward(55, {}, 135);
+face(-45);
+driveBackward(20,{},-45);

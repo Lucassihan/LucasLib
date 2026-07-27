@@ -1,0 +1,22 @@
+//!params {"knobs":{"topLateralSpeed":88,"topAngularSpeed":720,"lateralAccel":600,"angularAccel":4000,"lateralMomentum":0.7,"angularMomentum":0.88,"omniWheels":true,"moveToHeadingEffort":0.2,"driveHeadingEffort":0.8,"headingDisableDist":6,"kLat":0.25,"lyPoseTurnDisableLength":3,"trackwidth":10.5,"ecLatTOut":5000,"ecLatSetD":3,"ecLatExtD":3,"ecLatPLine":0,"ecTurnTOut":5000,"ecTurnSetD":1,"ecTurnExtA":5},"efforts":{"8":0.35,"14":0.3}}
+chassis.setPos(-13.5, -48, 0);
+
+//Get pile
+moveTo(-24.3,-19.1);
+backward = true;
+turnPID.maxOutput = 5;
+drivePID.maxOutput = 5;
+
+//To goal
+drivePID.minOutput = 5;
+backward = true;
+swingOnLeftToPoint(-47.8,-27.4,{.extA = 50, .setD = 0},0.2);
+moveTo(-39.3,-34);
+swingOnLeft(180, {.tOut = 1000, .extA = 0, .setD = 0});
+
+//Wing
+driveForward(12, {}, 180);
+drivePID.minOutput = 8;
+moveTo(-38.4,-28.1, {.pLine = 5});
+drivePID.minOutput = 0;
+driveBackward(15, {}, 180);

@@ -1,6 +1,8 @@
 <script lang="ts">
-  // Single-mode app (Trace Replay). The right slot shows a quiet status that
-  // will become the loaded trace's auton name once import lands (Phase 5).
+  import { settings } from '$lib/stores/settings.svelte';
+
+  // Two workspaces: Replay (trace playback) and Sandbox (route writing).
+  // The right slot shows the loaded trace's auton name in replay mode.
   let {
     status = 'No trace loaded',
     onOpenSettings,
@@ -15,13 +17,39 @@
 <header class="topbar">
   <span class="title">LucasLib Debugger</span>
 
+  <div class="mode" role="tablist" aria-label="Workspace">
+    <button
+      class="mode-btn"
+      class:on={settings.appMode === 'replay'}
+      role="tab"
+      aria-selected={settings.appMode === 'replay'}
+      onclick={() => (settings.appMode = 'replay')}>Replay</button
+    >
+    <button
+      class="mode-btn"
+      class:on={settings.appMode === 'sandbox'}
+      role="tab"
+      aria-selected={settings.appMode === 'sandbox'}
+      onclick={() => (settings.appMode = 'sandbox')}>Sandbox</button
+    >
+    <button
+      class="mode-btn"
+      class:on={settings.appMode === 'trajectory'}
+      role="tab"
+      aria-selected={settings.appMode === 'trajectory'}
+      onclick={() => (settings.appMode = 'trajectory')}>Trajectory Generator</button
+    >
+  </div>
+
   <div class="right">
-    <button class="status-btn" onclick={onOpenLibrary} aria-label="Open library">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 7h18M3 12h18M3 17h18" />
-      </svg>
-      <span class="status">{status}</span>
-    </button>
+    {#if settings.appMode === 'replay'}
+      <button class="status-btn" onclick={onOpenLibrary} aria-label="Open library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7h18M3 12h18M3 17h18" />
+        </svg>
+        <span class="status">{status}</span>
+      </button>
+    {/if}
     <button class="gear" onclick={onOpenSettings} aria-label="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3" />
@@ -45,6 +73,34 @@
     font-weight: 300;
     color: var(--text-dim);
     letter-spacing: 0.02em;
+  }
+
+  .mode {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-base);
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 2px;
+  }
+  .mode-btn {
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 3px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .mode-btn:hover {
+    color: var(--text-primary);
+  }
+  .mode-btn.on {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
   }
 
   .right {

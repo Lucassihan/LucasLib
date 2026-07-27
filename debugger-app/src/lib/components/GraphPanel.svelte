@@ -15,7 +15,8 @@
     yTicks = [12, 6, 0, -6, -12],
     playheadT = undefined,
     accent = 'transparent',
-    legend = []
+    legend = [],
+    onscrub = undefined
   }: {
     title: string;
     grow?: number;
@@ -29,7 +30,18 @@
     playheadT?: number;
     accent?: string;
     legend?: { label: string; color: string; dashed?: boolean }[];
+    /** scrub target — defaults to the replay traceState; sandbox passes its own */
+    onscrub?: (t: number) => void;
   } = $props();
+
+  // where a drag-scrub lands: the injected handler, or the replay store
+  function scrubTo(tv: number) {
+    if (onscrub) onscrub(tv);
+    else {
+      traceState.playing = false;
+      traceState.time = tv;
+    }
+  }
 
   const xTicks = [0, 0.25, 0.5, 0.75, 1];
 
@@ -90,19 +102,18 @@
   function onMove(e: PointerEvent) {
     if (!frameEl) return;
     hoverT = timeFromEvent(e);
-    if (dragging) traceState.time = hoverT;
+    if (dragging) scrubTo(hoverT);
   }
   function onDown(e: PointerEvent) {
     if (!frameEl) return;
     dragging = true;
-    traceState.playing = false;
     try {
       frameEl.setPointerCapture(e.pointerId);
     } catch {
       // no active pointer (synthetic events) — window-level up still ends the drag
     }
     hoverT = timeFromEvent(e);
-    traceState.time = hoverT;
+    scrubTo(hoverT);
   }
   function onUp() {
     dragging = false;

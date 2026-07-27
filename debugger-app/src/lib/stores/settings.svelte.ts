@@ -13,12 +13,16 @@ export type DriveWheelCount = 4 | 6 | 8;
 export type IntakePosition = 'front' | 'back';
 export type GovernScope = 'total' | 'drive' | 'turn';
 export type { FieldBackdrop } from '$lib/field/backdrops';
-import type { FieldBackdrop } from '$lib/field/backdrops';
+import { normalizeBackdropId, type FieldBackdrop } from '$lib/field/backdrops';
 // 6-wheel row layout: evenly centred, or an 8-wheel footprint with the 2nd
 // (gapFront) or 3rd (gapBack) slot left empty.
 export type SixWheelLayout = 'centered' | 'gapFront' | 'gapBack';
 
+export type AppMode = 'replay' | 'sandbox' | 'trajectory';
+
 interface Settings {
+  // which workspace the app shows: trace replay or the route-writing sandbox
+  appMode: AppMode;
   robotWidthHoles: number;
   robotLengthHoles: number;
   driveWheelCount: DriveWheelCount;
@@ -38,6 +42,7 @@ const STORAGE_KEY = 'lucaslib-debugger.settings';
 
 // 30 holes = 15 in — a typical VEX drive footprint.
 const defaults: Settings = {
+  appMode: 'replay',
   robotWidthHoles: 30,
   robotLengthHoles: 30,
   driveWheelCount: 6,
@@ -56,7 +61,12 @@ function load(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return { ...defaults, ...JSON.parse(raw) };
+      const merged = { ...defaults, ...JSON.parse(raw) };
+      // migrate pre-rename backdrop ids (e.g. 'match-h' → 'override-match-h')
+      merged.fieldBackdrop = normalizeBackdropId(merged.fieldBackdrop);
+      // 'pursuit' mode was renamed to 'trajectory' (Trajectory Generator)
+      if ((merged.appMode as string) === 'pursuit') merged.appMode = 'trajectory';
+      return merged;
     }
   } catch {
     // corrupt storage — fall back to defaults

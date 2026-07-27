@@ -63,15 +63,21 @@ export interface Movement {
   cosineScaling: boolean;
   turnPriority: number;
   exitTimeout: number;
-  // settle is now derivative-magnitude based: once inside the exit zone
-  // (exitDist / exitAng), the move waits until |D term| < settleD before exiting.
-  // 0 = no settle gate (exit as soon as the zone is reached).
+  // settleD: settle is derivative-magnitude based — once inside exitDist, the move
+  // waits until |D term| < settleD before exiting. It is a THRESHOLD, not a switch:
+  // 0 makes settle unreachable (exitDist = 0 is the off switch). Units are Δerror
+  // per MILLISECOND, so the lib's default of 2 never binds at V5 speeds.
   settleD: number;
+  // exitDist: the SETTLE activation zone (ec.setR) on BOTH channels — inches on a
+  // lateral, DEGREES on a turn. 0 = settle off.
   exitDist: number;
-  // exitPerpLine: robot's exit distance (inches) to the line ⊥ its heading through
-  // the target. Arms once within exitDist of the target, then exits when the robot's
-  // distance to that line drops to this value. 0 = disabled.
+  // exitPerpLine: the CROSS offset (ec.crossD), in. The line is infinite, runs ⊥ to
+  // the robot's heading through the target, and fires on which SIDE of it we're on —
+  // crossD slides it that many inches back toward the robot to fire early. 0 = the
+  // line sits on the target; NEGATIVE = cross is off (so test >= 0, not > 0).
   exitPerpLine: number;
+  // exitAng: turns only — the ANGLE exit (ec.extA), deg. Independent of settle and
+  // ungated, so it fires mid-rotation as soon as |error| <= extA. 0 = off.
   exitAng: number;
   exitReason: string;
   startTime: number;
@@ -126,6 +132,15 @@ export interface Tick {
   mtemp: number; // avg drive-motor temp (°C) this tick; -1 = not in this trace
 }
 
+// Timeline annotation — a strategy/action callout pinned to a moment in the
+// run ("intake pin", "score S red goal", "flip cup clear-side down", …).
+// Emitted by debugger::note("...") on the robot or by the sample generator.
+export interface TraceNote {
+  t: number; // ms
+  mi: number; // movement index active when the note fired; -1 = none
+  text: string;
+}
+
 export interface ReadWall {
   t: number;
   mi: number;
@@ -144,6 +159,7 @@ export interface Trace {
   movements: Movement[];
   ticks: Tick[];
   readWalls: ReadWall[];
+  notes: TraceNote[];
   /** ms — end of the run (last tick timestamp). */
   duration: number;
 }

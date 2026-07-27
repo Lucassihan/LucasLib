@@ -7,6 +7,7 @@
 #include "tasks.h"
 #include "debugger/debugger.h"
 #include "pid.h"
+#include "scheduler.h"
 
 #include <cmath>
 #include <cstdio>
@@ -263,11 +264,8 @@ void initialize() {
   vexAbsEncDataRateSet(TX.index(), kSensorDataRateMs);
   vexAbsEncDataRateSet(TY.index(), kSensorDataRateMs);
 
-  scoopMotor.setPosition(0, degrees);
-
-  // Drive-motor encoders (used for Y when there is no Y tracker) have NO user-settable data
-  // rate -- V5 smart motors stream position over the smart port at a fixed system rate, and
-  // the SDK exposes no vexMotorDataRateSet, so there is nothing to configure for them here.
+  leftdrive.setStopping(brake);
+  rightdrive.setStopping(brake);
 
   startTasks();
 }
@@ -304,23 +302,25 @@ void driver() {
 
   scoopMotor.setStopping(coast);
 
+  Controller.rumble(".");
+
   while (true) {
     controllerButtonMonitoringFcn();
 
     // arcadeDriveFcn();
     singleStickDriveFcn();
 
-    if (r1.Pressed_first) {
+    if (r1.pressedFirst) {
       targetLevel = 0;
       intake();
       fourBarPIDEnabled = true;
       targetHeight = 0;
-      if (r2.Pressed_second) {
+      if (r2.pressedSecond) {
         scoop = true;
       }
     }
-    
-    if (r2.Pressed_first) {
+
+    if (r2.pressedFirst) {
       spit();
     }
 

@@ -1,0 +1,1 @@
+{"anchors":[{"x":-48,"y":-60,"ang":0,"out":26,"in":26},{"x":-36,"y":2,"ang":38,"out":22,"in":22},{"x":14,"y":30,"ang":68,"out":20,"in":20},{"x":52,"y":44,"ang":52,"out":18,"in":18}],"params":{"spacing":2,"kF":3,"maxVel":60,"maxAccel":60,"lookahead":12,"kV":0.18,"endSpeed":0}}

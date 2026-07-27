@@ -14,6 +14,7 @@ export const FONTS: FontDef[] = [
   { name: 'Trebuchet MS', stack: '"Trebuchet MS", Tahoma, sans-serif' },
   { name: 'Times New Roman', stack: '"Times New Roman", Times, serif' },
   { name: 'Georgia', stack: 'Georgia, "Times New Roman", serif' },
+  { name: 'Sitka Text', stack: '"Sitka Text", Cambria, Georgia, serif' },
   { name: 'Courier New', stack: '"Courier New", Courier, monospace' },
   { name: 'Comic Sans MS', stack: '"Comic Sans MS", "Comic Sans", cursive' }
 ];

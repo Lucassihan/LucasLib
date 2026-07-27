@@ -3,76 +3,59 @@
 
 #include <cmath>
 
-void resetExitStateVars(ExitStateVars& exitStateVars) {
-    exitStateVars.startTime      = Brain.timer(msec);
-    exitStateVars.perpLineActive = false;
-}
-
-bool checkLateralExit(LateralExitConditions& ec, ExitStateVars& exitStateVars,
+bool checkLateralExit(LateralExitConditions& ec, double startTime,
                       double driveError,
                       double targetX, double targetY,
                       bool backward) {
 
     double currentTime = Brain.timer(msec);
 
-    // timeout check
-    if (ec.tOut > 0) { //if enabled
-        if (currentTime - exitStateVars.startTime >= ec.tOut) return true;
+    if (ec.tOut > 0) {
+        if (currentTime - startTime >= ec.tOut) return true;
     }
 
-    // exit distance + settle check
-    if (ec.extD > 0) { //if enabled
-        if (fabs(driveError) <= ec.extD) {
-            if (ec.setD == 0) return true;
-            if (fabs(drivePID.derivative) < ec.setD) return true;
-        }
+    if (ec.setR > 0) {
+        if (fabs(driveError) <= ec.setR and fabs(drivePID.derivative) <= ec.setD or ec.setD == -1) return true;
     }
 
-    // perpendicular-line proximity check — if enabled
-    // pLine is the robot's exit distance to the line through the target that runs
-    // ⊥ to the robot's heading. Arms once the robot is within extD of the target
-    // (so it can't fire early while off to the side), then exits when the robot's
-    // perpendicular distance to that line drops to pLine.
-    if (ec.pLine > 0) {
+    // Which SIDE of the line are we on — not how close to it. A proximity test needs
+    // width to fire, so crossD = 0 could only ever work by faking one, and any width
+    // small enough to be accurate is small enough to skip over at speed (a 10 ms tick
+    // at 60 in/s moves 0.6 in). A side test can't be skipped: along starts positive
+    // with the line ahead, ends negative once past, and never gets there without
+    // passing through. crossD just slides the line toward us to fire that much early.
+    if (ec.crossD >= 0) {
         double dx = targetX - chassis.x;
         double dy = targetY - chassis.y;
-        double distToTarget = sqrt(dx * dx + dy * dy);
-
-        // arm once robot enters the extD activation radius
-        if (ec.extD > 0 && distToTarget <= ec.extD) {
-            exitStateVars.perpLineActive = true;
-        }
-
-        // once armed, the robot's distance to the perpendicular line is the
-        // magnitude of robot→target projected onto the heading axis
-        // (clockwise-positive heading, 0 = north).
-        if (exitStateVars.perpLineActive) {
-            double hRad = chassis.h * (M_PI / 180.0);
-            double projection = dx * sin(hRad) + dy * cos(hRad);
-
-            if (fabs(projection) <= ec.pLine) return true;
-        }
+        double hRad = chassis.h * (M_PI / 180.0);
+        double along = dx * sin(hRad) + dy * cos(hRad); // + = line ahead, - = passed it
+        if (backward) along = -along;                   // measure along the way we travel
+        if (along <= ec.crossD) return true;
     }
 
     return false;
 }
 
-bool checkTurnExit(TurnExitConditions& ec, ExitStateVars& exitStateVars,
+bool checkTurnExit(TurnExitConditions& ec, double startTime,
                    double turnError) {
 
     double currentTime = Brain.timer(msec);
 
-    // timeout check — if enabled
     if (ec.tOut > 0) {
-        if (currentTime - exitStateVars.startTime >= ec.tOut) {
-            return true;
-        }
+        if (currentTime - startTime >= ec.tOut) return true;
     }
 
-    // exit angle + settle check — if enabled
-    if (fabs(turnError) <= ec.extA) {
-        if (ec.setD == 0) return true;
-        if (fabs(turnPID.derivative) < ec.setD) return true;
+    // SETTLE — same shape as the lateral channel: inside the activation zone AND
+    // the error has stopped moving. setR is the only on/off switch; setD is a
+    // threshold, so setD = 0 makes settle unreachable rather than instant.
+    if (ec.setR > 0) {
+        if (fabs(turnError) <= ec.setR and fabs(turnPID.derivative) < ec.setD) return true;
+    }
+
+    // ANGLE — independent of settle, and deliberately ungated: this is the "close
+    // enough, don't wait for it to stop" exit, so it can fire mid-rotation.
+    if (ec.extA > 0) {
+        if (fabs(turnError) <= ec.extA) return true;
     }
 
     return false;

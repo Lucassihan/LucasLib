@@ -61,6 +61,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   const movements = [];
   const ticks = [];
   const readWalls = [];
+  const notes = [];
 
   let t = 0;
   const pose = { ...start };
@@ -126,7 +127,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       index: 0, type: '', targetX: 0, targetY: 0, targetH: 0, distance: 0,
       backwards: 0, direction: 0, partiality: 0, dLead: 0, n: 0, heading: 0,
       cosineScaling: 1, turnPriority: 0, exitTimeout: 3000,
-      settleD: 0.5, exitDist: 0, exitPerpLine: 0, exitAng: 0,
+      settleD: 0.5, exitDist: 0, exitPerpLine: -1, exitAng: 0,
       exitReason: 'settle', startTime: 0, endTime: 0,
       driveKp: 0, driveKi: 0, driveKd: 0, turnKp: 0, turnKi: 0, turnKd: 0,
       gLead: 0, leadChasePowerLimit: -1, pathHeading: 0, turnDisableLength: 0,
@@ -187,7 +188,8 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'face', targetH,
-      settleD: 0.5, exitAng: 1, startTime: startT, endTime: t,
+      // exitDist = the settle activation zone (setR), degrees on a turn
+      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
       turnKp: 0.7, turnKd: 0.05
     }));
     mi++;
@@ -349,7 +351,9 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     movements.push(mvRow({
       index: mi, type: 'boomerangTo', targetX, targetY, targetH,
       dLead: lead, gLead, leadChasePowerLimit: chaseLimit, turnPriority: 0.4,
-      settleD: 0.5, exitPerpLine: 10, exitReason: 'perpLine',
+      // boomerang leaves CROSS off (crossD < 0) — the lib still reports "perpLine"
+      // as the reason, since ending on the target's ⊥ plane is its natural exit
+      settleD: 0.5, exitPerpLine: -1, exitReason: 'perpLine',
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
@@ -494,14 +498,23 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     const typeName = side === 'left' ? 'swingOnLeft' : 'swingOnRight';
     movements.push(mvRow({
       index: mi, type: typeName, targetH,
-      settleD: 0.5, exitAng: 1, startTime: startT, endTime: t,
+      // exitDist = the settle activation zone (setR), degrees on a turn
+      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
       turnKp: 0.5, turnKd: 0.04
     }));
     mi++;
   }
 
+  // Timeline note: a strategy/action callout pinned to the current trace time
+  // (mirrors debugger::note("...") on the robot). Attributed to the movement
+  // that just finished; -1 if none has run yet. Text may contain commas — the
+  // parser splits [NOTES] rows on the first two commas only.
+  function note(text) {
+    notes.push([t, movements.length ? movements.length - 1 : -1, String(text).replace(/[\r\n]+/g, ' ')]);
+  }
+
   // Run segments
-  for (const seg of segments) seg({ face, driveForward, moveTo, boomerangTo, swing, lyPose, voldrive });
+  for (const seg of segments) seg({ face, driveForward, moveTo, boomerangTo, swing, lyPose, voldrive, note });
 
   // Assemble trace text
   const COLS_M =
@@ -526,6 +539,9 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   out += '[MOVEMENTS]\n' + COLS_M + '\n' + movements.map((m) => m.join(',')).join('\n') + '\n\n';
   out += '[TICKS]\n' + COLS_T + '\n' + ticks.map((row) => row.join(',')).join('\n') + '\n\n';
   out += '[READWALLS]\n' + COLS_R + '\n' + readWalls.map((w) => w.join(',')).join('\n') + '\n';
+  if (notes.length) {
+    out += '\n[NOTES]\nt,mi,text\n' + notes.map((n) => n.join(',')).join('\n') + '\n';
+  }
 
   return { name, text: out, mvCount: movements.length, tickCount: ticks.length };
 }
@@ -667,6 +683,187 @@ autons.push(buildAuton({
     // then a short open-loop nudge — still clear of the goal itself
     ({ boomerangTo }) => boomerangTo(50, 43, 40),
     ({ voldrive }) => voldrive(5, 5, 120)
+  ]
+}));
+
+// --- Solo-AWP routes (Override, red alliance, 15 s autonomous) ---
+//
+// Field facts these routes are built on (center-origin inches, +Y north):
+//   • Red side of the Autonomous Line (y = −x double tape) = SOUTH + WEST
+//     Quadrants. Robots may not touch anything across it (SG7), but objects
+//     that START on it are fair game for both alliances (SG7b).
+//   • Goals (red side): S red (−24,−48) empty · S neutral (24,−48) with a
+//     pre-nested Y/Y pin · W red (−48,−24) empty · W neutral (−48,24) with a
+//     pre-nested Y/Y pin. Rear-approach only, rear touching the goal edge,
+//     never overlap/drive through (robot standoff ≈ 10–10.5 in center-to-center).
+//   • Ground Y/Y pins at (−24,−24) and (−48,−48) sit nested in CLEAR-side-up
+//     cups. Pinwheel clusters ON the line at (24,−24) / (−24,24): 4 horizontal
+//     pins each (R/Y arms point S+W into our side) + 1 empty clear-up cup.
+//     Wall groups (2 per red wall) are gray-up cups + a Y/Y pin in a cup.
+//   • Toggles: S (0,−70) — rolled by us at the start; W (−72,0) — rolled by
+//     the ALLY, whose only job is that + getting off the wall (SC8 rule 3).
+//   • Scoring counts per SC3: each visible half of a Placed pin = one Scored
+//     Pin. Toggle set red ⇒ yellow halves in that Quadrant are Owned and score
+//     for us. So each neutral goal's Y/Y pin = 2 Scored Pins once its toggle
+//     is red, and a R/Y pin = 2 (red half + owned yellow half).
+//   • AWP (SC8): ≥7 pins Scored on our side + ≥3 goals with ≥2 Scored pins +
+//     neither robot touching the perimeter at 0:15.
+//
+// All five start against the bottom wall beside the S toggle at (0,−62.5,0),
+// preload R/Y pin aboard. Robot model: 15×15, front intake (pins), rear
+// grabber (cups / scoring), can flip cups but not a pin already in a cup.
+
+const AWP_START = { x: 0, y: -62.5, h: 0 };
+const NOTE_ALLY = 'Ally: roll WEST toggle red + clear the wall → W neutral Y/Y owned = 2 pins · goal #1';
+const NOTE_STOG = 'Rear mech rolls SOUTH toggle red → S neutral Y/Y owned = 2 pins · goal #2 (4 total)';
+
+// 1. Sprint — fastest AWP: preload + one ground Y/Y pin, both red goals. ~6 s.
+//    Assumes the intake can pluck a pin out of a clear-side-up cup.
+autons.push(buildAuton({
+  name: 'soloawp_sprint',
+  start: AWP_START,
+  battery: { pct: 96, volts: 13.0 },
+  motorTemp: { start: 30, rise: 0.3 },
+  segments: [
+    ({ note }) => note(NOTE_ALLY),
+    ({ voldrive }) => voldrive(3, 3, 250),
+    ({ note }) => note(NOTE_STOG),
+    ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ note }) => note('Rear on S red goal: score PRELOAD R/Y → red + owned yellow = +2 · goal #3 · 6 pins'),
+    ({ driveForward }) => driveForward(6.9),
+    ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
+    ({ driveForward }) => driveForward(7.6),
+    ({ face }) => face(90),
+    ({ driveForward }) => driveForward(14.5, { backwards: true }),
+    ({ note }) => note('Rear on W red goal: score Y/Y → +2 owned yellows · 8 pins · 4 goals ≥2 — AWP ✓'),
+    ({ driveForward }) => driveForward(9),
+    ({ note }) => note('Park clear — no wall contact at 0:15 (SC8 rule 3)')
+  ]
+}));
+
+// 2. Stack — no pluck assumptions: only loose cluster pins + empty cups.
+//    Builds a 2-PHYSICAL-pin stack on the S neutral goal. ~11 s.
+autons.push(buildAuton({
+  name: 'soloawp_stack',
+  start: AWP_START,
+  battery: { pct: 88, volts: 12.9 },
+  motorTemp: { start: 33, rise: 0.35 },
+  segments: [
+    ({ note }) => note(NOTE_ALLY),
+    ({ voldrive }) => voldrive(3, 3, 250),
+    ({ note }) => note(NOTE_STOG),
+    ({ moveTo }) => moveTo(-24, -33.5),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(2.2, { backwards: true }),
+    ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
+    ({ moveTo }) => moveTo(1, -25, { exitDist: 1.5 }),
+    ({ face }) => face(90),
+    ({ driveForward }) => driveForward(11.5),
+    ({ note }) => note('Intake R/Y horizontal pin — SE cluster W arm (on-line objects are fair game, SG7b)'),
+    ({ face }) => face(270),
+    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ note }) => note('Back-grab cluster cup (clear-up, empty) — carrying 1 pin + 1 cup (SG6 max)'),
+    ({ moveTo }) => moveTo(24, -31, { exitDist: 1.5 }),
+    ({ face }) => face(0),
+    ({ note }) => note('Flip cup CLEAR-side down — keeps the goal’s two yellows visible'),
+    ({ driveForward }) => driveForward(6.8, { backwards: true }),
+    ({ note }) => note('Stack on S neutral: cup over Y/Y + nest R/Y → 3 pins, 2 PHYSICAL · total 7 — AWP ✓'),
+    ({ moveTo }) => moveTo(13, -28, { exitDist: 2 }),
+    ({ note }) => note('Park — 7 pins · 3 goals ≥2 · no wall contact')
+  ]
+}));
+
+// 3. Double — the unit-stack route: grabs the (−24,−24) Y/Y pin + its clear-up
+//    cup as ONE unit and stacks it on the preload, so the S red goal ends with
+//    2 PHYSICAL pins. Shortest path to a stacked AWP (~8 s), never leaves the
+//    S red goal's tile column.
+autons.push(buildAuton({
+  name: 'soloawp_double',
+  start: AWP_START,
+  battery: { pct: 92, volts: 12.8 },
+  motorTemp: { start: 35, rise: 0.4 },
+  segments: [
+    ({ note }) => note(NOTE_ALLY),
+    ({ voldrive }) => voldrive(3, 3, 250),
+    ({ note }) => note(NOTE_STOG),
+    ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
+    ({ face }) => face(180),
+    ({ driveForward }) => driveForward(5.5, { backwards: true }),
+    ({ note }) => note('Back-grab Y/Y pin + its clear-up cup as ONE unit (a pin in a cup can’t be flipped)'),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(5.8, { backwards: true }),
+    ({ note }) => note('Stack unit on preload: opaque half hides preload top (−1), unit Y/Y +2 → 3 pins, 2 PHYSICAL · total 7 — AWP ✓'),
+    ({ driveForward }) => driveForward(6),
+    ({ note }) => note('Park — 7 pins · 3 goals ≥2 · S red stack survives a strict “2 pins per goal” reading')
+  ]
+}));
+
+// 4. West — lyPose showcase: long frozen-line ride NW, scores the W red goal
+//    first, then brings a Y/Y pin back to the S red goal. ~10 s.
+autons.push(buildAuton({
+  name: 'soloawp_west',
+  start: AWP_START,
+  kLat: 0.25,
+  battery: { pct: 79, volts: 12.6 },
+  motorTemp: { start: 31, rise: 0.3 },
+  segments: [
+    ({ note }) => note(NOTE_ALLY),
+    ({ voldrive }) => voldrive(3, 3, 250),
+    ({ note }) => note(NOTE_STOG),
+    ({ face }) => face(-42),
+    ({ lyPose }) => lyPose(-32, -30),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(6),
+    ({ face }) => face(90),
+    ({ driveForward }) => driveForward(6.8, { backwards: true }),
+    ({ note }) => note('Rear on W red goal: score PRELOAD R/Y → +2 · goal #3 · 6 pins'),
+    ({ driveForward }) => driveForward(6.2),
+    ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
+    ({ moveTo }) => moveTo(-24, -28, { exitDist: 1.5 }),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(10.5, { backwards: true }),
+    ({ note }) => note('Rear on S red goal: score Y/Y → +2 · 8 pins · 4 goals ≥2 — AWP ✓'),
+    ({ driveForward }) => driveForward(5),
+    ({ note }) => note('Park mid-quadrant — clear of wall and goals')
+  ]
+}));
+
+// 5. Max — sprint core, then doubles back for the corner (−48,−48) unit and
+//    stacks it on the W red goal's fresh Y/Y pin: AWP by ~8 s, ~9 pins and
+//    ≈85 pts of scored objects for the Autonomous Bonus. ~13 s.
+autons.push(buildAuton({
+  name: 'soloawp_max',
+  start: AWP_START,
+  battery: { pct: 100, volts: 13.2 },
+  motorTemp: { start: 29, rise: 0.35 },
+  segments: [
+    ({ note }) => note(NOTE_ALLY),
+    ({ voldrive }) => voldrive(3, 3, 250),
+    ({ note }) => note(NOTE_STOG),
+    ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
+    ({ face }) => face(0),
+    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
+    ({ driveForward }) => driveForward(6.9),
+    ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
+    ({ driveForward }) => driveForward(7.6),
+    ({ face }) => face(90),
+    ({ driveForward }) => driveForward(14.5, { backwards: true }),
+    ({ note }) => note('Score Y/Y on W red goal → +2 · 8 pins · 4 goals ≥2 — AWP ✓ · now push the bonus'),
+    ({ moveTo }) => moveTo(-30, -30),
+    ({ face }) => face(45),
+    ({ driveForward }) => driveForward(19, { backwards: true }),
+    ({ note }) => note('Back-grab the corner (−48,−48) Y/Y pin + clear-up cup as ONE unit'),
+    ({ face }) => face(175),
+    ({ driveForward }) => driveForward(7.3, { backwards: true }),
+    ({ note }) => note('Stack unit on W red goal: hides the Y/Y top (−1), unit +2 → 3 pins, 2 PHYSICAL · total 9 · ≈85 pts'),
+    ({ driveForward }) => driveForward(7),
+    ({ note }) => note('Park — 9 pins · 4 goals ≥2 · max-value solo AWP + Auton Bonus push')
   ]
 }));
 

@@ -64,6 +64,8 @@ void Odometry::setPos(double newX, double newY, double newH) {
   double hr = TO_RAD(newH);
   trueX = newX + ( yTrackerOffset * cos(hr) + xTrackerOffset * sin(hr));
   trueY = newY + (-yTrackerOffset * sin(hr) + xTrackerOffset * cos(hr));
+
+  justResetPos = true;
 }
 
 //conversion helpers
@@ -102,7 +104,7 @@ double Odometry::resolveHeading(double dIMU1, double dIMU2, double dLDeg, double
   double scaled1 = dIMU1 * cfg.imu1_multiplier;
   double scaled2 = dIMU2 * cfg.imu2_multiplier;
 
-  if (!hasSecondIMU || imu2Dead) {
+  if (not hasSecondIMU or imu2Dead) {
     return scaled1;
   }
 
@@ -203,14 +205,8 @@ void Odometry::trackY(double rawDeltaDeg) {
   mclAccumDY += gdy;
   mclMutex.unlock();
 
+  //Used for movements like driveForward / driveBackward
   yInchesTracked += dYInches;
-
-  // Velocity and arc radius over the interval since the last Y accumulation, so forward
-  // travel and heading change span the same window. Held (not zeroed) between accumulations.
-  double now = Brain.timer(msec);
-  double dtSec = (now - lastTrackTime) / 1000.0;
-  if (lastTrackTime > 0 && dtSec > 0) velocity = dYInches / dtSec;
-  lastTrackTime = now;
 
   double dhRad = TO_RAD(dhAccumDeg);
   lastArcRadius = (fabs(dhRad) < 1e-6) ? 1e9 : dYInches / dhRad;  // near-straight -> large sentinel
@@ -244,45 +240,89 @@ void Odometry::trackX(double rawDeltaDeg) {
   dhAccumDegX = 0;  // X window consumed; start banking the heading swing afresh for the next step
 }
 
+void Odometry::updateVelocity() {
+  static uint64_t lastTime = vex::timer::systemHighResolution();
+
+  uint64_t now = vex::timer::systemHighResolution();
+
+  double timeSinceLastTracked = (now - lastTime) / 1000000.0;
+
+  // field displacement
+  double dx = x - lastVRefX;
+  double dy = y - lastVRefY;
+
+  // robot forward direction
+  double headingRad = TO_RAD((h + lastVRefH) / 2.0);
+
+  double forwardVelocity =
+      (dx * sin(headingRad) +
+       dy * cos(headingRad)) / timeSinceLastTracked;
+
+  double angularVelocity =
+      TO_RAD((h - lastVRefH) / timeSinceLastTracked);
+
+
+  if (not justResetPos) {
+    v = forwardVelocity;
+    ω = angularVelocity;
+  } else {
+    v = 0;
+    ω = 0;
+    justResetPos = false;
+  }
+
+  lastVRefX = x;
+  lastVRefY = y;
+  lastVRefH = h;
+  lastTime = now;
+}
+
 //readWall
 void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
   double distanceReading = 0;
-  double sensorOffset    = 0;
+  DistanceSensorOffset mount;
 
   if (sensor == 1) {
     distanceReading = DistSensor1.objectDistance(inches);
-    sensorOffset    = cfg.sensor1Offset;
+    mount           = cfg.sensor1Offset;
   } else if (sensor == 2) {
     distanceReading = DistSensor2.objectDistance(inches);
-    sensorOffset    = cfg.sensor2Offset;
+    mount           = cfg.sensor2Offset;
   } else if (sensor == 3) {
     distanceReading = DistSensor3.objectDistance(inches);
-    sensorOffset    = cfg.sensor3Offset;
+    mount           = cfg.sensor3Offset;
   } else if (sensor == 4) {
     distanceReading = DistSensor4.objectDistance(inches);
-    sensorOffset    = cfg.sensor4Offset;
+    mount           = cfg.sensor4Offset;
   }
 
-  double relativeOffset = sensorOffset - distanceReading;
+  // Rotate the sensor's 2D local mount into the field frame using the current heading
+  // (0 = +Y, CW+): y (forward) runs along (sin h, cos h), x (right) along (cos h, -sin h).
+  double hRad = TO_RAD(h);
+  double mountFieldX = mount.y * sin(hRad) + mount.x * cos(hRad);
+  double mountFieldY = mount.y * cos(hRad) - mount.x * sin(hRad);
 
   // walls 1 & 2 are positive edges (+48), walls 3 & 4 are negative edges (-48)
-  double sign = (wall <= 2) ? 1 : -1;
+  double edgeSign = (wall <= 2) ? 1 : -1;
 
-  double newPos = sign * (48.0 + relativeOffset);
+  // With the robot square to the wall, the reading is the perpendicular gap from the
+  // sensor face to the wall, so the face sits at edgeSign*(48 - reading) on the wall's
+  // axis. Subtracting the mount's component on that axis lands the tracking center.
+  double faceAxis = edgeSign * (48.0 - distanceReading);
 
-  double preX = x, preY = y, preH = h;  // pose before the correction (for the debugger)
+  debugger::readWallBefore();  // snapshot the pre-correction pose (no-op unless capturing)
 
   // walls 1 & 3 set X, walls 2 & 4 set Y
   //    2
   // 3     1
   //    4
-  if (wall == 1 || wall == 3) {
-    setPos(newPos, y, h);
-  } else if (wall == 2 || wall == 4) {
-    setPos(x, newPos, h);
+  if (wall == 1 or wall == 3) {
+    setPos(faceAxis - mountFieldX, y, h);
+  } else if (wall == 2 or wall == 4) {
+    setPos(x, faceAxis - mountFieldY, h);
   }
 
-  debugger::readWall(wall, sensor, preX, preY, preH, x, y, h);
+  debugger::readWall(wall, sensor);  // log the correction (pre snapshot -> corrected pose)
 }
 
 //helper math
@@ -374,22 +414,26 @@ void Odometry::clearTrackedInches() {
 int odometryTask() {
   while (true) {
     chassis.trackHeading();
-    chassis.noEncodersUpdated = true;
 
     if (fabs(chassis.yRawDeltaDeg()) > chassis.yNoiseThreshold) {
       chassis.trackY(chassis.yRawDeltaDeg());
-      chassis.noEncodersUpdated = false;
+      chassis.nEncodersUpdated += 1;
     }
-
     if (fabs(chassis.xRawDeltaDeg()) > chassis.xNoiseThreshold) {
       chassis.trackX(chassis.xRawDeltaDeg());
-      chassis.noEncodersUpdated = false;
+      chassis.nEncodersUpdated += 1;
     }
 
-    if (chassis.noEncodersUpdated) {
-      delay(1);
-    } else {
+    if (chassis.nEncodersUpdated > 0) {
       chassis.applyPoseOffsets(chassis.xTrackerOffset, chassis.yTrackerOffset);
     }
+
+    int needed = chassis.hasXTracker ? 2 : 1;
+    if (chassis.nEncodersUpdated >= needed) {
+      chassis.updateVelocity();
+      chassis.nEncodersUpdated = 0;
+    }
+
+    delay(1);
   }
 }

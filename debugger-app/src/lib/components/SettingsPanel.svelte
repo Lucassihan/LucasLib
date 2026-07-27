@@ -2,10 +2,13 @@
   import { settings, holesToInches, type DriveWheelCount } from '$lib/stores/settings.svelte';
   import RobotPreview from './RobotPreview.svelte';
   import TrackingCenterPicker from './TrackingCenterPicker.svelte';
+  import { GAMES, MODES } from '$lib/field/backdrops';
 
   let { open = $bindable() }: { open: boolean } = $props();
 
   const wheelOptions: DriveWheelCount[] = [4, 6, 8];
+
+  const modeLabel = (m: string) => (m === 'match' ? 'Match' : 'Skills');
 
   function close() {
     open = false;
@@ -125,37 +128,26 @@
             onclick={() => (settings.fieldBackdrop = 'perimeter')}
           >Empty field</button>
 
-          <div class="field-row">
-            <span class="fr-name">Override Match</span>
-            <div class="fr-vars">
-              <button
-                class="fr-var"
-                class:active={settings.fieldBackdrop === 'match-h'}
-                onclick={() => (settings.fieldBackdrop = 'match-h')}
-              >Highlighted</button>
-              <button
-                class="fr-var"
-                class:active={settings.fieldBackdrop === 'match'}
-                onclick={() => (settings.fieldBackdrop = 'match')}
-              >Plain</button>
-            </div>
-          </div>
-
-          <div class="field-row">
-            <span class="fr-name">Override Skills</span>
-            <div class="fr-vars">
-              <button
-                class="fr-var"
-                class:active={settings.fieldBackdrop === 'skills-h'}
-                onclick={() => (settings.fieldBackdrop = 'skills-h')}
-              >Highlighted</button>
-              <button
-                class="fr-var"
-                class:active={settings.fieldBackdrop === 'skills'}
-                onclick={() => (settings.fieldBackdrop = 'skills')}
-              >Plain</button>
-            </div>
-          </div>
+          {#each GAMES as g}
+            <div class="game-label">{g.label}</div>
+            {#each MODES as mode}
+              <div class="field-row">
+                <span class="fr-name">{modeLabel(mode)}</span>
+                <div class="fr-vars">
+                  <button
+                    class="fr-var"
+                    class:active={settings.fieldBackdrop === `${g.key}-${mode}-h`}
+                    onclick={() => (settings.fieldBackdrop = `${g.key}-${mode}-h`)}
+                  >Highlighted</button>
+                  <button
+                    class="fr-var"
+                    class:active={settings.fieldBackdrop === `${g.key}-${mode}`}
+                    onclick={() => (settings.fieldBackdrop = `${g.key}-${mode}`)}
+                  >Plain</button>
+                </div>
+              </div>
+            {/each}
+          {/each}
         </div>
       </section>
     </div>
@@ -345,6 +337,14 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+  }
+  .game-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-ghost);
+    margin: 8px 0 1px 2px;
   }
   .field-row {
     display: flex;

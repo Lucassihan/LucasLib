@@ -4,7 +4,7 @@
 // sections, each a CSV with a header row. Columns are read by NAME, so column
 // order and future additions don't break parsing.
 
-import type { Trace, TraceHeader, Movement, Tick, ReadWall } from './types';
+import type { Trace, TraceHeader, Movement, Tick, ReadWall, TraceNote } from './types';
 
 type Row = Record<string, string>;
 
@@ -216,6 +216,27 @@ function parseTicks(rows: Row[]): Tick[] {
   }));
 }
 
+// [NOTES] rows are `t,mi,text` where text runs to the end of the line and may
+// itself contain commas — so split on the first two commas only (no toRows).
+function parseNotes(lines: string[] | undefined): TraceNote[] {
+  if (!lines || lines.length < 2) return [];
+  const notes: TraceNote[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const c1 = line.indexOf(',');
+    const c2 = c1 >= 0 ? line.indexOf(',', c1 + 1) : -1;
+    if (c2 < 0) continue;
+    const t = Number(line.slice(0, c1));
+    if (Number.isNaN(t)) continue;
+    notes.push({
+      t,
+      mi: Number(line.slice(c1 + 1, c2)) || 0,
+      text: line.slice(c2 + 1).trim()
+    });
+  }
+  return notes.sort((a, b) => a.t - b.t);
+}
+
 function parseReadWalls(rows: Row[]): ReadWall[] {
   return rows.map((r) => ({
     t: num(r, 't'),
@@ -237,8 +258,9 @@ export function parseTrace(text: string): Trace {
   const movements = parseMovements(toRows(sections['MOVEMENTS']));
   const ticks = parseTicks(toRows(sections['TICKS']));
   const readWalls = parseReadWalls(toRows(sections['READWALLS']));
+  const notes = parseNotes(sections['NOTES']);
 
   const duration = ticks.length ? ticks[ticks.length - 1].t : 0;
 
-  return { header, movements, ticks, readWalls, duration };
+  return { header, movements, ticks, readWalls, notes, duration };
 }

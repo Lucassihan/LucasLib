@@ -1,6 +1,6 @@
 #include "movement/pid.h"
 #include "misc/util.h"
-#include "coreConfigs.h"
+#include "debugger/debugger.h"
 
 #include <cmath>
 
@@ -17,9 +17,8 @@ PID::PID()
     : activeProfile(0),
       useTempConstants(false),
       tempKP(0), tempKI(0), tempKD(0),
-      sumerror(0), lastError(0), prevOutput(0),
+      sumError(0), lastError(0), prevOutput(0),
       lastTime(0), firstCycle(true),
-      lockedKP(0), lockedKI(0), lockedKD(0),
       minOutput(0), maxOutput(12.0),
       targetOffset(0),
       executingLyapunov(false),
@@ -34,7 +33,7 @@ PID::PID()
 
 //profile management
 void PID::setProfile(int profile) {
-    if (profile >= 0 && profile < MAX_PROFILES) {
+    if (profile >= 0 and profile < MAX_PROFILES) {
         activeProfile = profile;
     }
 }
@@ -65,26 +64,24 @@ void PID::tempConstants(double kP, double kI, double kD) {
 
 //reset
 void PID::clearAllValues() {
-    sumerror = 0;
+    sumError = 0;
     lastError = 0;
-    prevOutput = 0;
+    // prevOutput = 0; important: prevOutput is NOT cleared, so slew carries between movements.
     firstCycle = true;
     useTempConstants = false;
-    lockedKP = 0;
-    lockedKI = 0;
-    lockedKD = 0;
     error = 0;
     output = 0;
     derivative = 0;
     executingLyapunov = false;
 }
 
-//determine constants — writes the matched step's gains straight into lockedKP/KI/KD
+//determine constants — writes the matched step's gains straight into kP/kI/kD.
+//Called once on the first cycle; the gains then hold for the whole movement.
 void PID::determineConstants(double inputError) {
     if (useTempConstants) {
-        lockedKP = tempKP;
-        lockedKI = tempKI;
-        lockedKD = tempKD;
+        kP = tempKP;
+        kI = tempKI;
+        kD = tempKD;
         return;
     }
 
@@ -93,23 +90,45 @@ void PID::determineConstants(double inputError) {
 
     for (int i = 0; i < count; i++) {
         if (absError <= steps[activeProfile][i].upperBound) {
-            lockedKP = steps[activeProfile][i].kP;
-            lockedKI = steps[activeProfile][i].kI;
-            lockedKD = steps[activeProfile][i].kD;
+            kP = steps[activeProfile][i].kP;
+            kI = steps[activeProfile][i].kI;
+            kD = steps[activeProfile][i].kD;
             return;
         }
     }
 
     //fallback: use last step
     if (count > 0) {
-        lockedKP = steps[activeProfile][count - 1].kP;
-        lockedKI = steps[activeProfile][count - 1].kI;
-        lockedKD = steps[activeProfile][count - 1].kD;
+        kP = steps[activeProfile][count - 1].kP;
+        kI = steps[activeProfile][count - 1].kI;
+        kD = steps[activeProfile][count - 1].kD;
     } else {
-        lockedKP = 0;
-        lockedKI = 0;
-        lockedKD = 0;
+        kP = 0;
+        kI = 0;
+        kD = 0;
     }
+}
+
+void PID::governOutput() {
+    if (not executingLyapunov) {
+        raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
+    }
+
+    raw = takeSmallerBetween(raw, maxOutput); //this function compares magnitude while preserving sign
+
+    if (not executingLyapunov) {
+        raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
+    }
+
+    output = raw;
+}
+
+double PID::timeSinceLastCycle() {
+    double now = vex::timer::systemHighResolution() / 1000.0;
+    double dt = (now - lastTime);
+
+    lastTime = now;
+    return dt;
 }
 
 double PID::P() {
@@ -117,7 +136,8 @@ double PID::P() {
 }
 
 double PID::I() {
-    return takeSmallerBetween(kI * sumerror, maxIntegralOutput);
+    double i = kI * sumError;
+    return takeSmallerBetween(i, maxIntegralOutput);
 }
 
 double PID::D() {
@@ -126,57 +146,24 @@ double PID::D() {
 
 //calculate
 double PID::calculateOutput(double inputError) {
-    error = inputError;
-
-    //dt
-    double now = Brain.timer(msec);
-    double dt = now - lastTime;
     if (firstCycle) {
-        dt = 10.0;
-    }
-    if (dt <= 0) {
-        dt = 10.0;
-    }
-    lastTime = now;
-
-    //set pid constants on first cycle, use them for the entire movement
-    if (firstCycle) {
-        determineConstants(error);
+        determineConstants(inputError);
+        lastError = inputError;
         firstCycle = false;
     }
 
-    kP = lockedKP;
-    kI = lockedKI;
-    kD = lockedKD;
+    error = inputError;                                            // P
+    sumError = fabs(error) < integralBound ? error + sumError : 0; // I
+    derivative = (error - lastError) / timeSinceLastCycle();       // D
 
-    derivative = (error - lastError) / dt;
-    sumerror = fabs(error) < integralBound ? error + sumerror : 0;
+    raw = P() + I() + D();
 
-    //THE PID EQUATION IS HERE!
-    double raw = P() + I() + D();
-
-    //accel/decel rate limiting — skipped under lyapunov (governor slews instead)
-    if (!executingLyapunov) {
-        raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
-    }
-
-    //maxOutput cap (kept even under lyapunov as a safety clamp)
-    raw = takeSmallerBetween(raw, maxOutput); //this function compares magnitude while preserving sign
-
-    //minOutput floor — skipped under lyapunov (it would fight settling)
-    if (!executingLyapunov) {
-        raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
-    }
+    governOutput(); //applies slew, maxOutput, and minOutput
 
     lastError = error;
     prevOutput = raw;
-    output = raw;
 
-    //mirror internals for the debugger (no effect on control)
-    integral = sumerror;
-    activeKP = kP;
-    activeKI = kI;
-    activeKD = kD;
+    debugger::samplePID(this, sumError, kP, kI, kD);  //hand internals to the debugger (no-op unless capturing)
 
-    return raw;
+    return output;
 }

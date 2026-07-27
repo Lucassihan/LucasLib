@@ -43,25 +43,25 @@ double takeSmallerBetween(double raw, double max) {
 }
 
 double slew(double raw, double last, double maxAccelRate, double maxDecelRate) {
-  if (maxAccelRate <= 0 && maxDecelRate <= 0) {
+  if (maxAccelRate <= 0 and maxDecelRate <= 0) {
     return raw;
   }
   double delta = raw - last;
   bool accelerating = (fabs(raw) > fabs(last));
-  if (accelerating && maxAccelRate > 0) {
+  if (accelerating and maxAccelRate > 0) {
     delta = takeSmallerBetween(delta, maxAccelRate);
   }
-  if (!accelerating && maxDecelRate > 0) {
+  if (not accelerating and maxDecelRate > 0) {
     delta = takeSmallerBetween(delta, maxDecelRate);
   }
   return last + delta;
 }
 
 void voltageDrive(double left, double right, bool offMotorBrake) {
-  if (left == 0 && offMotorBrake) {
+  if (left == 0 and offMotorBrake) {
     leftdrive.stop(brake);
     rightdrive.spin(fwd, right, volt);
-  } else if (right == 0 && offMotorBrake) {
+  } else if (right == 0 and offMotorBrake) {
     rightdrive.stop(brake);
     leftdrive.spin(fwd, left, volt);
   } else {

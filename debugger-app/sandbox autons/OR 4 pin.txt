@@ -1,0 +1,57 @@
+//!params {"knobs":{"topLateralSpeed":67,"topAngularSpeed":405,"lateralAccel":600,"angularAccel":3550,"lateralMomentum":0.7,"angularMomentum":0.58,"omniWheels":false,"moveToHeadingEffort":0.2,"driveHeadingEffort":0.8,"headingDisableDist":6,"kLat":0.25,"lyPoseTurnDisableLength":3,"trackwidth":11.5,"ecLatTOut":5000,"ecLatSetD":3,"ecLatExtD":3,"ecLatPLine":0,"ecTurnTOut":5000,"ecTurnSetD":1,"ecTurnExtA":5},"efforts":{"7":0.1,"34":0.1}}
+chassis.setPos(0, -64, 0);
+
+driveForward(2, {.extD = 1});
+driveBackward(2, {.extD = 1});
+driveForward(2, {.extD = 1});
+driveBackward(2, {.extD = 1});
+
+driveForward(5);
+facePoint(17,-68, {.extA = 15});
+driveForward(24, {}, 90); //Pick up a cup
+
+backward = true;
+facePoint(24,-48);
+drivePID.targetOffset = -8;
+moveTo(24,-48);
+delay(500); //Score preload
+
+driveForward(8);
+facePoint(-24,-48);
+drivePID.targetOffset = -8;
+moveTo(-24,-48);
+delay(500); //Score cup
+
+backward = false;
+drivePID.targetOffset = -2;
+moveTo(-16.6,-24); //Grab pin without disrupting pile
+
+backward = true;
+swingOnLeftToPoint(-24,-48);
+drivePID.targetOffset = -8;
+moveTo(-24,-48);
+delay(500); //Score pin
+
+backward = false;
+face(60);
+driveForward(10);
+facePoint(-23.3,-33);
+drivePID.targetOffset = -2;
+moveTo(-23.3,-33); //Grab another pin without disrupting pile
+
+driveBackward(10);
+backward = true;
+facePoint(-24,-24);
+drivePID.targetOffset = -3;
+moveTo(-24,-24); //Grab cup
+
+driveForward(20);
+facePoint(-24,-48);
+drivePID.targetOffset = -8;
+moveTo(-24,-48);
+delay(500); //Score pin + cup
+
+//Alliance goal: 1 pin
+//Neutral goal: 3 pins
+
+

@@ -8,7 +8,28 @@
   import { toScreen, defaultField, type FieldConfig } from '../field/coords';
   import type { Movement } from '$lib/trace/types';
   import { traceState, tickPairAt, movementAt, poseAt, movementTicks } from '$lib/stores/trace.svelte';
-  let { movement, field = defaultField }: { movement: Movement; field?: FieldConfig } = $props();
+
+  /** Sandbox override: full live geometry, bypassing the trace store. */
+  export interface BoomOverride {
+    end: { x: number; y: number };
+    targetH: number;
+    /** ec.crossD — ⊥ trip-line offset back toward the robot; negative = cross off */
+    perpLine: number;
+    backward: boolean;
+    init: { x: number; y: number };
+    carrot: { x: number; y: number };
+    ghost: { x: number; y: number };
+    robot: { x: number; y: number; h: number };
+    prevH: number;
+    stage: number;
+    arcR: number;
+  }
+
+  let {
+    movement,
+    field = defaultField,
+    override = undefined
+  }: { movement?: Movement; field?: FieldConfig; override?: BoomOverride } = $props();
 
   const D2R = Math.PI / 180;
   const wrap = (a: number) => {
@@ -23,44 +44,94 @@
 
   const pair = $derived(tickPairAt(traceState.time));
   const pose = $derived(poseAt(traceState.time));
-  const ticks = $derived(movementTicks(movement.index));
+  const ticks = $derived(movement ? movementTicks(movement.index) : []);
+
+  /** shared geometry builder — identical drawing for trace data and overrides */
+  function buildGeo(
+    end: { x: number; y: number },
+    targetH: number,
+    perpLine: number,
+    perpBack: boolean,
+    init: { x: number; y: number },
+    carrot: { x: number; y: number },
+    ghost: { x: number; y: number },
+    robot: { x: number; y: number; h: number },
+    prevH: number,
+    stage: number,
+    arcR: number
+  ) {
+    const sEnd = toScreen(end.x, end.y, field);
+    const sInit = toScreen(init.x, init.y, field);
+    const sCarrot = toScreen(carrot.x, carrot.y, field);
+    const sGhost = toScreen(ghost.x, ghost.y, field);
+    const sRobot = toScreen(robot.x, robot.y, field);
+
+    // CROSS trip plane (⊥ the approach heading). The real line is infinite; draw a
+    // 24"-wide stub (faded at the ends) so it reads as local to the target rather
+    // than cutting the field in half. perpLine (= ec.crossD) slides it back toward
+    // the robot along the direction of travel; negative means cross is off entirely.
+    const arm = 12;
+    const pX = Math.cos(targetH * D2R);
+    const pY = -Math.sin(targetH * D2R);
+    const slide = perpLine >= 0 ? (perpBack ? perpLine : -perpLine) : 0;
+    const cX = end.x + Math.sin(targetH * D2R) * slide;
+    const cY = end.y + Math.cos(targetH * D2R) * slide;
+    const pe1 = toScreen(cX + pX * arm, cY + pY * arm, field);
+    const pe2 = toScreen(cX - pX * arm, cY - pY * arm, field);
+    const perpOn = perpLine >= 0;
+
+    // instantaneous turn arc (skip when nearly straight)
+    let arc: { cx: number; cy: number; r: number } | null = null;
+    if (arcR > 0 && arcR < 160) {
+      const dth = wrap(robot.h - prevH);
+      const fh = robot.h * D2R;
+      // right-hand normal of the forward vector (sin h, cos h)
+      const rnx = Math.cos(fh);
+      const rny = -Math.sin(fh);
+      const sgn = dth >= 0 ? 1 : -1;
+      const c = toScreen(robot.x + rnx * arcR * sgn, robot.y + rny * arcR * sgn, field);
+      arc = { cx: c.sx, cy: c.sy, r: arcR };
+    }
+
+    return { sEnd, sInit, sCarrot, sGhost, sRobot, stage, pe1, pe2, perpOn, arc };
+  }
 
   const geo = $derived.by(() => {
+    if (override) {
+      return buildGeo(
+        override.end,
+        override.targetH,
+        override.perpLine,
+        override.backward,
+        override.init,
+        override.carrot,
+        override.ghost,
+        override.robot,
+        override.prevH,
+        override.stage,
+        override.arcR
+      );
+    }
+    if (!movement) return null;
     const live = pair.cur;
     const isActive = movementAt(traceState.time)?.index === movement.index;
     if (!isActive || !live || live.mi !== movement.index || ticks.length === 0) return null;
 
     // s = 1 at the first tick, so its carrot IS the initial (un-retracted) carrot
     const initC = { x: ticks[0].carrotX, y: ticks[0].carrotY };
-
-    const sEnd = toScreen(movement.targetX, movement.targetY, field);
-    const sInit = toScreen(initC.x, initC.y, field);
-    const sCarrot = toScreen(live.carrotX, live.carrotY, field);
-    const sGhost = toScreen(live.ghostX, live.ghostY, field);
-    const sRobot = toScreen(pose.x, pose.y, field);
-
-    // perpendicular exit plane through the target (perp to the approach heading)
-    const arm = movement.exitPerpLine > 0 ? movement.exitPerpLine : 10;
-    const pX = Math.cos(movement.targetH * D2R);
-    const pY = -Math.sin(movement.targetH * D2R);
-    const pe1 = toScreen(movement.targetX + pX * arm, movement.targetY + pY * arm, field);
-    const pe2 = toScreen(movement.targetX - pX * arm, movement.targetY - pY * arm, field);
-
-    // instantaneous turn arc (skip when nearly straight)
-    let arc: { cx: number; cy: number; r: number } | null = null;
-    const r = live.arcRadius;
-    if (r > 0 && r < 160) {
-      let dth = pair.prev ? wrap(live.h - pair.prev.h) : 0;
-      const fh = live.h * D2R;
-      // right-hand normal of the forward vector (sin h, cos h)
-      const rnx = Math.cos(fh);
-      const rny = -Math.sin(fh);
-      const sgn = dth >= 0 ? 1 : -1;
-      const c = toScreen(pose.x + rnx * r * sgn, pose.y + rny * r * sgn, field);
-      arc = { cx: c.sx, cy: c.sy, r };
-    }
-
-    return { sEnd, sInit, sCarrot, sGhost, sRobot, stage: live.stage, pe1, pe2, arc };
+    return buildGeo(
+      { x: movement.targetX, y: movement.targetY },
+      movement.targetH,
+      movement.exitPerpLine,
+      movement.backwards,
+      initC,
+      { x: live.carrotX, y: live.carrotY },
+      { x: live.ghostX, y: live.ghostY },
+      { x: pose.x, y: pose.y, h: live.h },
+      pair.prev ? pair.prev.h : live.h,
+      live.stage,
+      live.arcRadius
+    );
   });
 </script>
 
@@ -69,8 +140,18 @@
     <circle cx={geo.arc.cx} cy={geo.arc.cy} r={geo.arc.r} fill="none" stroke="#3b82f6" stroke-width="1" stroke-dasharray="2 3" opacity="0.3" vector-effect="non-scaling-stroke" />
   {/if}
 
-  <!-- perpendicular exit plane through the target -->
-  <line x1={geo.pe1.sx} y1={geo.pe1.sy} x2={geo.pe2.sx} y2={geo.pe2.sy} stroke="#cfcfcf" stroke-width="1" stroke-dasharray="3 3" opacity="0.3" vector-effect="non-scaling-stroke" />
+  <!-- CROSS trip plane (omitted when crossD < 0 — cross is off) -->
+  {#if geo.perpOn}
+    <defs>
+      <linearGradient id="boom-perp-fade" gradientUnits="userSpaceOnUse" x1={geo.pe1.sx} y1={geo.pe1.sy} x2={geo.pe2.sx} y2={geo.pe2.sy}>
+        <stop offset="0" stop-color="#cfcfcf" stop-opacity="0" />
+        <stop offset="0.28" stop-color="#cfcfcf" stop-opacity="0.3" />
+        <stop offset="0.72" stop-color="#cfcfcf" stop-opacity="0.3" />
+        <stop offset="1" stop-color="#cfcfcf" stop-opacity="0" />
+      </linearGradient>
+    </defs>
+    <line x1={geo.pe1.sx} y1={geo.pe1.sy} x2={geo.pe2.sx} y2={geo.pe2.sy} stroke="url(#boom-perp-fade)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+  {/if}
 
   <!-- lead axis: end -> initial carrot -->
   <line x1={geo.sEnd.sx} y1={geo.sEnd.sy} x2={geo.sInit.sx} y2={geo.sInit.sy} stroke={YELLOW} stroke-width="1.2" stroke-dasharray="4 3" opacity="0.5" vector-effect="non-scaling-stroke" />

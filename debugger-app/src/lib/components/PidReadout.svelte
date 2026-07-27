@@ -113,7 +113,8 @@
           <div class="chips">
             <span class="chip">kD</span><span class="chip-val">{fmt(c.kd, 3)}</span>
             <span class="chip-mul">×</span>
-            <span class="chip">Δe</span><span class="chip-val">{fmt(c.de)}</span>
+            <!-- Δe is per-millisecond, so it lives around 0.0x — 2dp reads as 0.00 -->
+            <span class="chip">Δe</span><span class="chip-val">{fmt(c.de, 4)}</span>
           </div>
 
           <div class="outrow"><span class="olabel">Output</span><span class="oval">{fmt(c.output)} V</span></div>

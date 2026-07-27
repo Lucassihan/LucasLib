@@ -10,7 +10,7 @@ ButtonState a, b, x, y;
 bool noButtonPressed = true;
 
 //Array of all tracked buttons. Order doesn't matter for correctness, but the order here
-//determines which button "wins" the Pressed_first claim when two are pressed on the same cycle.
+//determines which button "wins" the pressedFirst claim when two are pressed on the same cycle.
 static ButtonState* allButtons[] = {
     &l1, &l2, &r1, &r2,
     &upArrow, &downArrow, &leftArrow, &rightArrow,
@@ -99,7 +99,7 @@ void controllerButtonMonitoringFcn() {
 
     //Pass 3: combo classification (needs cross-button visibility).
     //On a button's rising edge, it's a combo if any OTHER button is currently
-    //marked Pressed_first. The classification stays until release.
+    //marked pressedFirst. The classification stays until release.
     for (int i = 0; i < N; i++) {
         ButtonState& s = *allButtons[i];
 
@@ -109,18 +109,18 @@ void controllerButtonMonitoringFcn() {
                 if (j == i) {
                     continue;
                 }
-                if (allButtons[j]->Pressed_first) {
+                if (allButtons[j]->pressedFirst) {
                     combo = true;
                     break;
                 }
             }
-            s.Pressed_first = !combo;
-            s.Pressed_second = combo;
+            s.pressedFirst = !combo;
+            s.pressedSecond = combo;
         }
 
         if (!s.Pressing) {
-            s.Pressed_first = false;
-            s.Pressed_second = false;
+            s.pressedFirst = false;
+            s.pressedSecond = false;
         }
     }
 

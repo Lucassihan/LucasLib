@@ -53,11 +53,13 @@ Odometry chassis({
   .trackwidth         = 13.5,
   .driveWheelDiameter = 3.25,
   .driveGearRatio     = 60.0 / 36.0,
-  .driveEncoder       = front,
+  .driveEncoder       = front, //Motor choosed for no tracker wheel odometry. Either front motors, middle motors, or back motors.
 
-  //Distance sensor reference readings -- park the robot at (48, 48) and record what each sensor reads to the CLOSEST WALL. You will need to rotate the robot to get all the sensors.
-  .sensor1Offset      = 18.97,
-  .sensor2Offset      = 11.9,
-  .sensor3Offset      = 19.1,
-  .sensor4Offset      = 18.7,
+  //Distance sensor mounts -- measure each sensor face's position from the tracking center,
+  //in the ROBOT's frame: y = inches in front of center (+Y), x = inches to the right of
+  //center (+X). Both are signed. Used to translate a wall reset back to the center.
+  .sensor1Offset      = {.y = 0, .x = 0},
+  .sensor2Offset      = {.y = 0, .x = 0},
+  .sensor3Offset      = {.y = 0, .x = 0},
+  .sensor4Offset      = {.y = 0, .x = 0},
 });

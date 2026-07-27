@@ -1,27 +1,80 @@
 // Top-down field renders used as the field-map backdrop. Each PNG is a square
 // 12ft×12ft (= 144"×144") image, so it maps 1:1 onto the field SVG's
 // 0 0 144 144 viewBox. "highlighted" variants show the auton path lines; "plain"
-// variants show the game elements only. Files live in static/field/.
+// variants show the game elements only. Files live in static/field/ and are
+// named `<game>-<mode>[-highlighted].png`.
 
-export type FieldBackdrop = 'perimeter' | 'match-h' | 'match' | 'skills-h' | 'skills';
+export type FieldBackdrop = string; // '<game>-<mode>' | '<game>-<mode>-h' | 'perimeter'
+
+export interface GameSpec {
+  key: string; // file prefix, e.g. 'override'
+  label: string; // display name, e.g. 'Override'
+}
+
+// Newest season first. Add a game here + drop its four PNGs in static/field/.
+export const GAMES: GameSpec[] = [
+  { key: 'pushback', label: 'Push Back' },
+  { key: 'highstakes', label: 'High Stakes' },
+  { key: 'override', label: 'Override' }
+];
+
+export type FieldMode = 'match' | 'skills';
+export const MODES: FieldMode[] = ['match', 'skills'];
 
 export interface BackdropOption {
   id: FieldBackdrop;
   name: string;
+  game?: string;
+  mode?: FieldMode;
   variant?: 'highlighted' | 'plain';
   file: string;
 }
 
-export const BACKDROPS: BackdropOption[] = [
-  { id: 'perimeter', name: 'Empty field', file: 'empty.png' },
-  { id: 'match-h', name: 'Override Match', variant: 'highlighted', file: 'match-highlighted.png' },
-  { id: 'match', name: 'Override Match', variant: 'plain', file: 'match.png' },
-  { id: 'skills-h', name: 'Override Skills', variant: 'highlighted', file: 'skills-highlighted.png' },
-  { id: 'skills', name: 'Override Skills', variant: 'plain', file: 'skills.png' }
-];
+function buildBackdrops(): BackdropOption[] {
+  const out: BackdropOption[] = [{ id: 'perimeter', name: 'Empty field', file: 'empty.png' }];
+  for (const g of GAMES) {
+    for (const mode of MODES) {
+      const modeLabel = mode === 'match' ? 'Match' : 'Skills';
+      out.push({
+        id: `${g.key}-${mode}-h`,
+        name: `${g.label} ${modeLabel}`,
+        game: g.key,
+        mode,
+        variant: 'highlighted',
+        file: `${g.key}-${mode}-highlighted.png`
+      });
+      out.push({
+        id: `${g.key}-${mode}`,
+        name: `${g.label} ${modeLabel}`,
+        game: g.key,
+        mode,
+        variant: 'plain',
+        file: `${g.key}-${mode}.png`
+      });
+    }
+  }
+  return out;
+}
+
+export const BACKDROPS: BackdropOption[] = buildBackdrops();
+
+// Old flat ids (Override-only era) → new game-prefixed ids, for migrating
+// persisted settings written before the multi-game rename.
+export const LEGACY_BACKDROP_IDS: Record<string, FieldBackdrop> = {
+  'match-h': 'override-match-h',
+  match: 'override-match',
+  'skills-h': 'override-skills-h',
+  skills: 'override-skills'
+};
+
+export function normalizeBackdropId(id: string | undefined | null): FieldBackdrop {
+  if (!id) return 'perimeter';
+  if (LEGACY_BACKDROP_IDS[id]) return LEGACY_BACKDROP_IDS[id];
+  return BACKDROPS.some((b) => b.id === id) ? id : 'perimeter';
+}
 
 export function findBackdrop(id: FieldBackdrop): BackdropOption {
-  return BACKDROPS.find((b) => b.id === id) ?? BACKDROPS[0];
+  return BACKDROPS.find((b) => b.id === normalizeBackdropId(id)) ?? BACKDROPS[0];
 }
 
 // The 144"×144" coordinate space is the TILE grid, NOT the inner wall face: the

@@ -4,6 +4,7 @@
 
   const duration = $derived(traceState.trace.duration || 1);
   const movements = $derived(traceState.trace.movements);
+  const notes = $derived(traceState.trace.notes ?? []);
 
   let trackEl: HTMLElement | undefined = $state();
   let dragging = $state(false);
@@ -140,6 +141,38 @@
   }
 
   const hoverMovement = $derived(hoverTime !== null ? movementAt(hoverTime) : null);
+
+  // --- Notes ---
+  // Hovering a pip shows its text in a fixed tooltip (same pattern as scrub-tip).
+  let noteTip = $state<{ x: number; top: number; t: number; text: string } | null>(null);
+  function showNoteTip(e: PointerEvent, n: { t: number; text: string }) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    noteTip = { x: r.left + r.width / 2, top: r.top, t: n.t, text: n.text };
+  }
+  function seekNote(t: number) {
+    traceState.playing = false;
+    traceState.time = t;
+  }
+
+  // During playback, surface the note the playhead just passed as a toast
+  // above its pip for a short hold, so the run narrates itself.
+  const NOTE_HOLD = 2600; // ms of trace time the toast stays up
+  const activeNote = $derived.by(() => {
+    let last: { t: number; text: string } | null = null;
+    for (const n of notes) {
+      if (n.t <= traceState.time) last = n;
+      else break;
+    }
+    return last && traceState.time - last.t < NOTE_HOLD ? last : null;
+  });
+  let toastX = $state(0);
+  let toastTop = $state(0);
+  $effect(() => {
+    if (!activeNote || !trackEl) return;
+    const r = trackEl.getBoundingClientRect();
+    toastX = r.left + (Math.max(0, Math.min(1, activeNote.t / duration))) * r.width;
+    toastTop = r.top;
+  });
 </script>
 
 <svelte:window
@@ -151,10 +184,21 @@
   }}
 />
 
-{#if hoverTime !== null}
+{#if hoverTime !== null && !noteTip}
   <div class="scrub-tip" style="left: {hoverX}px; top: {hoverTop}px;">
     <span class="tip-move">{hoverMovement ? prettyMovement(hoverMovement.type) : '—'}</span>
     <span class="tip-time">{fmtPrecise(hoverTime)}</span>
+  </div>
+{/if}
+
+{#if noteTip}
+  <div class="scrub-tip note-tip" style="left: {noteTip.x}px; top: {noteTip.top}px;">
+    <span class="tip-note">{noteTip.text}</span>
+    <span class="tip-time">{fmtPrecise(noteTip.t)}</span>
+  </div>
+{:else if activeNote && traceState.playing}
+  <div class="scrub-tip note-toast" style="left: {toastX}px; top: {toastTop}px;">
+    <span class="tip-note">{activeNote.text}</span>
   </div>
 {/if}
 
@@ -234,6 +278,18 @@
         {#if i > 0}
           <div class="marker" style="left: {pct(m.startTime)}%"></div>
         {/if}
+      {/each}
+
+      {#each notes as n, i (i)}
+        <button
+          class="note-pip"
+          style="left: {Math.min(pct(n.t), 100)}%"
+          onpointerdown={(e) => e.stopPropagation()}
+          onclick={() => seekNote(n.t)}
+          onpointerenter={(e) => showNoteTip(e, n)}
+          onpointerleave={() => (noteTip = null)}
+          aria-label="Note at {fmtPrecise(n.t)}: {n.text}"
+        ></button>
       {/each}
 
       <div class="handle" style="left: {pct(traceState.time)}%"></div>
@@ -588,5 +644,44 @@
     font-size: 9px;
     font-weight: 400;
     color: var(--text-dim);
+  }
+
+  /* note pips — clickable diamonds pinned above the rail */
+  .note-pip {
+    position: absolute;
+    top: 1px;
+    width: 6.5px;
+    height: 6.5px;
+    padding: 0;
+    border: none;
+    border-radius: 1.5px;
+    background: #d9b64a;
+    transform: translateX(-50%) rotate(45deg);
+    cursor: pointer;
+    z-index: 3;
+    transition: background 0.12s ease, box-shadow 0.12s ease;
+  }
+  .note-pip:hover {
+    background: #f0d075;
+    box-shadow: 0 0 6px rgba(233, 200, 90, 0.5);
+  }
+
+  .note-tip,
+  .note-toast {
+    max-width: 340px;
+    white-space: normal;
+    text-align: center;
+  }
+  .tip-note {
+    font-size: 10px;
+    font-weight: 550;
+    line-height: 1.35;
+    color: #ecd88f;
+  }
+  .note-toast {
+    pointer-events: none;
+    box-shadow:
+      inset 0 0 0 1px rgba(217, 182, 74, 0.35),
+      0 6px 20px rgba(0, 0, 0, 0.45);
   }
 </style>

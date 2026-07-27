@@ -11,6 +11,16 @@
   import MotorDiagram from '$lib/components/MotorDiagram.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
   import LibraryPanel from '$lib/components/LibraryPanel.svelte';
+  import SandboxParams from '$lib/components/sandbox/SandboxParams.svelte';
+  import SandboxStats from '$lib/components/sandbox/SandboxStats.svelte';
+  import SandboxField from '$lib/components/sandbox/SandboxField.svelte';
+  import SandboxCode from '$lib/components/sandbox/SandboxCode.svelte';
+  import SandboxTimeline from '$lib/components/sandbox/SandboxTimeline.svelte';
+  import PursuitField from '$lib/components/pursuit/PursuitField.svelte';
+  import PursuitParams from '$lib/components/pursuit/PursuitParams.svelte';
+  import PursuitExport from '$lib/components/pursuit/PursuitExport.svelte';
+  import { sandbox, getRoute, togglePlaySandbox } from '$lib/stores/sandbox.svelte';
+  import { pursuit, deleteAnchor } from '$lib/stores/pursuit.svelte';
   import { traceState, movementAt, tickAt, togglePlay, stepTicks, jumpMovement } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
   import { PID_TERM, COLORS, isLyPose, isVolDrive } from '$lib/trace/labels';
@@ -18,6 +28,71 @@
 
   let settingsOpen = $state(false);
   let libraryOpen = $state(false);
+
+  // Sandbox column widths (px) — draggable splitters, persisted.
+  const COLW_KEY = 'lucaslib-debugger.sandbox-cols';
+  function loadColW(): { left: number; right: number } {
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(COLW_KEY) : null;
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (typeof p.left === 'number' && typeof p.right === 'number') return p;
+      }
+    } catch {
+      // fall through
+    }
+    return { left: 320, right: 460 };
+  }
+  const colW = $state(loadColW());
+
+  // Left sandbox column can collapse to a thin rail. Persisted.
+  const LEFT_KEY = 'lucaslib-debugger.sandbox-left-collapsed';
+  let leftCollapsed = $state(
+    typeof localStorage !== 'undefined' && localStorage.getItem(LEFT_KEY) === '1'
+  );
+  function setLeftCollapsed(v: boolean) {
+    leftCollapsed = v;
+    try {
+      localStorage.setItem(LEFT_KEY, v ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }
+
+  // Left column view: parameter sliders, or the PID stats (replay-style). Persisted.
+  const LEFT_VIEW_KEY = 'lucaslib-debugger.sandbox-left-view';
+  let leftView = $state<'params' | 'pid'>(
+    typeof localStorage !== 'undefined' && localStorage.getItem(LEFT_VIEW_KEY) === 'pid' ? 'pid' : 'params'
+  );
+  function setLeftView(v: 'params' | 'pid') {
+    leftView = v;
+    try {
+      localStorage.setItem(LEFT_VIEW_KEY, v);
+    } catch {
+      // ignore
+    }
+  }
+
+  let split: { side: 'left' | 'right'; startX: number; startW: number } | null = null;
+  function startSplit(e: PointerEvent, side: 'left' | 'right') {
+    e.preventDefault();
+    split = { side, startX: e.clientX, startW: colW[side] };
+  }
+  function onSplitMove(e: PointerEvent) {
+    if (!split) return;
+    const dx = e.clientX - split.startX;
+    const w = split.side === 'left' ? split.startW + dx : split.startW - dx;
+    colW[split.side] = Math.max(220, Math.min(640, w));
+  }
+  function onSplitUp() {
+    if (!split) return;
+    split = null;
+    try {
+      localStorage.setItem(COLW_KEY, JSON.stringify({ left: colW.left, right: colW.right }));
+    } catch {
+      // ignore
+    }
+  }
 
   // Global playback shortcuts (guide lives behind the ⌨ button in the timeline).
   // Inactive while a dialog is open or the focus is in a text field.
@@ -27,6 +102,30 @@
     if (t && t.closest('input, textarea, select, [contenteditable="true"]')) return;
     // a focused button owns Space (avoid double-toggling via the play button)
     if (e.key === ' ' && t && t.closest('button')) return;
+    if (settings.appMode === 'trajectory') {
+      // planner: Delete/Backspace removes the selected anchor
+      if ((e.key === 'Delete' || e.key === 'Backspace') && pursuit.selected !== null) {
+        e.preventDefault();
+        deleteAnchor(pursuit.selected);
+      }
+      return;
+    }
+    if (settings.appMode === 'sandbox') {
+      // sandbox: space plays the simulated route, ↑/↓ jump to start/end
+      if (e.key === ' ') {
+        e.preventDefault();
+        togglePlaySandbox();
+      } else if (e.key === 'ArrowUp' || e.key === 'Home') {
+        e.preventDefault();
+        sandbox.playing = false;
+        sandbox.time = 0;
+      } else if (e.key === 'ArrowDown' || e.key === 'End') {
+        e.preventDefault();
+        sandbox.playing = false;
+        sandbox.time = getRoute().sim.duration;
+      }
+      return;
+    }
     switch (e.key) {
       case ' ':
         e.preventDefault();
@@ -159,7 +258,7 @@
   const turnActive = $derived(turnNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onpointermove={onSplitMove} onpointerup={onSplitUp} />
 
 <div class="app">
   <TopBar
@@ -168,6 +267,78 @@
     onOpenLibrary={() => (libraryOpen = true)}
   />
 
+  {#if settings.appMode === 'sandbox'}
+    <div class="workspace">
+      {#if leftCollapsed}
+        <button class="left-rail" onclick={() => setLeftCollapsed(false)} title="Show parameters" aria-label="Expand parameters panel">
+          <span class="rail-chevron">›</span>
+          <span class="rail-label">Parameters</span>
+        </button>
+      {:else}
+        <div class="sandbox-params-col" style="width: {colW.left}px">
+          <div class="col-head">
+            <div class="col-tabs" role="tablist" aria-label="Left panel view">
+              <button class="col-tab" class:on={leftView === 'params'} role="tab" aria-selected={leftView === 'params'} onclick={() => setLeftView('params')}>Params</button>
+              <button class="col-tab" class:on={leftView === 'pid'} role="tab" aria-selected={leftView === 'pid'} onclick={() => setLeftView('pid')}>PID</button>
+            </div>
+            <button class="col-collapse" onclick={() => setLeftCollapsed(true)} title="Collapse panel" aria-label="Collapse parameters panel">‹</button>
+          </div>
+          {#if leftView === 'pid'}
+            <SandboxStats />
+          {:else}
+            <SandboxParams />
+          {/if}
+        </div>
+        <div
+          class="splitter"
+          onpointerdown={(e) => startSplit(e, 'left')}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize parameters column"
+        ></div>
+      {/if}
+      <div class="field-col">
+        <SandboxField />
+        <SandboxTimeline />
+      </div>
+      <div
+        class="splitter"
+        onpointerdown={(e) => startSplit(e, 'right')}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize code column"
+      ></div>
+      <div class="sandbox-code-col" style="width: {colW.right}px">
+        <SandboxCode />
+      </div>
+    </div>
+  {:else if settings.appMode === 'trajectory'}
+    <div class="workspace">
+      <div class="sandbox-params-col" style="width: {colW.left}px">
+        <PursuitParams />
+      </div>
+      <div
+        class="splitter"
+        onpointerdown={(e) => startSplit(e, 'left')}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize planner column"
+      ></div>
+      <div class="field-col">
+        <PursuitField />
+      </div>
+      <div
+        class="splitter"
+        onpointerdown={(e) => startSplit(e, 'right')}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize export column"
+      ></div>
+      <div class="sandbox-code-col" style="width: {colW.right}px">
+        <PursuitExport />
+      </div>
+    </div>
+  {:else}
   <div class="workspace">
     <MovementInspector />
 
@@ -223,6 +394,7 @@
       {/if}
     </div>
   </div>
+  {/if}
 </div>
 
 <SettingsPanel bind:open={settingsOpen} />
@@ -261,6 +433,123 @@
     flex-direction: column;
     gap: var(--gap);
     min-width: 0;
+  }
+
+  /* sandbox: made-up/behavior params left, code right — widths draggable */
+  .sandbox-params-col,
+  .sandbox-code-col {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    gap: var(--gap);
+  }
+
+  /* left-column header: title + collapse control */
+  .col-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 0 2px;
+  }
+  .col-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-ghost);
+  }
+  /* Params ⇄ PID view tabs */
+  .col-tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-base);
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 2px;
+  }
+  .col-tab {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .col-tab:hover {
+    color: var(--text-primary);
+  }
+  .col-tab.on {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+  }
+  .col-collapse {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-small);
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .col-collapse:hover {
+    color: var(--text-primary);
+    background: var(--bg-base);
+  }
+
+  /* collapsed rail: a thin vertical bar that expands the panel back */
+  .left-rail {
+    flex-shrink: 0;
+    width: 30px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    background: var(--bg-surface);
+    border: none;
+    border-radius: var(--radius-panel);
+    box-shadow: var(--ring);
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .left-rail:hover {
+    color: var(--text-primary);
+    background: var(--bg-raised);
+  }
+  .rail-chevron {
+    font-size: 16px;
+    line-height: 1;
+  }
+  .rail-label {
+    writing-mode: vertical-rl;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .splitter {
+    flex-shrink: 0;
+    width: 6px;
+    margin: 0 -2px;
+    cursor: col-resize;
+    border-radius: 3px;
+    transition: background 0.15s ease;
+  }
+  .splitter:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
 
   /* voldrive: the whole column is one panel holding the motor diagram */

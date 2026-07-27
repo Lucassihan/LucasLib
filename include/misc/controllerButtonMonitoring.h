@@ -38,11 +38,11 @@ struct ButtonState {
 
     //--- Combo classification ---------------------------------------------
     //Set on the press's rising edge. Stays stable until release.
-    //Pressed_first  = this button was the FIRST of any held combination
-    //Pressed_second = this button was pressed while another was already held
+    //pressedFirst  = this button was the FIRST of any held combination
+    //pressedSecond = this button was pressed while another was already held
 
-    bool Pressed_first = false;
-    bool Pressed_second = false;
+    bool pressedFirst = false;
+    bool pressedSecond = false;
 
     //--- User exhaustion flag ---------------------------------------------
     //Set true in user code to mark a press's action as consumed. Auto-resets on release.

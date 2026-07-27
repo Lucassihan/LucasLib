@@ -33,6 +33,10 @@ bool close;
 bool exitConditionFulfilled;
 double initialHeading;
 
+// Global drive direction — persists across movements. Initializes false; no
+// movement resets it (clearAllValues deliberately leaves it untouched).
+bool backward = false;
+
 //Stage 2 governor — applies to combined left/right power. Tunable by user.
 TotalOutput totalOutput;
 
@@ -121,10 +125,10 @@ void governOutputs() {
 
     //min floor per side — ratio breaks at low values, but that's expected for static-friction overcoming
     if (totalOutput.minOutput > 0) {
-        if (fabs(leftOut) < totalOutput.minOutput && leftOut != 0) {
+        if (fabs(leftOut) < totalOutput.minOutput and leftOut != 0) {
             leftOut = sign(leftOut) * totalOutput.minOutput;
         }
-        if (fabs(rightOut) < totalOutput.minOutput && rightOut != 0) {
+        if (fabs(rightOut) < totalOutput.minOutput and rightOut != 0) {
             rightOut = sign(rightOut) * totalOutput.minOutput;
         }
     }

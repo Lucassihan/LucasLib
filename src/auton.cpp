@@ -1,10 +1,12 @@
 #include "auton.h"
 #include "movement.h"
+#include "movementUtils.h"
 #include "coreConfigs.h"
 #include "misc/util.h"
 #include "debugger/debugger.h"
 #include "pid.h"
 #include "main.h"
+#include "scheduler.h"
 
 #include <cmath>
 
@@ -12,7 +14,9 @@
 void initializePIDConstants() {
   //TurnPID
   turnPID.setProfile(normal);
-  turnPID.addStep(999999, 0.1, 0.001, 3.644);
+  turnPID.addStep(45, 0.1, 0.001, 3.644);
+  turnPID.addStep(90, 0.12, 0.001, 3.744);
+  turnPID.addStep(180, 0.15, 0.001, 3.844);
   turnPID.setIntegralSettings(10, 3);
 
   //SwingPID
@@ -44,61 +48,23 @@ void autonSettings() {
   //You can put your own stuff in here too
 }
 
+
+bool cond1() {
+  if (chassis.distanceTo(24,24) < 2) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
 void exampleAuton() {
   debugger::start("example");
   autonSettings();
   chassis.setPos(0,0,0);
 
-  voldrive(5);
-  delay(500);
-  fourBar.spin(forward, 12, volt);
-  delay(1000);
-  fourBar.stop(coast);
-
-//   moveTo(24,24, {.timeout = 50000});
-
-  // facePoint(24, 24, {.exitAng = 10});
-  // moveTo(24, 24, {.settle = true});
-  // facePoint(0, 24, {.exitAng = 10}, true);
-  // moveTo(0, 24, {.settle = true},true);
-  // facePoint(0,0,{.exitAng = 10}, true);
-  // // moveTo(0,0,{.timeout = 500000}, true);
-  // drivePID.maxOutput = 5;
-  // BoomParams boom1 {
-  //   .x = 24,
-  //   .y = 12,
-  //   .heading = 90,
-  //   .lead = 0.6,
-  //   .gLead = 0.4,
-  // };
-  // facePoint(getBoomLeadX(boom1, false), getBoomLeadY(boom1, false), {}, false);
-  // boomerangTo(boom1, {.extD = 0}, false);
-
-  // face(180);
-  // moveTo(0, 48, {}, true);
-
-  // totalOutput.maxOutput = 3;
-  // kLat = 0.05;
-  // lyPose(24, 24, {.extD = 0}, false, 45);
-
-  // face(180);
-  // // lyPose(24,12, {}, false, 90);
+  schedule(cond1, scoreFcn);
 
   debugger::stop();
-
-//   LateralExitConditions yFast = {
-//     .extD = 3
-//   };
-
-//   TurnExitConditions tFast = {
-//     .exitAng = 5
-//   };
-
-
-//   facePoint(10, 36, tFast);
-//   moveTo(0, 36, {.timeout = 500000});
-//   voltageDrive(0,0);
-//   delay(100);
 }
 
 void blueAuto() {
@@ -139,6 +105,4 @@ void redAuto() {
   voldrive(-1);
   delay(1000);
   voldrive(0);
-
-
 }

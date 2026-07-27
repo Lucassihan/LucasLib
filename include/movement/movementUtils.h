@@ -31,6 +31,13 @@ extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
+// Global drive direction. Every point/pose movement (facePoint-to-point, swing-
+// to-point, moveTo, lyPose, boomerangTo) runs backward while this is true. It is
+// a persistent mode, NOT a per-move argument: it initializes to false and NO
+// movement ever resets it — clearAllValues() leaves it alone. Flip it yourself to
+// change direction; it stays flipped until you flip it back.
+extern bool   backward;
+
 // -------- Lyapunov control gain (user-tunable) --------
 extern double kLat;
 
@@ -63,7 +70,6 @@ struct BoomParams {
     double lead       = 0.5;   // carrot lead, as a COEFFICIENT of the initial robot->target distance
     double gLead      = 0.0;   // ghost lead [0,1]: how far the ghost trails behind the carrot
     double leadChasePowerLimit = -1;  // centripetal slip cap (grip constant, output^2/inch); -1 disables
-    bool   backward   = false;
 };
 
 double getBoomLeadX(BoomParams bp, bool backward = false);

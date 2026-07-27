@@ -1,0 +1,60 @@
+//!params {"name":"high stakes six ring","knobs":{"wheelRpm":450,"wheelDiameter":3.25,"robotWeight":7,"driveKp":0.45,"turnKp":0.5,"headingKp":1,"lateralMomentum":0.85,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"kLat":0.25,"lyPoseTurnDisableLength":3,"trackwidth":10.5,"ecLatTOut":5000,"ecLatSetD":0,"ecLatExtD":4,"ecLatPLine":2,"ecTurnTOut":5000,"ecTurnSetD":1,"ecTurnExtA":5},"efforts":{"14":0.2}}
+chassis.setPos(-12.4, -61.4, 134);
+drivePID.maxDecelRate = 0.14;
+
+backward = true;
+moveTo(-24,-24, {.pLine = 5, .extD = 10});
+drivePID.maxOutput = 7;
+drivePID.minOutput = 4;
+driveBackward(12, {.extD = 6});
+backward = false;
+
+BoomParams ringPile {.x = -41.7, .y = -6.6, .heading = -90};
+turnPID.targetOffset = 5;
+//face(-20, {.extA = 10};
+facePoint(ringPile);
+drivePID.minOutput = 4;
+boomerangTo(ringPile);
+driveForward(22, {}, -90);
+drivePID.minOutput = 0;
+
+backward = true;
+drivePID.maxOutput = 12;
+//facePoint(-29.2,-17);
+moveTo(-29.2,-17);
+
+backward = false;
+facePoint(-48,-24);
+drivePID.targetOffset = -2;
+moveTo(-48,-24, {.pLine = 6});
+
+BoomParams corner {.x = -63.7, .y = -64.6, .heading = -135};
+//facePoint(corner);
+boomerangTo(corner);
+
+drivePID.maxOutput = 3;
+driveBackward(15);
+driveForward(10);
+
+backward = true;
+drivePID.maxOutput = 12;
+moveTo(-25.8,-49.5, {.pLine = 10, .extD = 10});
+backward = false;
+facePoint(0,-48);
+moveTo(0,-48, {.pLine = 10, .extD = 10});
+drivePID.maxOutput = 4;
+drivePID.minOutput = 4;
+driveForward(24, {}, 90);
+
+drivePID.maxOutput = 12;
+drivePID.minOutput = 4;
+BoomParams cornerSweep{.x = 51.8, .y = -64.8, .heading = 90}
+//facePoint(cornerSweep);
+boomerangTo(cornerSweep);
+
+swingOnLeft(-45, {},0.);
+driveBackward(5);
+
+
+
+

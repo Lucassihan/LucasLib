@@ -29,6 +29,8 @@ class PID {
     void   tempConstants(double kP, double kI, double kD);
     void   setIntegralSettings(double bound, double maxIntegralOutput);
     void   clearAllValues();
+    void governOutput();
+    double timeSinceLastCycle();
     double P();
     double I();
     double D();
@@ -63,13 +65,6 @@ class PID {
     double output;
     double derivative;
 
-    // readable state for the debugger: the running integral (sumerror) and the
-    // constants locked in for the current movement. Set each calculateOutput().
-    double integral;
-    double activeKP;
-    double activeKI;
-    double activeKD;
-
     private: // stuff that is used by the PID class internally for calculations, and will not be accessible outside
     void determineConstants(double inputError);
 
@@ -82,19 +77,16 @@ class PID {
     double tempKI;
     double tempKD;
 
-    double lockedKP;
-    double lockedKI;
-    double lockedKD;
-
     double kP;
     double kI;
     double kD;
 
-    double sumerror;
-    double lastError;
-    double prevOutput;
+    double   sumError;
+    double   lastError;
+    double   prevOutput;
     double lastTime;
-    bool   firstCycle;
+    bool     firstCycle;
+    double   raw;
 };
 
 // =========================================================================

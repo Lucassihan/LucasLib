@@ -18,6 +18,8 @@
 #include "movement/exitConditions.h"
 #include "movement/movementUtils.h"   // BoomParams
 
+class PID;  // forward decl — the debugger keeps PID internals in its own table
+
 namespace debugger {
 
 // ---- Lifecycle: call once around the auton ----
@@ -43,11 +45,16 @@ void movePoint(const char* type, double tx, double ty,
                const LateralExitConditions& ec, bool backward);
 void moveLyPose(double tx, double ty, double pathHeading, double turnDisable,
                 const LateralExitConditions& ec, bool backward);
-void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec, bool backward);
+void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec);
 void moveVoltage(double left, double right);
 
 // ---- Per-tick sampling (hooked inside voltageDrive); no-op unless capturing ----
 void tick();
+
+// ---- PID internals mirror (one line at the end of PID::calculateOutput) ----
+// Hands the debugger a PID instance's running integral + locked gains so nothing
+// debugger-only has to live on the PID class. Keyed by instance. No-op off-capture.
+void samplePID(const PID* pid, double integral, double kP, double kI, double kD);
 
 // ---- Overlay telemetry, published once per loop by the lyPose / boomerang
 //      controllers right before voltageDrive (consumed by the next tick) ----
@@ -56,8 +63,11 @@ void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY
                     double leadRetraction, double maxSlip, int stage);
 
 // ---- Read-wall correction hook (from Odometry::readWall) ----
-void readWall(int wall, int sensor, double preX, double preY, double preH,
-              double postX, double postY, double postH);
+// Call readWallBefore() right before the setPos() correction, then readWall()
+// right after: the debugger snapshots the pre-pose itself and pairs it with the
+// corrected pose, so no before/after locals leak into the odometry code.
+void readWallBefore();
+void readWall(int wall, int sensor);
 
 // ---- Screen tasks check this so the dump can take the console cleanly ----
 bool screensMuted();

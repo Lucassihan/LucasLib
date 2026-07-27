@@ -9,6 +9,15 @@ enum DriveEncoderPosition {
   back = 2
 };
 
+// Physical mount of a wall-reset distance sensor, given as axis distances from the
+// robot's tracking center in the robot's LOCAL frame (not a calibration reading).
+//   y = distance along the robot's forward axis (robot +Y)
+//   x = distance along the robot's right axis   (robot +X)
+struct DistanceSensorOffset {
+  double y = 0;   // + = sensor face sits in front of the tracking center
+  double x = 0;   // + = sensor face sits to the right of the tracking center
+};
+
 struct OdometryConfig {
   inertial* imu1               = nullptr;
   inertial* imu2               = nullptr;  // omit for single-IMU
@@ -25,10 +34,10 @@ struct OdometryConfig {
   double    driveGearRatio     = 1.0;      // wheel rotations per motor rotation
   DriveEncoderPosition driveEncoder = front;  // which motor pair to use for motor-encoder Y tracking
 
-  double    sensor1Offset      = 0;        // physical distance from robot tracking center to each distance sensor face
-  double    sensor2Offset      = 0;
-  double    sensor3Offset      = 0;
-  double    sensor4Offset      = 0;
+  DistanceSensorOffset sensor1Offset;      // 2D mount of each wall-reset distance sensor,
+  DistanceSensorOffset sensor2Offset;      // as axis distances from the tracking center
+  DistanceSensorOffset sensor3Offset;      // in the robot's local frame (see DistanceSensorOffset)
+  DistanceSensorOffset sensor4Offset;
 };
 
 class Odometry {
@@ -90,6 +99,7 @@ public:
   void   trackY(double rawDeltaDeg);
   void   trackX(double rawDeltaDeg);
   void   applyPoseOffsets(double offsetX, double offsetY);
+  void updateVelocity();
 
   void clearTrackedInches();
   void readWall(int wall, int sensor, bool bypassSettleDelay = false);
@@ -110,14 +120,19 @@ public:
   double positivePointHeadingError(double targetX, double targetY, bool backward = false);
   double negativePointHeadingError(double targetX, double targetY, bool backward = false);
 
-  bool noEncodersUpdated;
+  //Velocities, in inches
+  double v;
+  double ω;
+
+  int nEncodersUpdated;
+  bool hasYTracker;
+  bool hasXTracker;
 
 private:
   OdometryConfig cfg;
 
-  bool hasYTracker;
-  bool hasXTracker;
   bool hasSecondIMU;
+  bool justResetPos;
 
   motor* leftEncoder;
   motor* rightEncoder;
@@ -131,6 +146,9 @@ private:
   double lastXPos     = 0;   // X accumulation baseline (raw deg); advances only when X accumulates
   double lastLeftPos  = 0;
   double lastRightPos = 0;
+  double lastVRefX = 0;
+  double lastVRefY = 0;
+  double lastVRefH = 0;
 
   // Heading change (deg) banked since the last Y accumulation. Half of it re-centers the Y step
   // on its window midpoint (second-order placement); the full swing feeds velocity and arc
@@ -140,7 +158,7 @@ private:
   // its own midpoint heading rather than sharing Y's accumulator.
   double dhAccumDegX = 0;
 
-  double lastTrackTime = 0;
+  uint64_t lastTrackTime = 0;
 
   //Cached arc radius (inches) from the most recent Y accumulation. See travelArcRadius().
   double lastArcRadius = 1e9;

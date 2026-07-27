@@ -4,11 +4,24 @@
   import { movementBounds, movementTicks } from '$lib/stores/trace.svelte';
   import { movementColor } from '$lib/trace/labels';
 
+  // ticks/bounds default to the replay trace store; the sandbox passes its own
+  // simulated ticks so the overlay renders identically there.
   let {
     movement,
     trackwidth,
-    field = defaultField
-  }: { movement: Movement; trackwidth: number; field?: FieldConfig } = $props();
+    field = defaultField,
+    ticksOverride,
+    boundsOverride
+  }: {
+    movement: Movement;
+    trackwidth: number;
+    field?: FieldConfig;
+    ticksOverride?: { x: number; y: number; h: number }[];
+    boundsOverride?: { start: { x: number; y: number; h: number }; end: { x: number; y: number; h: number } };
+  } = $props();
+
+  const srcTicks = () => ticksOverride ?? movementTicks(movement.index);
+  const srcBounds = () => boundsOverride ?? movementBounds(movement.index);
 
   const D2R = Math.PI / 180;
   const wrap = (a: number) => {
@@ -35,7 +48,7 @@
   // exactly — partiality, drift and curvature all fall out for free.
   const band = $derived.by(() => {
     if (!isSwing) return null;
-    const ticks = movementTicks(movement.index);
+    const ticks = srcTicks();
     if (ticks.length < 2) return null;
     const tw2 = trackwidth / 2;
 
@@ -70,8 +83,8 @@
   // so it reads true rotation (incl. >180° and partial turns) from odometry.
   const dial = $derived.by(() => {
     if (isSwing) return null;
-    const ticks = movementTicks(movement.index);
-    const b = movementBounds(movement.index);
+    const ticks = srcTicks();
+    const b = srcBounds();
     if (!b || ticks.length < 2) return null;
 
     const c = toScreen(b.start.x, b.start.y, field);

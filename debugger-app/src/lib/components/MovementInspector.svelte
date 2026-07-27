@@ -129,13 +129,14 @@
 
   const unit = (m: Movement) => (isTurn(m.type) ? '°' : 'in');
 
-  // The zone the settle gate operates in: exitAng for turns, exitDist for laterals.
+  // exitDist carries the settle activation zone on BOTH channels — setR. Only the
+  // unit differs: degrees on a turn, inches on a lateral.
   function settleZone(m: Movement): { value: number; u: string } {
-    return isTurn(m.type) ? { value: m.exitAng, u: '°' } : { value: m.exitDist, u: 'in' };
+    return { value: m.exitDist, u: unit(m) };
   }
 
   function triggeredLabel(reason: string): string {
-    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line' }[reason] ?? reason;
+    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line', angle: 'Angle' }[reason] ?? reason;
   }
 
   function triggeredDetail(m: Movement): string {
@@ -148,7 +149,11 @@
       case 'timeout':
         return `${m.exitTimeout} ms elapsed`;
       case 'perpLine':
-        return `within ${m.exitPerpLine} in of target plane`;
+        return m.exitPerpLine > 0
+          ? `crossed the ⊥ line, ${m.exitPerpLine} in short of the target`
+          : 'crossed the ⊥ line through the target';
+      case 'angle':
+        return `within ${m.exitAng}° of target, no settle gate`;
       default:
         return '';
     }
@@ -157,6 +162,7 @@
   function glyphCategory(reason: string): string {
     if (reason === 'timeout') return 'timeout';
     if (reason === 'perpLine') return 'perp';
+    if (reason === 'angle') return 'early';
     return 'settle';
   }
 
@@ -169,8 +175,12 @@
       const z = settleZone(m);
       if (z.value > 0) out.push({ k: 'Settle', v: `${z.value} ${z.u} · |D| < ${m.settleD}` });
     }
-    if (m.exitPerpLine > 0 && m.exitReason !== 'perpLine') {
-      out.push({ k: 'Perp line', v: `${m.exitPerpLine} in` });
+    // crossD 0 is armed and meaningful (line on the target); only negative is off
+    if (!isTurn(m.type) && m.exitPerpLine >= 0 && m.exitReason !== 'perpLine') {
+      out.push({ k: 'Perp line', v: m.exitPerpLine > 0 ? `${m.exitPerpLine} in early` : 'on target' });
+    }
+    if (isTurn(m.type) && m.exitAng > 0 && m.exitReason !== 'angle') {
+      out.push({ k: 'Angle', v: `${m.exitAng}° · no settle gate` });
     }
     return out;
   }
@@ -259,7 +269,7 @@
         <div class="exit-reason">
           <span>Timed</span>
         </div>
-        <div class="exit-detail">No exit condition — voldrive returns immediately and the caller's delay() holds it for {((m.endTime - m.startTime) / 1000).toFixed(2)} s.</div>
+        <div class="exit-detail">Ran for {((m.endTime - m.startTime) / 1000).toFixed(2)} s.</div>
       </div>
     {:else}
     <div class="card">

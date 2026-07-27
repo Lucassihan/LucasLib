@@ -6,6 +6,7 @@
 #include "pid.h"
 #include "totalOutput.h"
 #include "movementUtils.h"   // shared engine: motion state, output pipeline, resolvers, Lyapunov
+#include "pursuit.h"         // followPath + PathPoint/PursuitParams (pure pursuit)
 
 // =========================================================================
 // Turn movements
@@ -17,7 +18,11 @@ void face(double heading,
 
 void facePoint(double x, double y,
                TurnExitConditions ec = {},
-               bool backward = false,
+               int direction = 0);
+
+// Overload: face a boomerang target's lead point (honors the global backward).
+void facePoint(BoomParams bp,
+               TurnExitConditions ec = {},
                int direction = 0);
 
 void swingOnLeft(double heading,
@@ -32,13 +37,11 @@ void swingOnRight(double heading,
 
 void swingOnLeftToPoint(double x, double y,
                         TurnExitConditions ec = {},
-                        bool backward = false,
                         double partiality = 0,
                         int direction = 0);
 
 void swingOnRightToPoint(double x, double y,
                          TurnExitConditions ec = {},
-                         bool backward = false,
                          double partiality = 0,
                          int direction = 0);
 
@@ -48,18 +51,17 @@ void swingOnRightToPoint(double x, double y,
 // (BoomParams + getBoomLeadX/Y now live in movementUtils.h, included above.)
 
 void driveForward(double distance,
+                  double heading = chassis.h,
                   LateralExitConditions ec = {},
-                  BlendSettings bs = {},
-                  double heading = chassis.h);
+                  BlendSettings bs = {});
 
 void driveBackward(double distance,
+                   double heading = chassis.h,
                    LateralExitConditions ec = {},
-                   BlendSettings bs = {},
-                   double heading = chassis.h);
+                   BlendSettings bs = {});
 
 void moveTo(double x, double y,
             LateralExitConditions ec = {},
-            bool backward = false,
             BlendSettings bs = {});
 
 // Path-follow Lyapunov drive to a pose. Always rides the FIXED line through
@@ -74,12 +76,10 @@ void moveTo(double x, double y,
 // and left/right blend.
 void lyPose(double x, double y,
             LateralExitConditions ec = {},
-            bool backward = false,
             double heading = NAN);
 
 void boomerangTo(BoomParams bp,
-                 LateralExitConditions ec = {},
-                 bool backward = false);
+                 LateralExitConditions ec = {});
 
 void voldrive(double left, double right);
 void voldrive(double volts);

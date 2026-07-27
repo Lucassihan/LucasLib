@@ -7,6 +7,7 @@
   import LyPoseOverlay from './LyPoseOverlay.svelte';
   import BatteryDots from './BatteryDots.svelte';
   import MotorTempBadge from './MotorTempBadge.svelte';
+  import { untrack } from 'svelte';
   import { settings, holesToInches } from '$lib/stores/settings.svelte';
   import { traceState, poseAt, poseAtIn, tickAt, clearGhost, movementEndHeading } from '$lib/stores/trace.svelte';
   import { endsAtTarget, isTurn, prettyMovement, movementColor } from '$lib/trace/labels';
@@ -91,6 +92,101 @@
   const fieldImg = $derived(backdropSrc(settings.fieldBackdrop, base));
   const fieldRect = fieldImageRect(SIZE);
 
+  // --- Follow cam: zoom into the robot and track it through the run. The viewBox
+  // becomes a window (field size / zoom) centered on a SMOOTHED camera pose so
+  // odometry jitter doesn't shake the view. POV lock additionally rotates the
+  // world about the camera so the robot always points up (robot's-eye view).
+  let follow = $state(false);
+  let povLock = $state(false);
+  let zoom = $state(2.5);
+  const ZOOM_MIN = 1.5;
+  const ZOOM_MAX = 4.5;
+  const ZOOM_STEP = 0.5;
+
+  // Smoothed camera pose (screen px + heading deg). A rAF loop eases it toward
+  // the robot with a fixed time constant — frame-rate independent, and it works
+  // during playback AND scrubbing. Snaps to the robot when tracking starts.
+  let cam = $state({ x: 0, y: 0, h: 0 });
+  const CAM_TAU = 0.14; // s — smaller = stiffer camera
+  const wrapDeg = (a: number) => {
+    while (a > 180) a -= 360;
+    while (a < -180) a += 360;
+    return a;
+  };
+  $effect(() => {
+    if (!follow) return;
+    // snap to the robot immediately (untracked — scrubbing must not re-run this)
+    untrack(() => {
+      const p = poseAt(traceState.time);
+      const s = toScreen(p.x, p.y);
+      cam = { x: s.sx, y: s.sy, h: p.h };
+    });
+    let raf = 0;
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      const p = poseAt(traceState.time);
+      const s = toScreen(p.x, p.y);
+      const a = 1 - Math.exp(-dt / CAM_TAU);
+      const nx = cam.x + (s.sx - cam.x) * a;
+      const ny = cam.y + (s.sy - cam.y) * a;
+      const nh = cam.h + wrapDeg(p.h - cam.h) * a;
+      if (Math.abs(nx - cam.x) + Math.abs(ny - cam.y) + Math.abs(nh - cam.h) > 1e-3) {
+        cam = { x: nx, y: ny, h: nh };
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  });
+
+  const camViewBox = $derived.by(() => {
+    const f = fieldRect;
+    if (!follow) return `${f.x} ${f.y} ${f.w} ${f.h}`;
+    const w = f.w / zoom;
+    const h = f.h / zoom;
+    let x = cam.x - w / 2;
+    let y = cam.y - h / 2;
+    // keep the window inside the rendered field (+ border) rather than centering
+    // the robot when it's near an edge — same as a game camera's edge clamp.
+    // POV mode skips the clamp: the robot stays centered while the world spins.
+    if (!povLock) {
+      x = Math.max(f.x, Math.min(x, f.x + f.w - w));
+      y = Math.max(f.y, Math.min(y, f.y + f.h - h));
+    }
+    return `${x} ${y} ${w} ${h}`;
+  });
+
+  // POV lock: counter-rotate the whole scene about the camera by the smoothed
+  // heading, so the robot reads as fixed and the field moves around it.
+  const worldTransform = $derived(
+    follow && povLock ? `rotate(${(-cam.h).toFixed(3)} ${cam.x.toFixed(2)} ${cam.y.toFixed(2)})` : undefined
+  );
+
+  function toggleFollow() {
+    follow = !follow;
+    if (!follow) povLock = false;
+  }
+  function togglePov() {
+    povLock = !povLock;
+    if (povLock) follow = true;
+  }
+  function zoomBy(d: number) {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((zoom + d) * 10) / 10));
+    follow = true; // zooming implies you want to be on the robot
+  }
+
+  // f = toggle follow, p = POV lock, +/- = zoom (ignored while typing in a field)
+  function onCamKey(e: KeyboardEvent) {
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    if (t && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (e.key === 'f' || e.key === 'F') toggleFollow();
+    else if (e.key === 'p' || e.key === 'P') togglePov();
+    else if (e.key === '+' || e.key === '=') zoomBy(ZOOM_STEP);
+    else if (e.key === '-' || e.key === '_') zoomBy(-ZOOM_STEP);
+  }
+
   // perp-line orientation: boomerang faces its targetH; others approach along
   // their final heading.
   function approachHeading(m: Movement): number {
@@ -115,6 +211,8 @@
     return `settle |D| < ${m.settleD}`;
   }
 </script>
+
+<svelte:window onkeydown={onCamKey} />
 
 <section class="panel field">
   <div class="panel-label">Field</div>
@@ -144,7 +242,9 @@
   </div>
 
   <div class="canvas">
-    <svg viewBox="{fieldRect.x} {fieldRect.y} {fieldRect.w} {fieldRect.h}" preserveAspectRatio="xMidYMid meet">
+    <svg viewBox={camViewBox} preserveAspectRatio="xMidYMid meet">
+      <!-- POV lock spins the whole scene about the camera; robot stays upright -->
+      <g transform={worldTransform}>
       <image href={fieldImg} x={fieldRect.x} y={fieldRect.y} width={fieldRect.w} height={fieldRect.h} preserveAspectRatio="none" />
 
       <!-- comparison ghost run: faint dashed path under everything, plus a
@@ -202,8 +302,9 @@
           <Waypoint
             x={m.targetX}
             y={m.targetY}
-            exitDist={m.exitDist}
-            perpLine={m.exitPerpLine}
+            settleR={m.exitDist}
+            crossD={m.exitPerpLine}
+            backward={m.backwards}
             heading={approachHeading(m)}
             onenter={(e) => showTip(m, e)}
             onmove={moveTip}
@@ -249,7 +350,42 @@
         {@const sp = toScreen(p.x, p.y)}
         <circle class="stage-pulse" cx={sp.sx} cy={sp.sy} r="5" vector-effect="non-scaling-stroke" />
       {/each}
+      </g>
     </svg>
+  </div>
+
+  <!-- follow cam: toggle tracking + POV heading lock + zoom in/out on the robot -->
+  <div class="cam" class:on={follow}>
+    <button
+      class="cam-toggle"
+      class:active={follow}
+      onclick={toggleFollow}
+      title={follow ? 'Following robot — click for full field  (f)' : 'Follow the robot: zoom in and track it  (f)'}
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+        <circle cx="8" cy="8" r="4.3" />
+        <path d="M8 0.8V3.2 M8 12.8v2.4 M0.8 8H3.2 M12.8 8h2.4" />
+      </svg>
+      <span>Follow</span>
+    </button>
+    <button
+      class="cam-toggle"
+      class:active={povLock}
+      onclick={togglePov}
+      title={povLock ? 'POV locked — the field rotates around the robot  (p)' : 'Lock camera to the robot’s heading — robot POV  (p)'}
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 1.5 L10.2 6 L8 5 L5.8 6 Z" fill="currentColor" stroke="none" />
+        <path d="M3.2 11.5 A5.6 5.6 0 0 0 12.8 11.5" />
+        <path d="M12.8 11.5 l0.3 -1.8 M12.8 11.5 l-1.8 -0.3" />
+      </svg>
+      <span>POV</span>
+    </button>
+    <div class="cam-zoom">
+      <button class="z" onclick={() => zoomBy(-ZOOM_STEP)} disabled={follow && zoom <= ZOOM_MIN} aria-label="Zoom out">−</button>
+      <span class="zlvl">{zoom.toFixed(1)}×</span>
+      <button class="z" onclick={() => zoomBy(ZOOM_STEP)} disabled={follow && zoom >= ZOOM_MAX} aria-label="Zoom in">+</button>
+    </div>
   </div>
 
   {#if tip}
@@ -369,6 +505,89 @@
       transform: scale(8);
       opacity: 0;
     }
+  }
+
+  /* follow-cam control, bottom-right of the field */
+  .cam {
+    position: absolute;
+    bottom: 10px;
+    right: 12px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cam-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--bg-raised);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 4px 9px;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .cam-toggle svg {
+    width: 12px;
+    height: 12px;
+  }
+  .cam-toggle:hover {
+    color: var(--text-primary);
+  }
+  .cam-toggle.active {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text-emphasis);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  }
+
+  .cam-zoom {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-raised);
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 2px 4px;
+    opacity: 0.4;
+    transition: opacity 0.15s ease;
+  }
+  .cam.on .cam-zoom {
+    opacity: 1;
+  }
+  .z {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .z:hover:not(:disabled) {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .z:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .zlvl {
+    font-size: 10px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    min-width: 30px;
+    text-align: center;
   }
 
   .canvas {
