@@ -42,28 +42,24 @@ export interface SimKnobs {
   omniWheels: boolean;
   /** default heading-correction effort for moveTo (per-movement overrides exist) */
   moveToHeadingEffort: number;
-  /** default heading-correction effort for driveForward / driveBackward */
+  /** default heading-correction effort for drive() */
   driveHeadingEffort: number;
   /** library global: within this dist moveTo stops correcting heading */
   headingDisableDist: number;
-  /** library global: lyPose lateral coupling */
-  kLat: number;
-  /** library global: lyPose CLOSE-stage radius */
-  lyPoseTurnDisableLength: number;
   /** chassis trackwidth, in — derived from robot settings (width − 2), not a knob */
   trackwidth: number;
 
   // Default exit conditions — what an OMITTED field of a LateralExitConditions /
   // TurnExitConditions initializer resolves to (mirrors exitConditions.h, but
   // tunable in the sandbox). Values written explicitly in the code still win.
-  ecLatTOut: number;
-  ecLatSetR: number;
-  ecLatSetD: number;
-  ecLatCrossD: number;
-  ecTurnTOut: number;
-  ecTurnSetR: number;
-  ecTurnSetD: number;
-  ecTurnExtA: number;
+  ecLatT: number;
+  ecLatV: number;
+  ecLatD: number;
+  ecLatGate: number;
+  ecTurnT: number;
+  ecTurnV: number;
+  ecTurnD: number;
+  ecTurnGate: number;
 }
 
 export const DEFAULT_KNOBS: SimKnobs = {
@@ -80,18 +76,16 @@ export const DEFAULT_KNOBS: SimKnobs = {
   moveToHeadingEffort: 0.9,
   driveHeadingEffort: 0.8,
   headingDisableDist: 6,
-  kLat: 0.25,
-  lyPoseTurnDisableLength: 3,
   trackwidth: 13,
   // mirror exitConditions.h defaults
-  ecLatTOut: 5000,
-  ecLatSetR: 10,
-  ecLatSetD: 2,
-  ecLatCrossD: -1,
-  ecTurnTOut: 5000,
-  ecTurnSetR: 10,
-  ecTurnSetD: 2,
-  ecTurnExtA: 0
+  ecLatT: 5000,
+  ecLatV: 10,
+  ecLatD: -1,
+  ecLatGate: 12,
+  ecTurnT: 5000,
+  ecTurnV: 10,
+  ecTurnD: -1,
+  ecTurnGate: 20
 };
 
 /** Per-movement heading-correction-effort overrides, keyed by statement index. */
@@ -223,7 +217,6 @@ const wrap = (a: number) => {
   while (a < -180) a += 360;
   return a;
 };
-const sincFn = (x: number) => (Math.abs(x) < 1e-3 ? 1 - (x * x) / 6 : Math.sin(x) / x);
 
 // --- argument evaluation ----------------------------------------------------
 
@@ -254,16 +247,16 @@ function boomVals(init: StructInit): Record<string, number | boolean> {
 // --- exit-condition + PID-config shapes ---------------------------------------
 
 interface LatEc {
-  tOut: number;
-  setR: number;
-  setD: number;
-  crossD: number;
+  t: number;
+  v: number;
+  d: number;
+  settleGate: number;
 }
 interface TurnEc {
-  tOut: number;
-  setR: number;
-  setD: number;
-  extA: number;
+  t: number;
+  v: number;
+  d: number;
+  settleGate: number;
 }
 
 /** Assignable PID channel config (mirrors the LucasLib PID public fields). */
@@ -317,12 +310,13 @@ export function simulate(
   const startPose = { ...pose };
 
   // Global drive direction — REAL LucasLib global: initializes FALSE and nothing
-  // ever resets it. Point/pose movements honor it; driveForward/Backward don't.
+  // ever resets it. Point/pose movements honor it; face/swings-to-heading and
+  // drive() don't — drive() takes its direction from the sign of distance.
   let gBack = false;
 
   // Assignable PID channel configs. drivePID governs forward output; turnPID
   // governs actual turns (face/swing); headingPID governs the heading-correction
-  // output of LATERAL movements (moveTo / driveF-B / lyPose / boomerang). Persist
+  // output of LATERAL movements (moveTo / drive / boomerang). Persist
   // across movements except targetOffset, which each movement consumes then zeroes.
   const pid = { drive: defaultPid(), turn: defaultPid(), heading: defaultPid() };
   // Stage-2 governor (LucasLib TotalOutput): slew + ratio-preserving cap + floor
@@ -499,78 +493,96 @@ export function simulate(
   }
 
   /**
-   * Per-movement exit state. `prevErr` is the previous tick's error, so setD can be
-   * tested against the REAL D term — (error − lastError) / dt, exactly what
-   * PID::calculateOutput computes — instead of a velocity stand-in. dt is the 10 ms
-   * tick, matching the lib's delay(10) loop, so the numbers are directly comparable
-   * to what runs on the brain. NaN marks the first tick, where the lib's `firstCycle`
-   * sets lastError = error and the D term is therefore exactly 0.
+   * Per-movement exit state. `lastV` is the previous tick's chassis speed, which is
+   * what the new settle test compares against ("am I slower than I was?"). It starts
+   * at 0 exactly like the lib's lastV/lastω globals, which clearAllValues() zeroes on
+   * every movement entry — so settle can never fire on a movement's first tick and
+   * always needs two real samples. That is what stops a hot handoff, where the robot
+   * is already decelerating as the next movement starts, from settling immediately.
    */
-  type ExitState = { start: number; prevErr: number };
-  const newExitState = (): ExitState => ({ start: t, prevErr: NaN });
-
-  /** the lib's drivePID/turnPID.derivative for this tick: Δerror per millisecond */
-  function dTerm(st: ExitState, err: number): number {
-    const d = Number.isNaN(st.prevErr) ? 0 : (err - st.prevErr) / TICK;
-    st.prevErr = err;
-    return d;
-  }
+  type ExitState = { start: number; lastV: number };
+  const newExitState = (): ExitState => ({ start: t, lastV: 0 });
 
   /**
-   * Lateral exit — mirrors checkLateralExit() in exitConditions.cpp EXACTLY. Two
-   * independent exits:
-   *  - SETTLE (setR = 0 → off): within setR of the target AND |D term| < setD, where
-   *    the D term is Δerror per MILLISECOND. A bigger setD is looser (exits sooner);
-   *    setD never disables, and 0 makes settle unreachable.
-   *  - CROSS (crossD < 0 → off): which SIDE of the target's ⊥ line we're on, not
-   *    how close to it. The line is INFINITE (no lateral span to miss) and runs ⊥
-   *    to the robot's heading through the target; `along` starts positive with the
-   *    line ahead and goes negative once past, so a fast pass can't skip it the way
-   *    a proximity band can. crossD slides the line that many inches TOWARD us to
+   * Lateral exit — mirrors checkLateralExit() in exitConditions.cpp. -1 is the OFF
+   * sentinel on every field.
+   *  - SETTLE (v = -1 → off): the chassis is SLOWING (|v| < |lastV|) AND the error is
+   *    inside settleGate AND |v| is under ec.v. This is a speed test now, not the PID
+   *    D-term test it used to be.
+   *  - CROSS (d = -1 → off, or no point target): which SIDE of the target's ⊥ line
+   *    we're on, not how close to it. The line is INFINITE (no lateral span to miss)
+   *    and runs ⊥ to the robot's heading through the target; `along` starts positive
+   *    with the line ahead and goes negative once past, so a fast pass can't skip it
+   *    the way a proximity band can. d slides the line that many inches TOWARD us to
    *    fire early (0 = line sits on the target).
-   * `err` is the movement's SIGNED driveError, incl. drivePID.targetOffset where
-   * the lib includes it (moveTo/lyPose/driveF-B: yes; boomerang: no).
+   * `hasPointTarget` = false for drive(), which is relative and has no target point —
+   * the lib skips cross there rather than testing a line through the field origin.
+   * `err` is the movement's SIGNED lateralError, incl. drivePID.targetOffset.
    */
-  function latExit(ec: LatEc, st: ExitState, err: number, tx: number, ty: number, backward = false): string | null {
-    const dErr = dTerm(st, err); // consumed every tick, like the lib's PID
-    if (ec.tOut > 0 && t - st.start >= ec.tOut) return 'timeout';
+  function latExit(
+    ec: LatEc,
+    st: ExitState,
+    err: number,
+    tx: number,
+    ty: number,
+    backward = false,
+    hasPointTarget = true
+  ): string | null {
+    const vNow = vel.v;
+    if (ec.t !== -1 && t - st.start >= ec.t) return 'timeout';
     if (t - st.start >= HARD_CAP_MS) return 'timeout';
-    if (ec.setR > 0 && Math.abs(err) <= ec.setR && Math.abs(dErr) < ec.setD) return 'dist';
-    if (ec.crossD >= 0) {
+    if (
+      ec.v !== -1 &&
+      Math.abs(vNow) < Math.abs(st.lastV) &&
+      Math.abs(err) < ec.settleGate &&
+      Math.abs(vNow) < ec.v
+    )
+      return 'settle';
+    if (hasPointTarget && ec.d !== -1) {
       const hr = pose.h * D2R;
       let along = (tx - pose.x) * Math.sin(hr) + (ty - pose.y) * Math.cos(hr); // + = line ahead, − = passed it
       if (backward) along = -along; // measure along the way we travel
       // SIM-ONLY 0.1" allowance, NOT in the lib. A real robot always overshoots the
       // line it's driving at — noise and momentum flip the sign. This sim is
       // noise-free, so a P controller decelerating into the target makes `along`
-      // asymptote to 0 from above and the side test never trips: crossD = 0 would
-      // sit there until the timeout. crossD > 0 doesn't need it (the line is behind
+      // asymptote to 0 from above and the side test never trips: d = 0 would
+      // sit there until the timeout. d > 0 doesn't need it (the line is behind
       // the target, so the robot drives clean through).
-      if (along <= ec.crossD + 0.1) return 'perpLine';
+      if (along <= ec.d + 0.1) return 'perpLine';
     }
+    st.lastV = vNow; // only on a non-exiting tick, like the lib
     return null;
   }
 
   /**
-   * Turn exit — mirrors checkTurnExit() in exitConditions.cpp EXACTLY. Same two-exit
-   * shape as the lateral channel:
-   *  - SETTLE (setR = 0 → off): inside the activation ANGLE and |D term| < setD, the
-   *    D term being Δerror per MILLISECOND (degrees here, so ~0.5 at full spin).
-   *  - ANGLE (extA = 0 → off): ungated — fires mid-rotation the moment |error| <= extA,
+   * Turn exit — mirrors checkTurnExit() in exitConditions.cpp. Same shape as the
+   * lateral channel on the angular axis.
+   *  - SETTLE (v = -1 → off): |ω| is falling AND the error is inside settleGate AND
+   *    |ω| is under ec.v. NOTE ec.v is in RAD/s here, because the lib compares against
+   *    chassis.ω, which updateVelocity() computes in radians — while settleGate is in
+   *    degrees. vel.w is degrees/s in this sim, hence the D2R.
+   *  - ANGLE (d = -1 → off): ungated — fires mid-rotation the moment |error| <= d,
    *    without waiting for the robot to slow.
    */
   function turnExit(ec: TurnEc, st: ExitState, turnError: number): string | null {
-    const dErr = dTerm(st, turnError);
-    if (ec.tOut > 0 && t - st.start >= ec.tOut) return 'timeout';
+    const wNow = vel.w * D2R; // lib compares chassis.ω, which is rad/s
+    if (ec.t !== -1 && t - st.start >= ec.t) return 'timeout';
     if (t - st.start >= HARD_CAP_MS) return 'timeout';
-    if (ec.setR > 0 && Math.abs(turnError) <= ec.setR && Math.abs(dErr) < ec.setD) return 'settle';
-    if (ec.extA > 0 && Math.abs(turnError) <= ec.extA) return 'angle';
+    if (
+      ec.v !== -1 &&
+      Math.abs(wNow) < Math.abs(st.lastV) &&
+      Math.abs(turnError) < ec.settleGate &&
+      Math.abs(wNow) < ec.v
+    )
+      return 'settle';
+    if (ec.d !== -1 && Math.abs(turnError) <= ec.d) return 'angle';
+    st.lastV = wNow;
     return null;
   }
 
   // Configurable EC defaults (left panel) applied to omitted initializer fields.
-  const latDefaults = { tOut: knobs.ecLatTOut, setR: knobs.ecLatSetR, setD: knobs.ecLatSetD, crossD: knobs.ecLatCrossD };
-  const turnDefaults = { tOut: knobs.ecTurnTOut, setR: knobs.ecTurnSetR, setD: knobs.ecTurnSetD, extA: knobs.ecTurnExtA };
+  const latDefaults = { t: knobs.ecLatT, v: knobs.ecLatV, d: knobs.ecLatD, settleGate: knobs.ecLatGate };
+  const turnDefaults = { t: knobs.ecTurnT, v: knobs.ecTurnV, d: knobs.ecTurnD, settleGate: knobs.ecTurnGate };
   const latEc = (a: ArgValue | undefined) => structVals('lateralEc', a, latDefaults) as unknown as LatEc;
   const turnEc = (a: ArgValue | undefined) => structVals('turnEc', a, turnDefaults) as unknown as TurnEc;
 
@@ -691,27 +703,26 @@ export function simulate(
     }
   }
 
-  function runDrive(distance: number, ec: LatEc, heading: number, cosineScaling: boolean, effort: number, fnBackward: boolean, ticks: SimTick[]): string {
+  function runDrive(distance: number, ec: LatEc, heading: number, cosineScaling: boolean, effort: number, ticks: SimTick[]): string {
     vel.w *= angMom; // motion chaining: leftover spin swings through the first split second
-    const signed = fnBackward ? -Math.abs(distance) : Math.abs(distance);
-    // drivePID.targetOffset: positive always pushes FURTHER along travel
+    // drive() is signed: negative distance backs up, and it never reads the global
+    // backward. targetOffset is applied ALONG the direction of travel, which makes
+    // its sign direction-independent — positive overshoots, negative stops short,
+    // whether distance is +20 or -20.
     const off = takeOffset('drive');
+    const target = distance + off * Math.sign(distance);
     const hux = Math.sin(heading * D2R);
     const huy = Math.cos(heading * D2R);
     const x0 = pose.x;
     const y0 = pose.y;
-    const tx = x0 + hux * signed;
-    const ty = y0 + huy * signed;
-    // driveForward/driveBackward are distance-based: the lib hands checkLateralExit
-    // a (0,0) placeholder instead of a real target, so it forces CROSS off (ec.crossD
-    // = -1) rather than testing a line through the field origin.
-    ec = { ...ec, crossD: -1 };
     const est = newExitState();
     for (;;) {
       const traveled = (pose.x - x0) * hux + (pose.y - y0) * huy;
-      // driveError = (distance − traveled) + targetOffset, exactly as the lib
-      const le = signed - traveled + (fnBackward ? -off : off);
-      const exit = latExit(ec, est, le, tx, ty);
+      const le = target - traveled;
+      // hasPointTarget = false — a relative drive has no target point, so CROSS is
+      // skipped. The lib then ORs in a plain remaining-distance tolerance on ec.d
+      // (fabs(lateralError) < ec.d, which is simply false while d is -1).
+      const exit = latExit(ec, est, le, 0, 0, false, false) ?? (Math.abs(le) < ec.d ? 'dist' : null);
       if (exit) return exit;
       const he = wrap(heading - pose.h);
       const dp = clamp(le * knobs.driveKp, 12) * (cosineScaling ? Math.max(0.2, Math.cos(he * D2R)) : 1);
@@ -742,40 +753,6 @@ export function simulate(
       const dp = backward ? -mag : mag;
       const tp = clamp(he * knobs.headingKp * effort, 12);
       step(ticks, dp, tp, 'heading', { de: dist, he });
-    }
-  }
-
-  function runLyPose(tx: number, ty: number, ec: LatEc, heading: number | null, ticks: SimTick[]): string {
-    vel.w *= angMom; // motion chaining: leftover spin swings through
-    const backward = gBack;
-    const off = takeOffset('drive');
-    let pathHeading = heading;
-    if (pathHeading === null || Number.isNaN(pathHeading)) {
-      pathHeading = (Math.atan2(tx - pose.x, ty - pose.y) * 180) / Math.PI;
-      if (backward) pathHeading += 180;
-    }
-    const refH = pathHeading * D2R;
-    const faceH = backward ? pathHeading + 180 : pathHeading;
-    const est = newExitState();
-    for (;;) {
-      const dx = tx - pose.x;
-      const dy = ty - pose.y;
-      const dist = Math.hypot(dx, dy);
-      // driveError = distanceTo(pose) + targetOffset (lib movement.cpp:430)
-      const exit = latExit(ec, est, dist + off, tx, ty, backward);
-      if (exit) return exit;
-      const e_x = Math.sin(refH) * dx + Math.cos(refH) * dy + off;
-      const e_y = -Math.cos(refH) * dx + Math.sin(refH) * dy;
-      const e_theta = wrap(pose.h - faceH);
-      const etr = e_theta * D2R;
-      const v_d = clamp(e_x * knobs.driveKp, 12);
-      let v = Math.abs(Math.cos(etr)) * v_d;
-      if (backward) v = -Math.abs(v) * Math.sign(e_x || 1);
-      const latRaw = knobs.kLat * v * e_y * sincFn(etr);
-      let omega = -(clamp(e_theta * 0.8 * knobs.headingKp, 12) + latRaw);
-      omega = clamp(omega, 12);
-      if (dist < knobs.lyPoseTurnDisableLength) omega = 0;
-      step(ticks, v, omega, 'heading', { de: e_x, he: e_theta });
     }
   }
 
@@ -904,7 +881,7 @@ export function simulate(
         initCarrot: { x: initCarrotX, y: initCarrotY },
         carrotTrack,
         ghostTrack,
-        perpLine: ec.crossD
+        perpLine: ec.d
       }
     };
   }
@@ -1061,18 +1038,16 @@ export function simulate(
         );
         break;
       }
-      case 'driveForward':
-      case 'driveBackward': {
-        const ec = latEc(s.args[1]);
+      case 'drive': {
+        const heading = s.args[1] && s.args[1].kind === 'num' ? s.args[1].lit.value : pose.h;
+        const ec = latEc(s.args[2]);
         const bs = structVals('blend', s.args[3]);
-        const heading = s.args[2] && s.args[2].kind === 'num' ? s.args[2].lit.value : pose.h;
         exit = runDrive(
           argNum(s.args[0], 0),
           ec,
           heading,
           bs.cosineScaling as boolean,
           efforts[i] ?? knobs.driveHeadingEffort,
-          s.fn === 'driveBackward',
           ticks
         );
         break;
@@ -1088,12 +1063,6 @@ export function simulate(
           efforts[i] ?? knobs.moveToHeadingEffort,
           ticks
         );
-        break;
-      }
-      case 'lyPose': {
-        const ec = latEc(s.args[2]);
-        const heading = s.args[3] && s.args[3].kind === 'num' ? s.args[3].lit.value : null;
-        exit = runLyPose(argNum(s.args[0], 0), argNum(s.args[1], 0), ec, heading, ticks);
         break;
       }
       case 'boomerangTo': {

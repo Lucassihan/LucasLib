@@ -10,11 +10,18 @@ export interface Handle {
   id: string;
   x: number;
   y: number;
-  kind: 'point' | 'size' | 'rotate';
+  kind: 'point' | 'size' | 'rotate' | 'lead';
 }
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
+
+/** Unit vector of a boomerang's lead axis — the side of the target the carrot is planted on. */
+function leadAxis(targetHeading: number, backward: boolean) {
+  const sign = backward ? 1 : -1;
+  const a = targetHeading * D2R;
+  return { x: sign * Math.sin(a), y: sign * Math.cos(a) };
+}
 
 function localToField(x: number, y: number, A: number, lx: number, ly: number) {
   const a = A * D2R;
@@ -41,6 +48,17 @@ export function getHandles(el: Element): Handle[] {
       if (el.kind === 'boomerang' && el.boom) {
         const s = el.points[0];
         const t = el.points[1];
+        // The initial carrot, sitting lead·(start→target) off the target along the
+        // lead axis. Unshifted so that at lead 0, where it lands on top of the
+        // target point, the target handle still wins the hit test.
+        const d0 = Math.hypot(t.x - s.x, t.y - s.y);
+        const ax = leadAxis(el.boom.targetHeading, el.boom.backward);
+        hs.unshift({
+          id: 'lead',
+          kind: 'lead',
+          x: t.x + ax.x * el.boom.lead * d0,
+          y: t.y + ax.y * el.boom.lead * d0
+        });
         hs.push({ id: 'hStart', kind: 'rotate', x: s.x + Math.sin(el.boom.startHeading * D2R) * 8, y: s.y + Math.cos(el.boom.startHeading * D2R) * 8 });
         hs.push({ id: 'hTarget', kind: 'rotate', x: t.x + Math.sin(el.boom.targetHeading * D2R) * 8, y: t.y + Math.cos(el.boom.targetHeading * D2R) * 8 });
       }
@@ -104,6 +122,18 @@ export function applyHandle(el: Element, id: string, px: number, py: number): vo
       if (id.startsWith('p')) {
         const i = parseInt(id.slice(1), 10);
         if (el.points[i]) el.points[i] = { x: px, y: py };
+        return;
+      }
+      if (id === 'lead' && el.kind === 'boomerang' && el.boom) {
+        // lead is a coefficient of the start→target distance, so the drag is
+        // constrained to the lead axis: project the pointer onto it and read off
+        // the fraction. Clamped to the 0..1 the inspector slider offers.
+        const t = el.points[1];
+        const d0 = Math.hypot(t.x - el.points[0].x, t.y - el.points[0].y);
+        if (d0 < 1e-6) return;
+        const ax = leadAxis(el.boom.targetHeading, el.boom.backward);
+        const proj = (px - t.x) * ax.x + (py - t.y) * ax.y;
+        el.boom.lead = Math.min(1, Math.max(0, proj / d0));
         return;
       }
       if (id === 'hStart') {

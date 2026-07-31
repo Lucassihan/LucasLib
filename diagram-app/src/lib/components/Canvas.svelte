@@ -39,6 +39,17 @@
   const selEl = $derived(selId ? doc.elements.find((e) => e.id === selId) ?? null : null);
   const handles = $derived(selEl ? getHandles(selEl) : []);
 
+  // With "Show leads" off the path draws no lead axis, so the lead handle would
+  // float unexplained — give it its own guide back to the target.
+  const leadGuide = $derived.by(() => {
+    if (!selEl || selEl.type !== 'path' || selEl.kind !== 'boomerang') return null;
+    if (!selEl.boom || selEl.boom.showLeads) return null;
+    const h = handles.find((x) => x.id === 'lead');
+    const t = selEl.points[1];
+    if (!h || !t) return null;
+    return { tx: t.x, ty: t.y, hx: h.x, hy: h.y };
+  });
+
   let snapPt = $state<Pt | null>(null);
 
   // ---- coordinate conversion ---------------------------------------------
@@ -189,7 +200,9 @@
       let p = field;
       snapPt = null;
       const hid = (drag as any).handleId as string;
-      const isRotate = hid.startsWith('h') || hid === 'rot';
+      // Rotate and lead handles carry an angle / a coefficient rather than a
+      // position, so snapping them to other elements' points is meaningless.
+      const isRotate = hid.startsWith('h') || hid === 'rot' || hid === 'lead';
       if (ui.snap && !isRotate) {
         const cands = collectSnapPoints(doc.elements, new Set([el.id]));
         const snapped = snapField(field, cands, ui.view.s);
@@ -399,8 +412,27 @@
 
       <!-- handles for single selection -->
       {#if selEl}
+        {#if leadGuide}
+          <line
+            x1={leadGuide.tx}
+            y1={-leadGuide.ty}
+            x2={leadGuide.hx}
+            y2={-leadGuide.hy}
+            class="lead-guide"
+            vector-effect="non-scaling-stroke"
+          />
+        {/if}
         {#each handles as hnd}
-          {#if hnd.kind === 'rotate'}
+          {#if hnd.kind === 'lead'}
+            <circle
+              cx={hnd.x}
+              cy={-hnd.y}
+              r={5 / ui.view.s}
+              class="handle lead"
+              data-handle={hnd.id}
+              vector-effect="non-scaling-stroke"
+            />
+          {:else if hnd.kind === 'rotate'}
             <circle
               cx={hnd.x}
               cy={-hnd.y}
@@ -499,6 +531,19 @@
   .handle.rot {
     fill: var(--accent);
     stroke: #ffffff;
+  }
+  .handle.lead {
+    fill: #eab308;
+    stroke: #a16207;
+    cursor: grab;
+  }
+  .lead-guide {
+    fill: none;
+    stroke: #eab308;
+    stroke-width: 1.2;
+    stroke-dasharray: 5 4;
+    opacity: 0.6;
+    pointer-events: none;
   }
   .snap {
     fill: none;

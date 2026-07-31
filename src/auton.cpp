@@ -33,9 +33,6 @@ void initializePIDConstants() {
   headingPID.setProfile(normal);
   headingPID.addStep(999999, 0.1, 0, 1.506); //Do not give headingPID any ki
 
-  //LyPosePID
-  lyPosePID.setProfile(normal);
-  lyPosePID.addStep(99999, 0.1, 0, 1.506); //LyPose PID shouldn't have any kI or kD. 
 }
 
 void autonSettings() {

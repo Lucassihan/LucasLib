@@ -18,9 +18,14 @@ import { FN_BY_NAME, STRUCT_FIELDS, PID_FIELDS, TOTAL_FIELDS, type FnSpec } from
 // Exit-condition fields the lib has renamed. Routes written before a rename still
 // sit in saved autons, so say what to use instead of just "no such field".
 const RENAMED_FIELDS: Record<string, string> = {
-  extD: 'use .setR (the settle activation radius)',
-  pLine: 'use .crossD, which now slides the ⊥ line toward the robot instead of being a distance to it (negative = off)',
-  crossR: 'the ⊥ line is infinite now, so there is no length to set. Use .crossD alone'
+  extD: 'use .settleGate (the settle activation radius)',
+  crossR: 'the ⊥ line is infinite now, so there is no length to set. Use .d alone',
+  tOut: 'renamed to .t · -1 is the off sentinel now, not 0',
+  setR: 'renamed to .settleGate (the settle activation zone)',
+  setD: 'gone — settle is a SPEED test now, not a PID D term. Use .v (in/s on a lateral, rad/s on a turn)',
+  crossD: 'renamed to .d',
+  extA: 'renamed to .d · -1 is the off sentinel now, not 0',
+  pLine: 'use .d, which slides the ⊥ line toward the robot instead of being a distance to it (-1 = off)'
 };
 
 export interface NumLit {

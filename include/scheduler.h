@@ -14,5 +14,3 @@ void clearSchedule();
 
 // VEX task function
 int schedulerTask();
-
-bool cross(double x, double y, double crossD = 0);

@@ -4,7 +4,6 @@
   import Waypoint from './Waypoint.svelte';
   import TurnOverlay from './TurnOverlay.svelte';
   import BoomerangOverlay from './BoomerangOverlay.svelte';
-  import LyPoseOverlay from './LyPoseOverlay.svelte';
   import BatteryDots from './BatteryDots.svelte';
   import MotorTempBadge from './MotorTempBadge.svelte';
   import { untrack } from 'svelte';
@@ -272,13 +271,6 @@
       {#each traceState.trace.movements as m (m.index)}
         {#if m.type === 'boomerangTo'}
           <BoomerangOverlay movement={m} />
-        {/if}
-      {/each}
-
-      <!-- lyPose path-follow geometry for the lyPose under the scrubber -->
-      {#each traceState.trace.movements as m (m.index)}
-        {#if m.type === 'lyPose'}
-          <LyPoseOverlay movement={m} />
         {/if}
       {/each}
 

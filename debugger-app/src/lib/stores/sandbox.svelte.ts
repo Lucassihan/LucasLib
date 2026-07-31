@@ -31,18 +31,19 @@ const DEFAULT_CODE = `// Sandbox route — real LucasLib calls, paste-ready for 
 // Targets, headings and leads are draggable on the field; the text
 // rewrites itself. Sim-only behavior lives in the left panel.
 // NOTE: backward defaults to false — set 'backward = true;' to drive reversed.
+// drive() ignores it: a negative distance is what reverses that one.
 
 chassis.setPos(0, -62.5, 0);
 
-driveForward(24, {.setR = 1});
+drive(24, chassis.h, {.settleGate = 1});
 face(90);
-moveTo(48, -24, {.tOut = 3000});
+moveTo(48, -24, {.t = 3000});
 
 BoomParams goal {.x = 24, .y = 24, .heading = 315, .lead = 0.5, .gLead = 0.3};
 facePoint(goal);
-boomerangTo(goal, {.setR = 2});
+boomerangTo(goal, {.settleGate = 2});
 
-driveBackward(12);
+drive(-12);
 `;
 
 /** A saved auton = one .txt file in the "sandbox autons" folder. */
@@ -70,7 +71,8 @@ interface Persisted {
 // 3 = turns gained setR/setD settle, and extA changed from "the settle activation
 //     zone" to a separate UNGATED exit. A stored extA of 10 would now hard-exit
 //     every turn 10° short without waiting for it to stop.
-const KNOBS_VERSION = 3;
+// 4: exit conditions became t / v / d / settleGate with a speed-based settle
+const KNOBS_VERSION = 4;
 
 function load(): Persisted {
   if (typeof localStorage !== 'undefined') {
@@ -89,14 +91,14 @@ function load(): Persisted {
         // the EC knobs are "what an omitted field resolves to" — when their meaning
         // changes in the lib, a stale value is worse than no value
         if (p.knobsVersion !== KNOBS_VERSION) {
-          knobs.ecLatTOut = DEFAULT_KNOBS.ecLatTOut;
-          knobs.ecLatSetR = DEFAULT_KNOBS.ecLatSetR;
-          knobs.ecLatSetD = DEFAULT_KNOBS.ecLatSetD;
-          knobs.ecLatCrossD = DEFAULT_KNOBS.ecLatCrossD;
-          knobs.ecTurnTOut = DEFAULT_KNOBS.ecTurnTOut;
-          knobs.ecTurnSetR = DEFAULT_KNOBS.ecTurnSetR;
-          knobs.ecTurnSetD = DEFAULT_KNOBS.ecTurnSetD;
-          knobs.ecTurnExtA = DEFAULT_KNOBS.ecTurnExtA;
+          knobs.ecLatT = DEFAULT_KNOBS.ecLatT;
+          knobs.ecLatV = DEFAULT_KNOBS.ecLatV;
+          knobs.ecLatD = DEFAULT_KNOBS.ecLatD;
+          knobs.ecLatGate = DEFAULT_KNOBS.ecLatGate;
+          knobs.ecTurnT = DEFAULT_KNOBS.ecTurnT;
+          knobs.ecTurnV = DEFAULT_KNOBS.ecTurnV;
+          knobs.ecTurnD = DEFAULT_KNOBS.ecTurnD;
+          knobs.ecTurnGate = DEFAULT_KNOBS.ecTurnGate;
         }
         return {
           code: typeof p.code === 'string' && p.code.trim() ? p.code : DEFAULT_CODE,

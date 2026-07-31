@@ -28,12 +28,6 @@
         { t: 'CLOSE', sub: 'lock heading' }
       ];
     }
-    if (m.type === 'lyPose') {
-      return [
-        { t: 'FAR', sub: 'track line' },
-        { t: 'CLOSE', sub: 'turn off' }
-      ];
-    }
     return null;
   });
   const curStage = $derived(tk ? tk.stage : 0);
@@ -91,7 +85,6 @@
     'facePoint',
     'moveTo',
     'boomerangTo',
-    'lyPose',
     'swingOnLeftToPoint',
     'swingOnRightToPoint'
   ]);
@@ -101,7 +94,7 @@
     const t = m.type;
     if (POINT.has(t)) r.push({ k: 'Target', v: `(${m.targetX}, ${m.targetY})` });
     if (t === 'face') r.push({ k: 'Heading', v: `${m.targetH}°` });
-    if (t === 'driveForward' || t === 'driveBackward') {
+    if (t === 'drive' || t === 'driveForward' || t === 'driveBackward') {
       r.push({ k: 'Distance', v: `${m.distance} in` });
       r.push({ k: 'Heading', v: `${m.heading}°` });
     }
@@ -112,9 +105,6 @@
       if (m.leadChasePowerLimit > 0) {
         r.push({ k: 'Chase limit', v: `${m.leadChasePowerLimit}` });
       }
-    }
-    if (t === 'lyPose') {
-      r.push({ k: 'Path heading', v: `${m.pathHeading.toFixed(1)}°` });
     }
     if (t === 'voldrive') {
       r.push({ k: 'Left', v: `${m.leftVolts} V` });
@@ -129,14 +119,14 @@
 
   const unit = (m: Movement) => (isTurn(m.type) ? '°' : 'in');
 
-  // exitDist carries the settle activation zone on BOTH channels — setR. Only the
-  // unit differs: degrees on a turn, inches on a lateral.
+  // exitDist carries the settle activation zone on BOTH channels — ec.settleGate.
+  // Only the unit differs: degrees on a turn, inches on a lateral.
   function settleZone(m: Movement): { value: number; u: string } {
     return { value: m.exitDist, u: unit(m) };
   }
 
   function triggeredLabel(reason: string): string {
-    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line', angle: 'Angle' }[reason] ?? reason;
+    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line', angle: 'Angle', dist: 'Distance' }[reason] ?? reason;
   }
 
   function triggeredDetail(m: Movement): string {
@@ -144,7 +134,9 @@
       case 'settle': {
         const z = settleZone(m);
         const zone = z.value > 0 ? `within ${z.value} ${z.u}` : 'in zone';
-        return m.settleD > 0 ? `${zone}, then |D term| < ${m.settleD}` : `${zone} (no settle gate)`;
+        // settleD carries ec.v now: a chassis SPEED, not a PID D term
+        const sp = isTurn(m.type) ? `${m.settleD} rad/s` : `${m.settleD} in/s`;
+        return m.settleD !== -1 ? `${zone}, slowing and under ${sp}` : `${zone} (no settle gate)`;
       }
       case 'timeout':
         return `${m.exitTimeout} ms elapsed`;
@@ -154,6 +146,8 @@
           : 'crossed the ⊥ line through the target';
       case 'angle':
         return `within ${m.exitAng}° of target, no settle gate`;
+      case 'dist':
+        return `within ${m.exitPerpLine} in of the commanded distance`;
       default:
         return '';
     }
@@ -162,24 +156,25 @@
   function glyphCategory(reason: string): string {
     if (reason === 'timeout') return 'timeout';
     if (reason === 'perpLine') return 'perp';
-    if (reason === 'angle') return 'early';
+    if (reason === 'angle' || reason === 'dist') return 'early';
     return 'settle';
   }
 
   function armed(m: Movement): { k: string; v: string }[] {
     const out: { k: string; v: string }[] = [];
-    if (m.exitTimeout > 0 && m.exitReason !== 'timeout') {
+    if (m.exitTimeout !== -1 && m.exitReason !== 'timeout') {
       out.push({ k: 'Timeout', v: `${m.exitTimeout} ms` });
     }
     if (m.exitReason !== 'settle') {
       const z = settleZone(m);
-      if (z.value > 0) out.push({ k: 'Settle', v: `${z.value} ${z.u} · |D| < ${m.settleD}` });
+      const sp = isTurn(m.type) ? `${m.settleD} rad/s` : `${m.settleD} in/s`;
+      if (z.value > 0 && m.settleD !== -1) out.push({ k: 'Settle', v: `${z.value} ${z.u} · slowing, under ${sp}` });
     }
-    // crossD 0 is armed and meaningful (line on the target); only negative is off
-    if (!isTurn(m.type) && m.exitPerpLine >= 0 && m.exitReason !== 'perpLine') {
+    // d = 0 is armed and meaningful (line on the target); only -1 is off
+    if (!isTurn(m.type) && m.exitPerpLine !== -1 && m.exitReason !== 'perpLine') {
       out.push({ k: 'Perp line', v: m.exitPerpLine > 0 ? `${m.exitPerpLine} in early` : 'on target' });
     }
-    if (isTurn(m.type) && m.exitAng > 0 && m.exitReason !== 'angle') {
+    if (isTurn(m.type) && m.exitAng !== -1 && m.exitReason !== 'angle') {
       out.push({ k: 'Angle', v: `${m.exitAng}° · no settle gate` });
     }
     return out;

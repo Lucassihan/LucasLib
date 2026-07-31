@@ -24,8 +24,6 @@ const clamp = (v, m) => Math.max(-m, Math.min(m, v));
 const noise = (amp) => (Math.random() * 2 - 1) * amp;
 const D2R = Math.PI / 180;
 const sign = (x) => (x < 0 ? -1 : 1);
-// sinc with the same small-x Taylor guard the lib uses (lyPose coupling term).
-const sincFn = (x) => (Math.abs(x) < 1e-3 ? 1 - (x * x) / 6 : Math.sin(x) / x);
 
 // Unicycle (differential-drive) model: the robot can only translate along its
 // own heading and rotate — no sideways motion. Lateral moves are simulated as a
@@ -57,7 +55,7 @@ function governSide(raw, last) {
 }
 
 // Build one auton trace. Returns { name, text }.
-function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kLat = 0, battery = { pct: 100, volts: 13.1 }, motorTemp = { start: 32, rise: 0.25 }, segments }) {
+function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, battery = { pct: 100, volts: 13.1 }, motorTemp = { start: 32, rise: 0.25 }, segments }) {
   const movements = [];
   const ticks = [];
   const readWalls = [];
@@ -74,7 +72,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   function tick(stage, f = {}, governed = true) {
     const v = {
       le: 0, he: 0, dp: 0, hp: 0, tp: 0, sp: 0, do: 0, to: 0, lo: 0, ro: 0,
-      yi: 0, xi: 0, leadX: 0, leadY: 0, leadRetraction: 0, perpDist: 0, ex: 0, ey: 0,
+      yi: 0, xi: 0, leadX: 0, leadY: 0, leadRetraction: 0, perpDist: 0,
       carrotX: 0, carrotY: 0, ghostX: 0, ghostY: 0, arcRadius: 0, maxSlip: 0,
       ...f
     };
@@ -115,7 +113,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       t, mi, r(pose.x), r(pose.y), r(pose.h), stage,
       r(v.le), r(v.he), r(v.dp), r(v.hp), r(v.tp), r(v.sp),
       r(v.do), r(v.to), r(glo), r(gro), r(v.yi), r(v.xi),
-      r(v.leadX), r(v.leadY), r(v.leadRetraction), r(v.perpDist), r(v.ex), r(v.ey),
+      r(v.leadX), r(v.leadY), r(v.leadRetraction), r(v.perpDist),
       r(driveI), r(driveD), r(turnI), r(turnD),
       r(v.carrotX), r(v.carrotY), r(v.ghostX), r(v.ghostY), r(v.arcRadius), r(v.maxSlip),
       bat, r(tempSum / 6)
@@ -127,7 +125,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       index: 0, type: '', targetX: 0, targetY: 0, targetH: 0, distance: 0,
       backwards: 0, direction: 0, partiality: 0, dLead: 0, n: 0, heading: 0,
       cosineScaling: 1, turnPriority: 0, exitTimeout: 3000,
-      settleD: 0.5, exitDist: 0, exitPerpLine: -1, exitAng: 0,
+      settleD: 10, exitDist: 12, exitPerpLine: -1, exitAng: -1,
       exitReason: 'settle', startTime: 0, endTime: 0,
       driveKp: 0, driveKi: 0, driveKd: 0, turnKp: 0, turnKi: 0, turnKd: 0,
       gLead: 0, leadChasePowerLimit: -1, pathHeading: 0, turnDisableLength: 0,
@@ -188,26 +186,25 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'face', targetH,
-      // exitDist = the settle activation zone (setR), degrees on a turn
-      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
+      // exitDist = ec.settleGate (deg on a turn); settleD = ec.v (rad/s)
+      settleD: 10, exitDist: 20, startTime: startT, endTime: t,
       turnKp: 0.7, turnKd: 0.05
     }));
     mi++;
   }
 
-  // Drive straight a fixed distance while holding a heading (unicycle).
-  function driveForward(dist, opts = {}) {
+  // Relative straight drive along a held heading (unicycle). distance is SIGNED —
+  // negative backs up — matching the library's drive().
+  function drive(dist, opts = {}) {
     const startT = t;
-    const back = opts.backwards ? true : false;
     const hHold = pose.h;
     const x0 = pose.x, y0 = pose.y;
-    const signedDist = back ? -dist : dist;
     const hux = Math.sin(hHold * D2R), huy = Math.cos(hHold * D2R);
     const maxSteps = Math.round((opts.maxMs ?? 1200 + Math.abs(dist) * 45) / TICK);
     let steps = 0;
     while (steps < maxSteps) {
       const traveled = (pose.x - x0) * hux + (pose.y - y0) * huy;
-      const le = signedDist - traveled;
+      const le = dist - traveled;
       if (Math.abs(le) < 0.4) break;
       const he = wrap(hHold - pose.h);
       const dp = clamp(le * 0.45, 12);
@@ -216,9 +213,9 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       steps++;
     }
     movements.push(mvRow({
-      index: mi, type: back ? 'driveBackward' : 'driveForward',
-      distance: dist, heading: hHold, backwards: back ? 1 : 0,
-      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
+      index: mi, type: 'drive',
+      distance: dist, heading: hHold, backwards: dist < 0 ? 1 : 0,
+      settleD: 10, exitDist: 12, startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
     mi++;
@@ -253,7 +250,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     }
     movements.push(mvRow({
       index: mi, type: 'moveTo', targetX, targetY,
-      exitDist, exitReason: 'settle', settleD: 0.5,
+      exitDist, exitReason: 'settle', settleD: 10,
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
     }));
@@ -353,76 +350,9 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
       dLead: lead, gLead, leadChasePowerLimit: chaseLimit, turnPriority: 0.4,
       // boomerang leaves CROSS off (crossD < 0) — the lib still reports "perpLine"
       // as the reason, since ending on the target's ⊥ plane is its natural exit
-      settleD: 0.5, exitPerpLine: -1, exitReason: 'perpLine',
+      settleD: 10, exitPerpLine: -1, exitReason: 'perpLine',
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
-    }));
-    mi++;
-  }
-
-  // lyPose: path-follow Lyapunov drive to a pose. Commits to a FIXED line
-  // through (x, y) at pathHeading (explicit, or bot->target frozen at start) and
-  // rides it in. Control law mirrors LucasLib lyapunovCalculate:
-  //   e_x = signed along-line distance, e_y = signed cross-track offset,
-  //   e_theta = robotH - pathHeading; v = |cos eθ|·v_d; ω = -(PID(eθ) + kLat·v·e_y·sinc(eθ))
-  function lyPose(targetX, targetY, opts = {}) {
-    const startT = t;
-    let pathHeading = opts.heading;
-    if (pathHeading === undefined || pathHeading === null || Number.isNaN(pathHeading)) {
-      pathHeading = (Math.atan2(targetX - pose.x, targetY - pose.y) * 180) / Math.PI;
-    }
-    const refH = pathHeading * D2R;
-    const exitDist = opts.exitDist ?? 1.5;
-    const turnDisableLength = opts.turnDisableLength ?? 3;
-    const maxSteps = Math.round((opts.maxMs ?? 5000) / TICK);
-    let steps = 0;
-    while (steps < maxSteps) {
-      const dx = targetX - pose.x;
-      const dy = targetY - pose.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < exitDist) break;
-      // rotate the error into the fixed path frame
-      const e_x = Math.sin(refH) * dx + Math.cos(refH) * dy; // along-line dist to target
-      const e_y = -Math.cos(refH) * dx + Math.sin(refH) * dy; // signed cross-track
-      const e_theta = wrap(pose.h - pathHeading); // deg
-      const etr = e_theta * D2R;
-      const v_d = clamp(e_x * 0.45, 12); // drivePID on e_x
-      const v = Math.abs(Math.cos(etr)) * v_d; // cosine-scaled forward
-      const pidRaw = clamp(e_theta * 0.8, 12); // headingPID(eθ)
-      const latRaw = kLat * v * e_y * sincFn(etr); // Lyapunov coupling
-      let omega = -(pidRaw + latRaw);
-      omega = clamp(omega, 12);
-      // CLOSE stage: within turnDisableLength, kill the turn and settle straight in
-      let stage = 0;
-      if (dist < turnDisableLength) {
-        stage = 1;
-        omega = 0;
-      }
-      // unicycle integrate (v = forward, omega = turn)
-      const vel = (v / 12) * MAXV;
-      const w = (omega / 12) * MAXW;
-      pose.h += w * DT + noise(0.04);
-      const hr = pose.h * D2R;
-      pose.x += vel * Math.sin(hr) * DT + noise(0.02);
-      pose.y += vel * Math.cos(hr) * DT + noise(0.02);
-      const dsv = Math.abs(vel * DT);
-      const dthr = Math.abs(w * DT * D2R);
-      let arcRadius = 1e4;
-      if (dthr > 1e-5 && dsv > 1e-6) arcRadius = dsv / dthr;
-      lastArcRadius = arcRadius;
-      tick(stage, {
-        le: dist, he: e_theta, dp: v_d, hp: omega, do: v, to: omega,
-        lo: v + omega, ro: v - omega, ex: e_x, ey: e_y, arcRadius
-      });
-      t += TICK;
-      steps++;
-    }
-    movements.push(mvRow({
-      index: mi, type: 'lyPose', targetX, targetY, targetH: pathHeading,
-      heading: pathHeading, pathHeading, turnDisableLength,
-      exitDist, exitReason: 'settle', settleD: 0.5,
-      startTime: startT, endTime: t,
-      driveKp: 0.45, driveKi: 0, driveKd: 0.05, turnKp: 0.8, turnKi: 0, turnKd: 0.05
     }));
     mi++;
   }
@@ -498,8 +428,8 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     const typeName = side === 'left' ? 'swingOnLeft' : 'swingOnRight';
     movements.push(mvRow({
       index: mi, type: typeName, targetH,
-      // exitDist = the settle activation zone (setR), degrees on a turn
-      settleD: 0.5, exitDist: 1, startTime: startT, endTime: t,
+      // exitDist = ec.settleGate (deg on a turn); settleD = ec.v (rad/s)
+      settleD: 10, exitDist: 20, startTime: startT, endTime: t,
       turnKp: 0.5, turnKd: 0.04
     }));
     mi++;
@@ -514,13 +444,13 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   }
 
   // Run segments
-  for (const seg of segments) seg({ face, driveForward, moveTo, boomerangTo, swing, lyPose, voldrive, note });
+  for (const seg of segments) seg({ face, drive, moveTo, boomerangTo, swing, voldrive, note });
 
   // Assemble trace text
   const COLS_M =
     'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,settleD,exitDist,exitPerpLine,exitAng,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
   const COLS_T =
-    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp';
+    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp';
   const COLS_R = 't,mi,wall,sensor,preX,preY,preH,postX,postY,postH';
 
   let out = '';
@@ -531,8 +461,6 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
   out += `#battery_volts=${battery.volts}\n`;
   out += `#trackwidth=${trackwidth}\n`;
   out += `#headingDisableDist=${headingDisableDist}\n`;
-  out += `#useLyapunov=${kLat > 0 ? 1 : 0}\n`;
-  out += `#kLat=${kLat}\n`;
   out += `#gov_total_min=${GOV.total.min}\n#gov_total_max=${GOV.total.max}\n#gov_total_accel=${GOV.total.accel}\n#gov_total_decel=${GOV.total.decel}\n`;
   out += `#gov_drive_min=${GOV.drive.min}\n#gov_drive_max=${GOV.drive.max}\n#gov_drive_accel=${GOV.drive.accel}\n#gov_drive_decel=${GOV.drive.decel}\n`;
   out += `#gov_turn_min=${GOV.turn.min}\n#gov_turn_max=${GOV.turn.max}\n#gov_turn_accel=${GOV.turn.accel}\n#gov_turn_decel=${GOV.turn.decel}\n\n`;
@@ -558,7 +486,7 @@ autons.push(buildAuton({
   motorTemp: { start: 34, rise: 0.5 },
   segments: [
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(72),
+    ({ drive }) => drive(72),
     ({ boomerangTo }) => boomerangTo(48, 36, 0, { gLead: 0.35, leadChasePowerLimit: 2 }),
     ({ moveTo }) => moveTo(0, 12),
     // open-loop curve: voldrive(6,3) for 900 ms — left faster than right, so it
@@ -567,26 +495,23 @@ autons.push(buildAuton({
   ]
 }));
 
-// 2. Skills route: lots of moveTo + facePoint-like spot turns + driveForward
+// 2. Skills route: lots of moveTo + facePoint-like spot turns + drive
 autons.push(buildAuton({
   name: 'skills_route',
   start: { x: -60, y: -60, h: 0 },
-  kLat: 0.25,
   battery: { pct: 100, volts: 13.2 },
   motorTemp: { start: 28, rise: 0.2 },
   segments: [
-    ({ driveForward }) => driveForward(48),
+    ({ drive }) => drive(48),
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(36),
-    // align north first, then an implicit-heading lyPose rides the line in like a
-    // steady, accurate straightline (its signature use case)
+    ({ drive }) => drive(36),
     ({ face }) => face(0),
-    ({ lyPose }) => lyPose(-24, 24),
+    ({ moveTo }) => moveTo(-24, 24),
     ({ boomerangTo }) => boomerangTo(36, 48, 0)
   ]
 }));
 
-// 3. Swing showcase: spot turn + swings on both sides + driveBackward
+// 3. Swing showcase: spot turn + swings on both sides + a reverse drive
 autons.push(buildAuton({
   name: 'swing_showcase',
   start: { x: -36, y: -24, h: 0 },
@@ -594,9 +519,9 @@ autons.push(buildAuton({
   segments: [
     ({ face }) => face(45),
     ({ swing }) => swing('left', 135),
-    ({ driveForward }) => driveForward(24),
+    ({ drive }) => drive(24),
     ({ swing }) => swing('right', 45),
-    ({ driveForward }) => driveForward(20, { backwards: true }),
+    ({ drive }) => drive(-20),
     // open-loop ram: voldrive(8,8) for 700 ms — drives straight at fixed volts
     ({ voldrive }) => voldrive(8, 8, 700)
   ]
@@ -606,42 +531,16 @@ autons.push(buildAuton({
 autons.push(buildAuton({
   name: 'match_left_red',
   start: { x: -60, y: -36, h: 0 },
-  kLat: 0.15,
   battery: { pct: 87, volts: 12.9 },
   motorTemp: { start: 37, rise: 0.35 },
   segments: [
-    ({ driveForward }) => driveForward(40),
+    ({ drive }) => drive(40),
     ({ face }) => face(-90),
-    ({ driveForward }) => driveForward(30, { backwards: true }),
+    ({ drive }) => drive(-30),
     ({ swing }) => swing('right', 60),
-    // implicit-heading lyPose: robot is roughly on the bot->target line, rides it in
-    ({ lyPose }) => lyPose(24, -12),
+    ({ moveTo }) => moveTo(24, -12),
     ({ boomerangTo }) => boomerangTo(48, -48, 90),
     ({ face }) => face(180)
-  ]
-}));
-
-// 5. lyPose showcase: path-follow Lyapunov. Starts off the line so the
-// cross-track recovery is visible; one implicit-heading + one explicit-heading.
-autons.push(buildAuton({
-  name: 'lypose_demo',
-  start: { x: 8, y: -30, h: 20 },
-  // sim-tuned coupling (the unicycle's volt->speed scaling needs a higher kLat
-  // than the robot's real 0.04 to merge fully before the 3in turn-disable zone)
-  kLat: 0.25,
-  battery: { pct: 62, volts: 12.5 },
-  segments: [
-    // explicit path heading 0 (vertical line x=24): robot starts ~16in west of
-    // the line, merges onto it, then rides north to the pose
-    ({ lyPose }) => lyPose(24, 36, { heading: 0 }),
-    // orient toward the next target, then implicit-heading lyPose (the bot->target
-    // line frozen at the start) — straightline-style with a steady final heading
-    ({ face }) => face(238),
-    ({ lyPose }) => lyPose(-12, 12),
-    // face east, then explicit heading-90 line (horizontal y=2): another off-line
-    // start so the cross-track merge is visible the other direction
-    ({ face }) => face(90),
-    ({ lyPose }) => lyPose(36, 2, { heading: 90 })
   ]
 }));
 
@@ -653,13 +552,12 @@ autons.push(buildAuton({
 //   • square goals: blue (25,48) (48,24), red (-23,-48) (-47,-25);
 //   • corner goals at (±62, ±55), edge goals on the walls.
 // The BL–TR diagonal (y = x) threads clean between all of them, so the central
-// pickups ride straight up it. lyPose is used twice to drive UP TO a goal and
+// pickups ride straight up it. moveTo is used twice to drive UP TO a goal and
 // stop just short (the robot can't overlap the raised goal); boomerang aligns
 // the final score into the blue corner goal.
 autons.push(buildAuton({
   name: 'override_match',
   start: { x: -48, y: -60, h: 0 },
-  kLat: 0.25,
   battery: { pct: 20, volts: 11.8 },
   motorTemp: { start: 46, rise: 0.45 },
   segments: [
@@ -667,18 +565,18 @@ autons.push(buildAuton({
     ({ moveTo }) => moveTo(-48, -48),
     ({ swing }) => swing('right', 30),
     ({ moveTo }) => moveTo(-24, -24),
-    // turn around and lyPose DOWN to the red square goal, stopping ~15in short
+    // turn around and drive DOWN to the red square goal
     // (the robot can't overlap the raised goal — it just pulls up to it)
     ({ face }) => face(180),
-    ({ lyPose }) => lyPose(-23, -33, { heading: 180 }),
-    ({ driveForward }) => driveForward(10, { backwards: true }),
+    ({ moveTo }) => moveTo(-23, -33),
+    ({ drive }) => drive(-10),
     // ride the obstacle-free diagonal up through center, collecting cups
     ({ moveTo }) => moveTo(24, 24),
     ({ moveTo }) => moveTo(48, 48),
-    // lyPose down to the blue square goal, again pulling up just short of it
+    // down to the blue square goal
     ({ face }) => face(180),
-    ({ lyPose }) => lyPose(48, 39, { heading: 180 }),
-    ({ driveForward }) => driveForward(10, { backwards: true }),
+    ({ moveTo }) => moveTo(48, 39),
+    ({ drive }) => drive(-10),
     // boomerang in to align the score at the blue corner goal (stops ~16in out),
     // then a short open-loop nudge — still clear of the goal itself
     ({ boomerangTo }) => boomerangTo(50, 43, 40),
@@ -730,15 +628,15 @@ autons.push(buildAuton({
     ({ note }) => note(NOTE_STOG),
     ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ drive }) => drive(-3),
     ({ note }) => note('Rear on S red goal: score PRELOAD R/Y → red + owned yellow = +2 · goal #3 · 6 pins'),
-    ({ driveForward }) => driveForward(6.9),
+    ({ drive }) => drive(6.9),
     ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
-    ({ driveForward }) => driveForward(7.6),
+    ({ drive }) => drive(7.6),
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(14.5, { backwards: true }),
+    ({ drive }) => drive(-14.5),
     ({ note }) => note('Rear on W red goal: score Y/Y → +2 owned yellows · 8 pins · 4 goals ≥2 — AWP ✓'),
-    ({ driveForward }) => driveForward(9),
+    ({ drive }) => drive(9),
     ({ note }) => note('Park clear — no wall contact at 0:15 (SC8 rule 3)')
   ]
 }));
@@ -756,19 +654,19 @@ autons.push(buildAuton({
     ({ note }) => note(NOTE_STOG),
     ({ moveTo }) => moveTo(-24, -33.5),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(2.2, { backwards: true }),
+    ({ drive }) => drive(-2.2),
     ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
     ({ moveTo }) => moveTo(1, -25, { exitDist: 1.5 }),
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(11.5),
+    ({ drive }) => drive(11.5),
     ({ note }) => note('Intake R/Y horizontal pin — SE cluster W arm (on-line objects are fair game, SG7b)'),
     ({ face }) => face(270),
-    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ drive }) => drive(-3),
     ({ note }) => note('Back-grab cluster cup (clear-up, empty) — carrying 1 pin + 1 cup (SG6 max)'),
     ({ moveTo }) => moveTo(24, -31, { exitDist: 1.5 }),
     ({ face }) => face(0),
     ({ note }) => note('Flip cup CLEAR-side down — keeps the goal’s two yellows visible'),
-    ({ driveForward }) => driveForward(6.8, { backwards: true }),
+    ({ drive }) => drive(-6.8),
     ({ note }) => note('Stack on S neutral: cup over Y/Y + nest R/Y → 3 pins, 2 PHYSICAL · total 7 — AWP ✓'),
     ({ moveTo }) => moveTo(13, -28, { exitDist: 2 }),
     ({ note }) => note('Park — 7 pins · 3 goals ≥2 · no wall contact')
@@ -790,25 +688,24 @@ autons.push(buildAuton({
     ({ note }) => note(NOTE_STOG),
     ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ drive }) => drive(-3),
     ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
     ({ face }) => face(180),
-    ({ driveForward }) => driveForward(5.5, { backwards: true }),
+    ({ drive }) => drive(-5.5),
     ({ note }) => note('Back-grab Y/Y pin + its clear-up cup as ONE unit (a pin in a cup can’t be flipped)'),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(5.8, { backwards: true }),
+    ({ drive }) => drive(-5.8),
     ({ note }) => note('Stack unit on preload: opaque half hides preload top (−1), unit Y/Y +2 → 3 pins, 2 PHYSICAL · total 7 — AWP ✓'),
-    ({ driveForward }) => driveForward(6),
+    ({ drive }) => drive(6),
     ({ note }) => note('Park — 7 pins · 3 goals ≥2 · S red stack survives a strict “2 pins per goal” reading')
   ]
 }));
 
-// 4. West — lyPose showcase: long frozen-line ride NW, scores the W red goal
+// 4. West — long ride NW, scores the W red goal
 //    first, then brings a Y/Y pin back to the S red goal. ~10 s.
 autons.push(buildAuton({
   name: 'soloawp_west',
   start: AWP_START,
-  kLat: 0.25,
   battery: { pct: 79, volts: 12.6 },
   motorTemp: { start: 31, rise: 0.3 },
   segments: [
@@ -816,19 +713,19 @@ autons.push(buildAuton({
     ({ voldrive }) => voldrive(3, 3, 250),
     ({ note }) => note(NOTE_STOG),
     ({ face }) => face(-42),
-    ({ lyPose }) => lyPose(-32, -30),
+    ({ moveTo }) => moveTo(-32, -30),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(6),
+    ({ drive }) => drive(6),
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(6.8, { backwards: true }),
+    ({ drive }) => drive(-6.8),
     ({ note }) => note('Rear on W red goal: score PRELOAD R/Y → +2 · goal #3 · 6 pins'),
-    ({ driveForward }) => driveForward(6.2),
+    ({ drive }) => drive(6.2),
     ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
     ({ moveTo }) => moveTo(-24, -28, { exitDist: 1.5 }),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(10.5, { backwards: true }),
+    ({ drive }) => drive(-10.5),
     ({ note }) => note('Rear on S red goal: score Y/Y → +2 · 8 pins · 4 goals ≥2 — AWP ✓'),
-    ({ driveForward }) => driveForward(5),
+    ({ drive }) => drive(5),
     ({ note }) => note('Park mid-quadrant — clear of wall and goals')
   ]
 }));
@@ -847,22 +744,22 @@ autons.push(buildAuton({
     ({ note }) => note(NOTE_STOG),
     ({ moveTo }) => moveTo(-25.5, -33.5, { exitDist: 1.5 }),
     ({ face }) => face(0),
-    ({ driveForward }) => driveForward(3, { backwards: true }),
+    ({ drive }) => drive(-3),
     ({ note }) => note('Score PRELOAD R/Y on S red goal → +2 · goal #3 · 6 pins'),
-    ({ driveForward }) => driveForward(6.9),
+    ({ drive }) => drive(6.9),
     ({ note }) => note('Intake Y/Y pin at (−24,−24) — plucked from its clear-up cup'),
-    ({ driveForward }) => driveForward(7.6),
+    ({ drive }) => drive(7.6),
     ({ face }) => face(90),
-    ({ driveForward }) => driveForward(14.5, { backwards: true }),
+    ({ drive }) => drive(-14.5),
     ({ note }) => note('Score Y/Y on W red goal → +2 · 8 pins · 4 goals ≥2 — AWP ✓ · now push the bonus'),
     ({ moveTo }) => moveTo(-30, -30),
     ({ face }) => face(45),
-    ({ driveForward }) => driveForward(19, { backwards: true }),
+    ({ drive }) => drive(-19),
     ({ note }) => note('Back-grab the corner (−48,−48) Y/Y pin + clear-up cup as ONE unit'),
     ({ face }) => face(175),
-    ({ driveForward }) => driveForward(7.3, { backwards: true }),
+    ({ drive }) => drive(-7.3),
     ({ note }) => note('Stack unit on W red goal: hides the Y/Y top (−1), unit +2 → 3 pins, 2 PHYSICAL · total 9 · ≈85 pts'),
-    ({ driveForward }) => driveForward(7),
+    ({ drive }) => drive(7),
     ({ note }) => note('Park — 9 pins · 4 goals ≥2 · max-value solo AWP + Auton Bonus push')
   ]
 }));

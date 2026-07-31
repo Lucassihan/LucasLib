@@ -9,7 +9,6 @@ PID drivePID;
 PID turnPID;
 PID headingPID;
 PID swingPID;
-PID lyPosePID;
 PID fourBarPID;
 
 //constructor
@@ -21,7 +20,6 @@ PID::PID()
       lastTime(0), firstCycle(true),
       minOutput(0), maxOutput(12.0),
       targetOffset(0),
-      executingLyapunov(false),
       maxAccelRate(0), maxDecelRate(0),
       integralBound(2), maxIntegralOutput(2), //integral will only start to accumulate when it is within 2 error units, and its max contribution to output is 2 volts.
       error(0), output(0), derivative(0)
@@ -72,7 +70,6 @@ void PID::clearAllValues() {
     error = 0;
     output = 0;
     derivative = 0;
-    executingLyapunov = false;
 }
 
 //determine constants — writes the matched step's gains straight into kP/kI/kD.
@@ -110,15 +107,11 @@ void PID::determineConstants(double inputError) {
 }
 
 void PID::governOutput() {
-    if (not executingLyapunov) {
-        raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
-    }
+    raw = slew(raw, prevOutput, maxAccelRate, maxDecelRate);
 
     raw = takeSmallerBetween(raw, maxOutput); //this function compares magnitude while preserving sign
 
-    if (not executingLyapunov) {
-        raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
-    }
+    raw = takeLargerBetween(raw, minOutput); //this function compares magnitude while preserving sign
 
     output = raw;
 }

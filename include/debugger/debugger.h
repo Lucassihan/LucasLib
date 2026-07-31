@@ -43,8 +43,6 @@ void moveStraight(const char* type, double distance, double heading,
                   const LateralExitConditions& ec, bool backward);
 void movePoint(const char* type, double tx, double ty,
                const LateralExitConditions& ec, bool backward);
-void moveLyPose(double tx, double ty, double pathHeading, double turnDisable,
-                const LateralExitConditions& ec, bool backward);
 void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec);
 void moveVoltage(double left, double right);
 
@@ -56,9 +54,8 @@ void tick();
 // debugger-only has to live on the PID class. Keyed by instance. No-op off-capture.
 void samplePID(const PID* pid, double integral, double kP, double kI, double kD);
 
-// ---- Overlay telemetry, published once per loop by the lyPose / boomerang
-//      controllers right before voltageDrive (consumed by the next tick) ----
-void probeLyapunov(double ex, double ey);
+// ---- Overlay telemetry, published once per loop by the boomerang controller
+//      right before voltageDrive (consumed by the next tick) ----
 void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY,
                     double leadRetraction, double maxSlip, int stage);
 

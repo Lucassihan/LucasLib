@@ -184,12 +184,6 @@ double Odometry::xRawDeltaDeg() {
   return xRawPosition() - lastXPos;
 }
 
-//trackY -- scale the (already past-threshold) raw Y rotation to inches and integrate it into the
-//global pose. The step is placed along the MIDPOINT heading of the window it accrued over, not the
-//end heading: h is the latest (end-of-window) heading and dhAccumDeg is the swing across the same
-//window, so h - dhAccumDeg/2 is the average. This is second-order accurate on a simultaneous
-//move-and-turn (and on a banked chunk released after several ticks) instead of biasing toward the
-//heading the robot finished at. 0 = north, CW+.
 void Odometry::trackY(double rawDeltaDeg) {
   double dYInches = hasYTracker ? trackerDegsToInches(rawDeltaDeg, cfg.yTrackerDiameter)
                                 : motorDegsToInches(rawDeltaDeg);
@@ -205,21 +199,16 @@ void Odometry::trackY(double rawDeltaDeg) {
   mclAccumDY += gdy;
   mclMutex.unlock();
 
-  //Used for movements like driveForward / driveBackward
+  //Used for relative movements like drive()
   yInchesTracked += dYInches;
 
   double dhRad = TO_RAD(dhAccumDeg);
   lastArcRadius = (fabs(dhRad) < 1e-6) ? 1e9 : dYInches / dhRad;  // near-straight -> large sentinel
   dhAccumDeg = 0;
 
-  // Advance the baseline by exactly what we consumed (sub-threshold remainder stays banked).
   lastYPos += rawDeltaDeg;
 }
 
-//trackX -- same as trackY for the lateral axis, placed along the MIDPOINT heading of its own
-//window (dhAccumDegX is the heading swing banked since the last X accumulation). Local +X maps to
-//global (cos h, -sin h). Only reached when an X tracker exists (otherwise rawDeltaDeg stays 0 and
-//is filtered).
 void Odometry::trackX(double rawDeltaDeg) {
   double dXInches = trackerDegsToInches(rawDeltaDeg, cfg.xTrackerDiameter);
 
@@ -254,18 +243,12 @@ void Odometry::updateVelocity() {
   // robot forward direction
   double headingRad = TO_RAD((h + lastVRefH) / 2.0);
 
-  double forwardVelocity =
-      (dx * sin(headingRad) +
+  v = (dx * sin(headingRad) +
        dy * cos(headingRad)) / timeSinceLastTracked;
 
-  double angularVelocity =
-      TO_RAD((h - lastVRefH) / timeSinceLastTracked);
+  ω = TO_RAD((h - lastVRefH) / timeSinceLastTracked);
 
-
-  if (not justResetPos) {
-    v = forwardVelocity;
-    ω = angularVelocity;
-  } else {
+  if (justResetPos) {
     v = 0;
     ω = 0;
     justResetPos = false;

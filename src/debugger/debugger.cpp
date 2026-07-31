@@ -18,7 +18,6 @@
 
 // External engine state we sample from (defined across movementUtils/movement).
 extern double turnDisableLength;        // moveTo heading-disable radius (header field)
-extern double lyPoseTurnDisableLength;  // lyPose CLOSE-stage radius
 
 namespace debugger {
 
@@ -35,7 +34,7 @@ static const int DUMP_REPEATS = 4;
 // strips it, so screen noise on the terminal is filtered out on import.
 #define DBG_MARK "~LLT|"
 
-enum Kind { K_TURN, K_STRAIGHT, K_POINT, K_LYPOSE, K_BOOMERANG, K_VOLTAGE };
+enum Kind { K_TURN, K_STRAIGHT, K_POINT, K_BOOMERANG, K_VOLTAGE };
 
 struct Mv {
     int          index;
@@ -64,7 +63,7 @@ struct Tk {
     uint8_t  stage;
     float    x, y, h;
     float    le, he, dp, hp, tp, sp, driveO, turnO, lo, ro;
-    float    yi, xi, ex, ey;
+    float    yi, xi;
     float    driveI, driveD, turnI, turnD;
     float    carrotX, carrotY, ghostX, ghostY, arcRadius, maxSlip, leadRet, perp;
     float    bat, mtemp;  // battery % + drive-motor temp average (°C), per tick
@@ -94,10 +93,10 @@ static char autonName[40] = "auton";
 static float startPoseX = 0, startPoseY = 0, startPoseH = 0;
 static float batteryPct = -1, batteryVolts = 0;  // snapshot at start(); -1 = never armed
 
-// Overlay telemetry published by lyPose / boomerang, consumed by the next tick().
+// Overlay telemetry published by boomerang, consumed by the next tick().
 struct Pending {
     bool  set = false;
-    float ex = 0, ey = 0, carrotX = 0, carrotY = 0, ghostX = 0, ghostY = 0;
+    float carrotX = 0, carrotY = 0, ghostX = 0, ghostY = 0;
     float leadRet = 0, maxSlip = 0;
     int   stage = -1;  // -1 = use default staging
 };
@@ -147,25 +146,29 @@ static Mv& newMove(const char* type, Kind kind) {
     return m;
 }
 
+// settleD carries ec.v now — the settle threshold is a chassis SPEED (in/s here),
+// not the PID D term it used to be. The trace column keeps its old name so the
+// debugger app's parser still reads it.
 static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
-    m.exTimeout = ec.tOut;
-    m.settleD   = ec.setD;
-    m.exDist    = ec.setR;     // settle activation radius
-    m.exPerp    = ec.crossD;   // cross line offset toward the robot (perp-line exit)
-    if (ec.crossD >= 0)   m.exReason = "perpLine";
-    else if (ec.setR > 0) m.exReason = "settle";
-    else                  m.exReason = "timeout";
+    m.exTimeout = ec.t;
+    m.settleD   = ec.v;
+    m.exDist    = ec.settleGate;  // settle activation radius
+    m.exPerp    = ec.d;           // cross line offset toward the robot (perp-line exit)
+    if (ec.d != -1)      m.exReason = "perpLine";
+    else if (ec.v != -1) m.exReason = "settle";
+    else                 m.exReason = "timeout";
 }
 
+// Same remap on the turn channel, where settleD is an angular speed (rad/s).
 static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
-    m.exTimeout = ec.tOut;
-    m.settleD   = ec.setD;
-    m.exDist    = ec.setR;     // settle activation zone — DEGREES on a turn
-    m.exAng     = ec.extA;     // ungated "close enough" angle exit
+    m.exTimeout = ec.t;
+    m.settleD   = ec.v;
+    m.exDist    = ec.settleGate;  // settle activation zone — DEGREES on a turn
+    m.exAng     = ec.d;           // ungated "close enough" angle exit
     // settle's zone is normally the wider of the two, so it trips first
-    if (ec.setR > 0)      m.exReason = "settle";
-    else if (ec.extA > 0) m.exReason = "angle";
-    else                  m.exReason = "timeout";
+    if (ec.v != -1)      m.exReason = "settle";
+    else if (ec.d != -1) m.exReason = "angle";
+    else                 m.exReason = "timeout";
 }
 
 // =========================================================================
@@ -228,21 +231,6 @@ void movePoint(const char* type, double tx, double ty, const LateralExitConditio
     copyLateralEC(m, ec);
 }
 
-void moveLyPose(double tx, double ty, double pathHeading, double turnDisable, const LateralExitConditions& ec, bool backward) {
-    Mv& m = newMove("lyPose", K_LYPOSE);
-    m.targetX     = tx;
-    m.targetY     = ty;
-    m.targetH     = pathHeading;
-    m.heading     = pathHeading;
-    m.pathHeading = pathHeading;
-    m.turnDisable = turnDisable;
-    m.backwards   = backward ? 1 : 0;
-    m.cosineScaling = true;  // the law does its own cosine scaling
-    m.drivePidPtr = &drivePID;
-    m.turnPidPtr  = &lyPosePID;
-    copyLateralEC(m, ec);
-}
-
 void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec) {
     Mv& m = newMove("boomerangTo", K_BOOMERANG);
     m.targetX     = bp.x;
@@ -257,7 +245,7 @@ void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec) {
     m.drivePidPtr = &drivePID;
     m.turnPidPtr  = &headingPID;
     copyLateralEC(m, ec);
-    if (ec.crossD < 0) m.exReason = "perpLine";  // boomerang's natural exit
+    if (ec.d < 0) m.exReason = "perpLine";  // boomerang's natural exit
 }
 
 void moveVoltage(double left, double right) {
@@ -310,15 +298,13 @@ void tick() {
         t.turnD = m.turnPidPtr->derivative;
     }
 
-    // overlay telemetry (lyPose ex/ey, boomerang carrot/ghost/slip)
-    t.ex = pending.ex;  t.ey = pending.ey;
+    // overlay telemetry (boomerang carrot/ghost/slip)
     t.carrotX = pending.carrotX;  t.carrotY = pending.carrotY;
     t.ghostX = pending.ghostX;    t.ghostY = pending.ghostY;
     t.leadRet = pending.leadRet;  t.maxSlip = pending.maxSlip;
 
     // stage
     if (pending.stage >= 0)              t.stage = (uint8_t) pending.stage;
-    else if (m.kind == K_LYPOSE)         t.stage = (lateralError < lyPoseTurnDisableLength) ? 1 : 0;
     else if (m.kind == K_POINT)          t.stage = close ? 1 : 0;
     else                                 t.stage = 0;
 
@@ -345,11 +331,6 @@ void samplePID(const PID* pid, double integral, double kP, double kI, double kD)
 // =========================================================================
 // Overlay telemetry probes
 // =========================================================================
-void probeLyapunov(double ex, double ey) {
-    if (!capturing) return;
-    pending.ex = ex;  pending.ey = ey;  pending.set = true;
-}
-
 void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY,
                     double leadRetraction, double maxSlip, int stage) {
     if (!capturing) return;
@@ -422,8 +403,6 @@ static void dumpTrace() {
     emitf("#battery_volts=%g", batteryVolts);
     emitf("#trackwidth=%g", chassis.getTrackwidth());
     emitf("#headingDisableDist=%g", turnDisableLength);
-    emitf("#useLyapunov=%d", kLat > 0 ? 1 : 0);
-    emitf("#kLat=%g", kLat);
     emitf("#gov_total_min=%g", totalOutput.minOutput);
     emitf("#gov_total_max=%g", totalOutput.maxOutput);
     emitf("#gov_total_accel=%g", totalOutput.maxAccelRate);
@@ -456,13 +435,13 @@ static void dumpTrace() {
     emit("");
     emit("[TICKS]");
     emit("t,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,"
-         "ex,ey,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp");
+         "driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp");
     for (int i = 0; i < tickCount; i++) {
         Tk& t = ticks[i];
-        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             t.t, (unsigned) t.mi, t.x, t.y, t.h, (unsigned) t.stage, t.le, t.he, t.dp, t.hp, t.tp, t.sp,
             t.driveO, t.turnO, t.lo, t.ro, t.yi, t.xi, t.leadRet, t.perp,
-            t.ex, t.ey, t.driveI, t.driveD, t.turnI, t.turnD,
+            t.driveI, t.driveD, t.turnI, t.turnD,
             t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip, t.bat, t.mtemp);
     }
 

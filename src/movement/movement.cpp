@@ -45,7 +45,7 @@ void face(double heading, TurnExitConditions ec, int direction) {
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -83,7 +83,7 @@ void facePoint(double x, double y, TurnExitConditions ec, int direction) {
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -120,7 +120,7 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
 
         voltageDrive(leftOut, rightOut, true);
 
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -153,7 +153,7 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
 
         voltageDrive(leftOut, rightOut, true);
 
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -188,7 +188,7 @@ void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, double partia
 
         voltageDrive(leftOut, rightOut);
 
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -223,7 +223,7 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, double parti
 
         voltageDrive(leftOut, rightOut);
 
-        exitConditionFulfilled = checkTurnExit(ec, startTime, headingError);
+        exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
@@ -240,24 +240,17 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, double parti
 //  |______/_/    \_\_|  |______|_|  \_\/_/    \_\______| |_|  |_|\____/   \/   |______|_|  |_|______|_| \_|  |_| |_____/ 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////        
 
-void driveForward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
+void drive(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
     double startTime = Brain.timer(msec);
     clearAllValues();
     targetH = heading;
-    debugger::moveStraight("driveForward", distance, heading, ec, false);
+    debugger::moveStraight("drive", distance, heading, ec, distance < 0);
 
-    //Capture the pose at the start of the move. Error is the gap between the
-    //commanded distance and how far we've actually moved along the heading axis
-    //since then — read straight off (MCL-corrected) pose, not wheel encoders.
-    double startX = chassis.x;
-    double startY = chassis.y;
+    double target = distance + drivePID.targetOffset * sign(distance);
 
     while (not exitConditionFulfilled) {
-        lateralError = distance - chassis.yInchesTracked;
-        //drivePID.targetOffset biases the error: positive drives it further (bigger output)
-        lateralError = lateralError + drivePID.targetOffset;
+        lateralError = target - chassis.yInchesTracked;
 
-        //hold the supplied heading (defaults to whatever chassis.h was at call time)
         headingError = chassis.wrappedHeadingError(targetH, false);
 
         drivePow   = drivePID.calculateOutput(lateralError);
@@ -272,51 +265,10 @@ void driveForward(double distance, double heading, LateralExitConditions ec, Ble
         //apply to the motors
         voltageDrive(leftOut, rightOut);
 
-        //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, startTime, lateralError, 2053, 2053) 
-                                 or fabs(lateralError) < ec.crossD;
-
-        delay(10);
-    }
-    drivePID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
-}
-
-void driveBackward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
-    double startTime = Brain.timer(msec);
-    clearAllValues();
-    targetH = heading;
-    debugger::moveStraight("driveBackward", distance, heading, ec, true);
-
-    //Same pose-based error as driveForward, mirrored: the target is -distance
-    //along the heading axis, so backing up drives forwardProgress negative.
-    double startX = chassis.x;
-    double startY = chassis.y;
-
-    while (not exitConditionFulfilled) {
-        lateralError = -(distance + chassis.yInchesTracked);
-        //drivePID.targetOffset biases the error: positive drives it further (bigger output).
-        //error is negative when backing up, so subtract to grow its magnitude.
-        lateralError = lateralError - drivePID.targetOffset;
-
-        //hold the supplied heading (defaults to whatever chassis.h was at call time)
-        headingError = chassis.wrappedHeadingError(targetH, false);
-
-        drivePow   = drivePID.calculateOutput(lateralError);
-        headingPow = headingPID.calculateOutput(headingError);
-
-        //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
-        blendOutputs(bs);
-
-        //enforce output constraints (slew, ratio-preserving max cap, min floor)
-        governOutputs();
-
-        //apply to the motors
-        voltageDrive(leftOut, rightOut);
-
-        //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, startTime, lateralError, 2053, 2053, true)
-                                 or fabs(lateralError) < ec.crossD;
+        //check exit conditions. There is no point target on a relative drive, so
+        //ec.d is a plain remaining-distance tolerance here rather than a cross line.
+        exitConditionFulfilled = checkLateralExit(ec, startTime, false)
+                                 or fabs(lateralError) < ec.d;
 
         delay(10);
     }
@@ -339,10 +291,10 @@ void moveTo(double x, double y, LateralExitConditions ec, BlendSettings bs) {
         //if we're far from the target, use point based heading error and distance.
         if (not close) {
             headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
-            lateralError = chassis.distanceTo(targetX, targetY, backward);
+            lateralError = chassis.distanceTo(targetX, targetY, backward) + drivePID.targetOffset;
 
             //check if we're close or not
-            if (fabs(lateralError) < turnDisableLength) {
+            if (fabs(lateralError - drivePID.targetOffset) < turnDisableLength) {
                 close = true;
                 targetH = chassis.h;
                 targetStraightDistance = lateralError;
@@ -357,7 +309,7 @@ void moveTo(double x, double y, LateralExitConditions ec, BlendSettings bs) {
         }
 
         //drivePID.targetOffset biases the error: positive drives past the target (bigger output)
-        drivePow   = drivePID.calculateOutput(lateralError + drivePID.targetOffset);
+        drivePow   = drivePID.calculateOutput(lateralError);
         headingPow = headingPID.calculateOutput(headingError);
 
         //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
@@ -370,71 +322,10 @@ void moveTo(double x, double y, LateralExitConditions ec, BlendSettings bs) {
         voltageDrive(leftOut, rightOut);
 
         //check exit conditions
-        exitConditionFulfilled = checkLateralExit(ec, startTime, lateralError + drivePID.targetOffset, targetX, targetY, backward);
+        exitConditionFulfilled = checkLateralExit(ec, startTime);
 
         delay(10);
     }
-    drivePID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
-}
-
-// Path-follow Lyapunov drive to a pose. Always rides the FIXED line through
-// (x, y): with an explicit heading the line points that way; with heading = NAN
-// the bot→target heading is frozen at the first loop (straightline-style steady
-// heading) and held for the whole movement. Gives a consistent final heading at
-// the target. Drives on e_x, so it backs up cleanly if it overshoots.
-double lyPoseTurnDisableLength = 3;
-void lyPose(double x, double y, LateralExitConditions ec,
-            double heading) {
-    double startTime = Brain.timer(msec);
-    clearAllValues();
-    targetX = x;
-    targetY = y;
-
-    // Resolve the path heading ONCE and hold it. NAN → freeze the bot→target
-    // heading from the start pose (same convention as wrappedPointHeadingError:
-    // atan2(dx, dy), 0 = +Y, CW+).
-    double pathHeading = heading;
-    if (std::isnan(pathHeading)) {
-        pathHeading = atan2(targetX - chassis.x, targetY - chassis.y) * (180.0 / M_PI);
-    }
-    debugger::moveLyPose(x, y, pathHeading, lyPoseTurnDisableLength, ec, backward);
-
-    // Run drivePID/headingPID raw — governor is the single rate-limiter.
-    drivePID.executingLyapunov   = true;
-    headingPID.executingLyapunov = true;
-
-    headingError = chassis.wrappedHeadingError(pathHeading, backward);
-    lateralError = chassis.distanceTo(targetX, targetY, backward);
-
-    while (not exitConditionFulfilled) {
-        //always path-follow; lyapunovCalculate writes leftOut/rightOut + lateralError
-        lyapunovCalculate(targetX, targetY, backward, pathHeading);
-
-        //CLOSE stage: within lyPoseTurnDisableLength of the pose, kill the turn
-        //and drive straight in on the held heading (no last-inch heading jitter).
-        if (lateralError < lyPoseTurnDisableLength) {
-            leftOut    = driveOut;
-            rightOut   = driveOut;
-            turnOut    = 0;
-            headingPow = 0;
-        }
-
-        //enforce output constraints (governor slew, ratio-preserving max cap, min floor)
-        governOutputs();
-
-        //apply to the motors
-        voltageDrive(leftOut, rightOut);
-
-        //exit settles on the TRUE distance to the pose (lateralError = dist),
-        //biased by drivePID.targetOffset to match the offset applied in lyapunovCalculate
-        exitConditionFulfilled = checkLateralExit(ec, startTime, lateralError + drivePID.targetOffset, targetX, targetY, backward);
-
-        delay(10);
-    }
-
-    drivePID.executingLyapunov   = false;
-    headingPID.executingLyapunov = false;
     drivePID.targetOffset = 0;
     voltageDrive(0,0); //Stop the motors when the movement ends
 }
@@ -566,7 +457,7 @@ void boomerangTo(BoomParams bp,
                                  closeEnd ? 2 : (closeGhost ? 1 : 0));
         voltageDrive(leftOut, rightOut);
 
-        exitConditionFulfilled = checkLateralExit(ec, startTime, lateralError, x, y, backward);
+        exitConditionFulfilled = checkLateralExit(ec, startTime);
 
         delay(10);
     }

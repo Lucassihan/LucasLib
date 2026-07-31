@@ -86,28 +86,12 @@
 
       switch (s.fn) {
         case 'moveTo':
-        case 'lyPose':
         case 'facePoint':
         case 'swingOnLeftToPoint':
         case 'swingOnRightToPoint': {
           const x = num(0);
           const y = num(1);
           if (x !== null && y !== null) out.push({ stmtIndex: i, role: 'target', x, y, color: col });
-          // explicit lyPose line heading gets a knob at the target
-          if (s.fn === 'lyPose') {
-            const h = num(3);
-            if (h !== null && x !== null && y !== null) {
-              out.push({
-                stmtIndex: i,
-                role: 'heading',
-                x: x + HEADING_KNOB_R * Math.sin(h * D2R),
-                y: y + HEADING_KNOB_R * Math.cos(h * D2R),
-                color: col,
-                ox: x,
-                oy: y
-              });
-            }
-          }
           break;
         }
         case 'face':
@@ -127,17 +111,17 @@
           }
           break;
         }
-        case 'driveForward':
-        case 'driveBackward': {
+        case 'drive': {
           const d = num(0);
           if (d !== null) {
-            const hh = num(2) ?? seg.start.h;
-            const sign = s.fn === 'driveBackward' ? -1 : 1;
+            // drive(distance, heading, ec, bs) — distance is SIGNED, so the handle
+            // lands behind the start for a negative one. No direction flag needed.
+            const hh = num(1) ?? seg.start.h;
             out.push({
               stmtIndex: i,
               role: 'distance',
-              x: seg.start.x + sign * d * Math.sin(hh * D2R),
-              y: seg.start.y + sign * d * Math.cos(hh * D2R),
+              x: seg.start.x + d * Math.sin(hh * D2R),
+              y: seg.start.y + d * Math.cos(hh * D2R),
               color: col,
               ox: seg.start.x,
               oy: seg.start.y
@@ -252,7 +236,7 @@
     }
 
     if (role === 'startheading' || role === 'heading') {
-      // pivot: setPos/face → robot spot; lyPose/boom → the target point
+      // pivot: setPos/face → robot spot; boomerang → the target point
       let px = 0;
       let py = 0;
       if (stmt.kind === 'call' && stmt.fn === 'chassis.setPos') {
@@ -264,9 +248,6 @@
         const by = init?.fields.y;
         px = bx && typeof bx.value === 'number' ? bx.value : 0;
         py = by && typeof by.value === 'number' ? by.value : 0;
-      } else if (stmt.kind === 'call' && (stmt.fn === 'lyPose')) {
-        px = stmt.args[0]?.kind === 'num' ? stmt.args[0].lit.value : 0;
-        py = stmt.args[1]?.kind === 'num' ? stmt.args[1].lit.value : 0;
       } else if (seg) {
         px = seg.end.x;
         py = seg.end.y;
@@ -277,9 +258,6 @@
       if (stmt.kind === 'call' && stmt.fn === 'boomerangTo') {
         const init = boomInitOf(stmt, parsed);
         if (init) editStructField(init, 'heading', h, 0);
-      } else if (stmt.kind === 'call' && stmt.fn === 'lyPose') {
-        const a3 = stmt.args[3];
-        if (a3?.kind === 'num') editNumber(a3.lit, h, 0);
       } else if (stmt.kind === 'call') {
         const a = stmt.fn === 'chassis.setPos' ? stmt.args[2] : stmt.args[0];
         if (a?.kind === 'num') editNumber(a.lit, h, 0);
@@ -288,12 +266,13 @@
     }
 
     if (role === 'distance' && stmt.kind === 'call' && seg) {
-      const hh = stmt.args[2]?.kind === 'num' ? stmt.args[2].lit.value : seg.start.h;
-      const sign = stmt.fn === 'driveBackward' ? -1 : 1;
+      const hh = stmt.args[1]?.kind === 'num' ? stmt.args[1].lit.value : seg.start.h;
       const ux = Math.sin(hh * D2R);
       const uy = Math.cos(hh * D2R);
       const proj = (f.x - seg.start.x) * ux + (f.y - seg.start.y) * uy;
-      const d = Math.max(0, round(sign * proj, 0.5));
+      // signed — dragging the handle behind the start writes a negative distance,
+      // which is how drive() reverses
+      const d = round(proj, 0.5);
       const a0 = stmt.args[0];
       if (a0?.kind === 'num') editNumber(a0.lit, d);
       return;
@@ -656,7 +635,7 @@
     x: number;
     y: number;
     settleR: number; // settle activation circle
-    crossD: number; // ⊥ trip line, slid this far back toward us (< 0 = cross off)
+    crossD: number; // ec.d — ⊥ trip line, slid this far back toward us (-1 = cross off)
     backward: boolean; // reverse move — the line slides the other way
     heading: number; // approach heading for the ⊥ line
     stageR: number; // headingDisableDist circle (moveTo / boomerangTo)
@@ -671,7 +650,7 @@
       let x: number | null = null;
       let y: number | null = null;
       let ecArg;
-      if (s.fn === 'moveTo' || s.fn === 'lyPose') {
+      if (s.fn === 'moveTo') {
         x = s.args[0]?.kind === 'num' ? s.args[0].lit.value : null;
         y = s.args[1]?.kind === 'num' ? s.args[1].lit.value : null;
         ecArg = s.args[2];
@@ -684,12 +663,12 @@
       }
       if (x === null || y === null) continue;
       // omitted fields fall back to the left-panel defaults
-      let settleR = k.ecLatSetR;
-      let crossD = k.ecLatCrossD;
+      let settleR = k.ecLatGate;
+      let crossD = k.ecLatD;
       if (ecArg?.kind === 'struct') {
         const f = ecArg.init.fields;
-        if (f.setR && typeof f.setR.value === 'number') settleR = f.setR.value;
-        if (f.crossD && typeof f.crossD.value === 'number') crossD = f.crossD.value;
+        if (f.settleGate && typeof f.settleGate.value === 'number') settleR = f.settleGate.value;
+        if (f.d && typeof f.d.value === 'number') crossD = f.d.value;
       }
       out.push({
         seg,

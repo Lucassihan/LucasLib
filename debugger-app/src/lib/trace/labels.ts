@@ -1,5 +1,5 @@
 // Human-readable movement names + type categories.
-// (Design spec: show "Drive Forward", not "driveForward".)
+// (Design spec: show "Move To", not "moveTo".)
 
 const PRETTY: Record<string, string> = {
   face: 'Face',
@@ -8,12 +8,14 @@ const PRETTY: Record<string, string> = {
   swingOnRight: 'Swing Right',
   swingOnLeftToPoint: 'Swing Left to Point',
   swingOnRightToPoint: 'Swing Right to Point',
-  driveForward: 'Drive Forward',
-  driveBackward: 'Drive Backward',
+  drive: 'Drive',
   moveTo: 'Move To',
   boomerangTo: 'Boomerang',
-  lyPose: 'lyPose',
-  voldrive: 'Voltage Drive'
+  voldrive: 'Voltage Drive',
+  // retired — kept so archived traces still render with a readable name
+  driveForward: 'Drive Forward',
+  driveBackward: 'Drive Backward',
+  lyPose: 'lyPose'
 };
 
 export function prettyMovement(type: string): string {
@@ -37,16 +39,10 @@ export function isTurn(type: string): boolean {
 // Movements whose (targetX, targetY) is where the robot is supposed to END
 // (so a field waypoint there is meaningful). Excludes facePoint / swing-to-point
 // — those take an (x, y) but only FACE it; the robot ends elsewhere.
-// lyPose marks its own target in LyPoseOverlay, so it doesn't get a Waypoint.
 const ENDS_AT_TARGET = new Set(['moveTo', 'boomerangTo']);
 
 export function endsAtTarget(type: string): boolean {
   return ENDS_AT_TARGET.has(type);
-}
-
-/** lyPose — path-follow Lyapunov drive (gets the Lyapunov readout + overlay). */
-export function isLyPose(type: string): boolean {
-  return type === 'lyPose';
 }
 
 /** voldrive — open-loop voltage command (no PID, no exit, no governing). */
@@ -61,12 +57,14 @@ const MOVEMENT_COLORS: Record<string, string> = {
   swingOnRight: '#f97316',
   swingOnLeftToPoint: '#f97316',
   swingOnRightToPoint: '#f97316',
-  driveForward: '#3b82f6',
-  driveBackward: '#3b82f6',
+  drive: '#3b82f6',
   moveTo: '#22c55e',
   boomerangTo: '#eab308',
-  lyPose: '#2dd4bf',
-  voldrive: '#a855f7'
+  voldrive: '#a855f7',
+  // retired — archived traces keep their original colors
+  driveForward: '#3b82f6',
+  driveBackward: '#3b82f6',
+  lyPose: '#2dd4bf'
 };
 
 export function movementColor(type: string): string {

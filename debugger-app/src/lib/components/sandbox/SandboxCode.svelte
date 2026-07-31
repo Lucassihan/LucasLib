@@ -114,15 +114,15 @@
   function fieldDefault(structKind: string | undefined, f: { name: string; def: number | boolean }): number | boolean {
     const k = sandbox.knobs;
     if (structKind === 'lateralEc') {
-      if (f.name === 'tOut') return k.ecLatTOut;
-      if (f.name === 'setR') return k.ecLatSetR;
-      if (f.name === 'setD') return k.ecLatSetD;
-      if (f.name === 'crossD') return k.ecLatCrossD;
+      if (f.name === 't') return k.ecLatT;
+      if (f.name === 'v') return k.ecLatV;
+      if (f.name === 'd') return k.ecLatD;
+      if (f.name === 'settleGate') return k.ecLatGate;
     } else if (structKind === 'turnEc') {
-      if (f.name === 'tOut') return k.ecTurnTOut;
-      if (f.name === 'setR') return k.ecTurnSetR;
-      if (f.name === 'setD') return k.ecTurnSetD;
-      if (f.name === 'extA') return k.ecTurnExtA;
+      if (f.name === 't') return k.ecTurnT;
+      if (f.name === 'v') return k.ecTurnV;
+      if (f.name === 'd') return k.ecTurnD;
+      if (f.name === 'settleGate') return k.ecTurnGate;
     }
     return f.def;
   }

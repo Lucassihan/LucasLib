@@ -65,17 +65,3 @@ int schedulerTask() {
     }
     return 0;
 }
-
-//Lil perp line cross function for u to use
-bool cross(double x, double y, double crossD) {
-
-    double dx = x - chassis.x;
-    double dy = y - chassis.y;
-    double hRad = chassis.h * (M_PI / 180.0);
-    double along   = dx * sin(hRad) + dy * cos(hRad);
-    double lateral = dx * cos(hRad) - dy * sin(hRad);
-
-    if (backward) along = -along;
-
-    return along <= crossD;
-}

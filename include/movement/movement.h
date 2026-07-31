@@ -5,8 +5,7 @@
 #include "odometry.h"
 #include "pid.h"
 #include "totalOutput.h"
-#include "movementUtils.h"   // shared engine: motion state, output pipeline, resolvers, Lyapunov
-#include "pursuit.h"         // followPath + PathPoint/PursuitParams (pure pursuit)
+#include "movementUtils.h"   // shared engine: motion state, output pipeline, resolvers
 
 // =========================================================================
 // Turn movements
@@ -50,33 +49,23 @@ void swingOnRightToPoint(double x, double y,
 // =========================================================================
 // (BoomParams + getBoomLeadX/Y now live in movementUtils.h, included above.)
 
-void driveForward(double distance,
-                  double heading = chassis.h,
-                  LateralExitConditions ec = {},
-                  BlendSettings bs = {});
-
-void driveBackward(double distance,
-                   double heading = chassis.h,
-                   LateralExitConditions ec = {},
-                   BlendSettings bs = {});
+// Relative straight drive along a held heading. distance is SIGNED: positive
+// drives forward, negative backs up. This is the one movement that does NOT
+// consult the global `backward` — direction comes from the sign of distance and
+// nothing else, so flipping the global has no effect here.
+// heading is held with the NOSE either way (a backward drive does not flip it);
+// it defaults to whatever chassis.h was at call time.
+// drivePID.targetOffset is applied along the direction of travel, so its sign
+// means the same thing in both directions: positive overshoots PAST the target,
+// negative stops SHORT of it, regardless of which way distance points.
+void drive(double distance,
+           double heading = chassis.h,
+           LateralExitConditions ec = {},
+           BlendSettings bs = {});
 
 void moveTo(double x, double y,
             LateralExitConditions ec = {},
             BlendSettings bs = {});
-
-// Path-follow Lyapunov drive to a pose. Always rides the FIXED line through
-// (x, y). heading = a value → the line points that way; heading = NAN → the
-// bot→target heading is frozen at the first loop and held (straightline-steady,
-// consistent final heading). Drives on signed along-line distance, so it backs
-// up cleanly on overshoot.
-// Within the lyPoseTurnDisableLength global (default 3") of the pose, steering
-// is disabled and the bot drives straight in on the held heading — a clean,
-// jitter-free settle (CLOSE stage). Outside it the full path-follow law runs
-// (FAR stage). No BlendSettings: the control law does its own cosine scaling
-// and left/right blend.
-void lyPose(double x, double y,
-            LateralExitConditions ec = {},
-            double heading = NAN);
 
 void boomerangTo(BoomParams bp,
                  LateralExitConditions ec = {});

@@ -6,7 +6,6 @@
   import Timeline from '$lib/components/Timeline.svelte';
   import MovementInspector from '$lib/components/MovementInspector.svelte';
   import PidReadout from '$lib/components/PidReadout.svelte';
-  import LyapunovReadout from '$lib/components/LyapunovReadout.svelte';
   import ControlPipeline from '$lib/components/ControlPipeline.svelte';
   import MotorDiagram from '$lib/components/MotorDiagram.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
@@ -23,7 +22,7 @@
   import { pursuit, deleteAnchor } from '$lib/stores/pursuit.svelte';
   import { traceState, movementAt, tickAt, togglePlay, stepTicks, jumpMovement } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
-  import { PID_TERM, COLORS, isLyPose, isVolDrive } from '$lib/trace/labels';
+  import { PID_TERM, COLORS, isVolDrive } from '$lib/trace/labels';
   import type { Tick } from '$lib/trace/types';
 
   let settingsOpen = $state(false);
@@ -182,11 +181,9 @@
     if (!active) return 'Heading PID';
     if (active.type === 'face' || active.type === 'facePoint') return 'Turn PID';
     if (active.type.startsWith('swing')) return 'Swing PID';
-    if (active.type === 'lyPose') return 'Lyapunov ω';
     return 'Heading PID';
   });
 
-  const lyActive = $derived(!!active && isLyPose(active.type));
   // voldrive is open-loop: nothing changes within the call, so the right column
   // collapses to just the motor diagram (no readout / graphs / pipeline).
   const vdActive = $derived(!!active && isVolDrive(active.type));
@@ -204,8 +201,7 @@
   const driveBreakdown = $derived(
     active
       ? [
-          // lyPose's drive PID runs on along-line distance e_x, not lateralError
-          { data: activeTicks.map((t) => ({ t: t.t, v: active.driveKp * (lyActive ? t.ex : t.lateralError) })), color: PID_TERM.p },
+          { data: activeTicks.map((t) => ({ t: t.t, v: active.driveKp * t.lateralError })), color: PID_TERM.p },
           { data: activeTicks.map((t) => ({ t: t.t, v: active.driveKi * t.driveI })), color: PID_TERM.i },
           { data: activeTicks.map((t) => ({ t: t.t, v: active.driveKd * t.driveD })), color: PID_TERM.d }
         ]
@@ -221,39 +217,14 @@
       : []
   );
 
-  // lyPose ω graph: proportional (heading PID) term in orange + the Lyapunov
-  // lateral-coupling term in the movement's turquoise.
-  const D2R = Math.PI / 180;
-  const sinc = (x: number) => (Math.abs(x) < 1e-3 ? 1 - (x * x) / 6 : Math.sin(x) / x);
-  function lyLat(t: Tick): number {
-    return -traceState.trace.header.kLat * t.driveOut * t.ey * sinc(t.headingError * D2R);
-  }
-  const lyOmegaSeries = $derived(
-    lyActive
-      ? [
-          { data: activeTicks.map((t) => ({ t: t.t, v: t.turnOut - lyLat(t) })), color: COLORS.lyP },
-          { data: activeTicks.map((t) => ({ t: t.t, v: lyLat(t) })), color: COLORS.lyLat }
-        ]
-      : []
-  );
-
   const driveSeries = $derived(settings.showBreakdown ? driveBreakdown : driveNormal);
-  // breakdown ON: lyPose shows prop + Lyapunov terms; others show P/I/D.
-  // breakdown OFF: single governed-output line for all (lyPose = total ω).
-  const turnSeries = $derived(
-    settings.showBreakdown ? (lyActive ? lyOmegaSeries : turnBreakdown) : turnNormal
-  );
+  const turnSeries = $derived(settings.showBreakdown ? turnBreakdown : turnNormal);
 
   const pidLegend = $derived([
     { label: 'P', color: PID_TERM.p },
     { label: 'I', color: PID_TERM.i },
     { label: 'D', color: PID_TERM.d }
   ]);
-  const lyLegend = $derived([
-    { label: 'P', color: COLORS.lyP },
-    { label: 'Lyap', color: COLORS.lyLat }
-  ]);
-
   const driveActive = $derived(driveNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
   const turnActive = $derived(turnNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
 </script>
@@ -362,11 +333,7 @@
           </div>
         </section>
       {:else}
-        {#if lyActive}
-          <LyapunovReadout />
-        {:else}
-          <PidReadout />
-        {/if}
+        <PidReadout />
 
         <GraphPanel
           title="Drive PID"
@@ -385,7 +352,7 @@
           accent="#e8e8e8"
           active={turnActive}
           series={turnSeries}
-          legend={settings.showBreakdown ? (lyActive ? lyLegend : pidLegend) : []}
+          legend={settings.showBreakdown ? pidLegend : []}
           {tStart}
           {tEnd}
           playheadT={traceState.time}

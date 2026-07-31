@@ -36,18 +36,21 @@ export interface StructFieldSpec {
   doc: string;
 }
 
+// -1 is the OFF sentinel on every field of both structs. Settle is now speed-based:
+// it needs the chassis to be slowing down AND inside settleGate AND under the speed
+// threshold `v` — it is no longer a PID-derivative test.
 export const LATERAL_EC: StructFieldSpec[] = [
-  { name: 'tOut', kind: 'number', def: 5000, doc: 'timeout ms · 0 = off' },
-  { name: 'setR', kind: 'number', def: 10, doc: 'settle activation radius, in · 0 = settle off' },
-  { name: 'setD', kind: 'number', def: 2, doc: 'settle: exit once |D| < setD inside setR (bigger = looser)' },
-  { name: 'crossD', kind: 'number', def: -1, doc: 'cross: slide the ⊥ line this many in TOWARD us to fire early · 0 = line on the target · negative = off' }
+  { name: 't', kind: 'number', def: 5000, doc: 'timeout ms · -1 = off' },
+  { name: 'v', kind: 'number', def: 10, doc: 'settle speed threshold, in/s — exit once the chassis is slowing AND |v| is under this, inside settleGate · -1 = off' },
+  { name: 'd', kind: 'number', def: -1, doc: 'cross: slide the ⊥ line this many in TOWARD us to fire early · 0 = line on the target · -1 = off. On drive() there is no point target, so this acts as a plain remaining-distance tolerance instead.' },
+  { name: 'settleGate', kind: 'number', def: 12, doc: 'settle activation radius, in — settle only counts inside this' }
 ];
 
 export const TURN_EC: StructFieldSpec[] = [
-  { name: 'tOut', kind: 'number', def: 5000, doc: 'timeout ms · 0 = off' },
-  { name: 'setR', kind: 'number', def: 10, doc: 'settle activation angle, deg · 0 = settle off' },
-  { name: 'setD', kind: 'number', def: 2, doc: 'settle: exit once |D| < setD inside setR (bigger = looser)' },
-  { name: 'extA', kind: 'number', def: 0, doc: 'ungated exit angle from target, deg — fires mid-turn, no settle gate · 0 = off' }
+  { name: 't', kind: 'number', def: 5000, doc: 'timeout ms · -1 = off' },
+  { name: 'v', kind: 'number', def: 10, doc: 'settle angular-speed threshold, rad/s — exit once |ω| is falling AND under this, inside settleGate · -1 = off' },
+  { name: 'd', kind: 'number', def: -1, doc: 'ungated exit angle from target, deg — fires mid-turn, no settle gate · -1 = off' },
+  { name: 'settleGate', kind: 'number', def: 20, doc: 'settle activation angle, deg — settle only counts inside this' }
 ];
 
 export const BLEND: StructFieldSpec[] = [
@@ -88,7 +91,7 @@ export const TOTAL_FIELDS: StructFieldSpec[] = [
 
 // Docs for bare global assignments.
 export const GLOBAL_ASSIGNS: Record<string, string> = {
-  backward: 'Global drive direction: every point/pose movement (facePoint, swings-to-point, moveTo, lyPose, boomerangTo) runs backward while true. Starts FALSE; nothing resets it — flip it yourself.'
+  backward: 'Global drive direction: every point/pose movement (facePoint, swings-to-point, moveTo, boomerangTo) runs backward while true. Starts FALSE; nothing resets it — flip it yourself. Absolute-heading movements (face, swings-to-heading) and drive() ignore it — drive() takes its direction from the sign of distance.'
 };
 
 export const STRUCT_FIELDS: Record<string, StructFieldSpec[]> = {
@@ -160,22 +163,12 @@ export const FUNCTIONS: FnSpec[] = [
     ]
   },
   {
-    name: 'driveForward',
-    doc: 'Drive a distance while holding a heading.',
+    name: 'drive',
+    doc: 'Relative straight drive along a held heading. distance is SIGNED — negative backs up. The one movement that ignores the global backward.',
     params: [
-      { name: 'distance', kind: 'number', doc: 'inches' },
+      { name: 'distance', kind: 'number', doc: 'inches · negative = reverse' },
+      { name: 'heading', kind: 'headingDefault', def: 'chassis.h', doc: 'held heading (nose, either direction) · default = heading at call' },
       ecL,
-      { name: 'heading', kind: 'headingDefault', def: 'chassis.h', doc: 'held heading · default = heading at call' },
-      bs
-    ]
-  },
-  {
-    name: 'driveBackward',
-    doc: 'Reverse a distance while holding a heading.',
-    params: [
-      { name: 'distance', kind: 'number', doc: 'inches' },
-      ecL,
-      { name: 'heading', kind: 'headingDefault', def: 'chassis.h', doc: 'held heading · default = heading at call' },
       bs
     ]
   },
@@ -187,16 +180,6 @@ export const FUNCTIONS: FnSpec[] = [
       { name: 'y', kind: 'number', doc: 'target y, in' },
       ecL,
       bs
-    ]
-  },
-  {
-    name: 'lyPose',
-    doc: 'Path-follow Lyapunov drive: rides the fixed line through (x, y). Honors the global backward.',
-    params: [
-      { name: 'x', kind: 'number', doc: 'target x, in' },
-      { name: 'y', kind: 'number', doc: 'target y, in' },
-      ecL,
-      { name: 'heading', kind: 'headingDefault', def: 'NAN', doc: 'line heading · NAN = freeze bot→target at start' }
     ]
   },
   {

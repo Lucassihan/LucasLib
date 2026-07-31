@@ -2,14 +2,13 @@
 
 #include "blendSettings.h"
 
-#include <cmath>   // NAN (used by lyPose's default heading arg in movement.h)
+#include <cmath>
 
 // =========================================================================
 // movementUtils — shared machinery the movements are built on.
-// Global motion state, the output pipeline (blend → slew → govern), the
-// heading-error resolvers, and the Lyapunov control law. The user-facing
-// movements in movement.cpp call into all of this; these are not movements
-// themselves.
+// Global motion state, the output pipeline (blend → slew → govern), and the
+// heading-error resolvers. The user-facing movements in movement.cpp call
+// into all of this; these are not movements themselves.
 // =========================================================================
 
 // -------- Shared motion state (exposed for debugging / logging) --------
@@ -31,15 +30,20 @@ extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
+// Previous tick's chassis velocities, held for the exit conditions' settle test
+// ("am I slower than I was?"). clearAllValues() zeroes them, so every movement
+// starts from 0 and settle needs two real samples before it can fire — that is
+// what stops a hot handoff, where the robot is already decelerating into the
+// next movement, from settling on its very first tick.
+extern double lastV;
+extern double lastω;
+
 // Global drive direction. Every point/pose movement (facePoint-to-point, swing-
-// to-point, moveTo, lyPose, boomerangTo) runs backward while this is true. It is
+// to-point, moveTo, boomerangTo) runs backward while this is true. It is
 // a persistent mode, NOT a per-move argument: it initializes to false and NO
 // movement ever resets it — clearAllValues() leaves it alone. Flip it yourself to
 // change direction; it stays flipped until you flip it back.
 extern bool   backward;
-
-// -------- Lyapunov control gain (user-tunable) --------
-extern double kLat;
 
 // -------- Reset: zeroes all motion state + clears every PID --------
 void clearAllValues();
@@ -54,14 +58,6 @@ void governOutputs();
 double resolveTurnDirection(double wrapped, double positive, double negative, int& direction);
 double resolveHeadingTarget(double heading, bool backward, int& direction);
 
-// -------- Lyapunov control law (path-follow) --------
-double sinc(double x);
-// Tracks the FIXED line through (tx, ty) at pathHeading (deg, 0=+Y, CW+):
-// e_x = signed along-line distance to the target, e_y = signed perpendicular
-// offset from the line, e_theta = robot heading − path heading. Writes
-// leftOut/rightOut (+ telemetry). Called every loop by lyPose.
-void lyapunovCalculate(double tx, double ty, bool backward, double pathHeading);
-
 // -------- Boomerang lead-point math --------
 struct BoomParams {
     double x          = 0;
@@ -74,3 +70,6 @@ struct BoomParams {
 
 double getBoomLeadX(BoomParams bp, bool backward = false);
 double getBoomLeadY(BoomParams bp, bool backward = false);
+
+//Lil perp line cross function for u to use
+bool crossed(double x, double y, double crossD);

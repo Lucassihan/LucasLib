@@ -110,8 +110,6 @@ function parseHeader(headerLines: string[]): TraceHeader {
     batteryVolts: Number(kv['battery_volts'] ?? 0),
     trackwidth: Number(kv['trackwidth'] ?? 0),
     headingDisableDist: Number(kv['headingDisableDist'] ?? 6),
-    useLyapunov: kv['useLyapunov'] === '1',
-    kLat: Number(kv['kLat'] ?? 0),
     govern: {
       total: gov('total', 12),
       drive: gov('drive', 12),
@@ -205,8 +203,6 @@ function parseTicks(rows: Row[]): Tick[] {
     ghostY: num(r, 'ghostY'),
     arcRadius: num(r, 'arcRadius'),
     maxSlip: num(r, 'maxSlip'),
-    ex: num(r, 'ex'),
-    ey: num(r, 'ey'),
     driveI: num(r, 'driveI'),
     driveD: num(r, 'driveD'),
     turnI: num(r, 'turnI'),

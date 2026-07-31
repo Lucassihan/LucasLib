@@ -25,11 +25,11 @@
     sandbox.selected !== null ? route.sim.segments.find((s) => s.stmtIndex === sandbox.selected) ?? null : null
   );
 
-  // per-movement heading-correction effort for the selected moveTo / driveF/B
+  // per-movement heading-correction effort for the selected moveTo / drive
   const effortKind = $derived.by(() => {
     if (!selSeg) return null;
     if (selSeg.fn === 'moveTo') return 'moveTo' as const;
-    if (selSeg.fn === 'driveForward' || selSeg.fn === 'driveBackward') return 'drive' as const;
+    if (selSeg.fn === 'drive') return 'drive' as const;
     return null;
   });
   const effortDefault = $derived(
@@ -175,42 +175,48 @@
         {/if}
       </div>
     {:else}
-      <div class="note">Click a moveTo / driveForward / driveBackward on the field to tune how fast IT corrects heading. Defaults below apply to untuned movements.</div>
+      <div class="note">Click a moveTo / drive on the field to tune how fast IT corrects heading. Defaults below apply to untuned movements.</div>
     {/if}
 
     <SliderRow label="moveTo default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.moveToHeadingEffort} onchange={(v) => (sandbox.knobs.moveToHeadingEffort = v)} />
-    <SliderRow label="driveF/B default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.driveHeadingEffort} onchange={(v) => (sandbox.knobs.driveHeadingEffort = v)} />
+    <SliderRow label="drive() default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.driveHeadingEffort} onchange={(v) => (sandbox.knobs.driveHeadingEffort = v)} />
   </section>
 
   <section class="panel group">
     <div class="gtitle">Library globals <span class="gsub">real tunables, set outside calls</span></div>
 
     <SliderRow label="headingDisableDist" min={0} max={12} step={0.25} unit="in" value={sandbox.knobs.headingDisableDist} onchange={(v) => (sandbox.knobs.headingDisableDist = v)} />
-    <SliderRow label="kLat (lyPose)" min={0} max={0.6} step={0.01} decimals={2} value={sandbox.knobs.kLat} onchange={(v) => (sandbox.knobs.kLat = v)} />
-    <SliderRow label="lyPose turn-off dist" min={0} max={8} step={0.25} unit="in" value={sandbox.knobs.lyPoseTurnDisableLength} onchange={(v) => (sandbox.knobs.lyPoseTurnDisableLength = v)} />
   </section>
 
   <section class="panel group">
     <div class="gtitle">Default exit conditions <span class="gsub">for ec fields you leave out</span></div>
 
     <div class="subhdr">Lateral <span class="mono2">LateralExitConditions</span></div>
-    <SliderRow label="tOut" slider={false} min={0} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecLatTOut} onchange={(v) => (sandbox.knobs.ecLatTOut = v)} />
-    <SliderRow label="setR" slider={false} min={0} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatSetR} onchange={(v) => (sandbox.knobs.ecLatSetR = v)} />
-    <SliderRow label="setD" slider={false} min={0} max={100} step={0.001} decimals={3} unit="in/ms" value={sandbox.knobs.ecLatSetD} onchange={(v) => (sandbox.knobs.ecLatSetD = v)} />
-    <SliderRow label="crossD" slider={false} min={-1} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatCrossD} onchange={(v) => (sandbox.knobs.ecLatCrossD = v)} />
+    <SliderRow label="t" slider={false} min={-1} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecLatT} onchange={(v) => (sandbox.knobs.ecLatT = v)} />
+    <SliderRow label="v" slider={false} min={-1} max={80} step={0.1} decimals={2} unit="in/s" value={sandbox.knobs.ecLatV} onchange={(v) => (sandbox.knobs.ecLatV = v)} />
+    <SliderRow label="d" slider={false} min={-1} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatD} onchange={(v) => (sandbox.knobs.ecLatD = v)} />
+    <SliderRow label="settleGate" slider={false} min={0} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatGate} onchange={(v) => (sandbox.knobs.ecLatGate = v)} />
 
     <div class="subhdr">Turn <span class="mono2">TurnExitConditions</span></div>
-    <SliderRow label="tOut" slider={false} min={0} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecTurnTOut} onchange={(v) => (sandbox.knobs.ecTurnTOut = v)} />
-    <SliderRow label="setR" slider={false} min={0} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnSetR} onchange={(v) => (sandbox.knobs.ecTurnSetR = v)} />
-    <SliderRow label="setD" slider={false} min={0} max={100} step={0.005} decimals={3} unit="°/ms" value={sandbox.knobs.ecTurnSetD} onchange={(v) => (sandbox.knobs.ecTurnSetD = v)} />
-    <SliderRow label="extA" slider={false} min={0} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnExtA} onchange={(v) => (sandbox.knobs.ecTurnExtA = v)} />
+    <SliderRow label="t" slider={false} min={-1} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecTurnT} onchange={(v) => (sandbox.knobs.ecTurnT = v)} />
+    <SliderRow label="v" slider={false} min={-1} max={20} step={0.05} decimals={2} unit="rad/s" value={sandbox.knobs.ecTurnV} onchange={(v) => (sandbox.knobs.ecTurnV = v)} />
+    <SliderRow label="d" slider={false} min={-1} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnD} onchange={(v) => (sandbox.knobs.ecTurnD = v)} />
+    <SliderRow label="settleGate" slider={false} min={0} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnGate} onchange={(v) => (sandbox.knobs.ecTurnGate = v)} />
     <div class="note">
-      setR = 0 turns settle off on either channel. crossD below 0 turns cross off (0 = the line sits on the target, higher
-      slides it toward the robot to fire early); extA = 0 turns the ungated angle exit off.
+      <b>-1 turns a field off</b> on both channels. <span class="mono2">d</span> is the cross line on point movements
+      (0 = the line sits on the target, higher slides it toward the robot to fire early) and the ungated angle exit on
+      turns. On <span class="mono2">drive()</span> there is no point target, so <span class="mono2">d</span> falls back
+      to a plain remaining-distance tolerance.
       <br /><br />
-      setD is Δerror per <em>millisecond</em>, so it saturates at the robot's own top speed — here
-      <b>{fmt(motion.topLinear / 1000, 3)} in/ms</b> and <b>{fmt(motion.topAngular / 1000, 3)} °/ms</b>. Above that it can
-      never fail and settle collapses to "within setR", which is why the lib's default of 2 does nothing.
+      Settle is a <b>speed</b> test now, not a PID D term: it needs the chassis to be slowing down, the error inside
+      <span class="mono2">settleGate</span>, and the speed under <span class="mono2">v</span>. It can never fire on a
+      movement's first tick, so a hot handoff can't settle instantly. Top speed here is
+      <b>{fmt(motion.topLinear, 1)} in/s</b> and <b>{fmt(motion.topAngular * (Math.PI / 180), 2)} rad/s</b> — a
+      <span class="mono2">v</span> above those can never fail, collapsing settle to "slowing down inside settleGate".
+      <br /><br />
+      Turn <span class="mono2">v</span> is in <b>rad/s</b> while <span class="mono2">settleGate</span> is in degrees —
+      that mismatch is the library's, mirrored here on purpose (checkTurnExit compares chassis.ω, which updateVelocity
+      computes in radians).
       <br /><br />
       A value written in the code overrides its default here. Click any number to type it.
     </div>

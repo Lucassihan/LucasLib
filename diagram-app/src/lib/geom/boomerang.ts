@@ -58,62 +58,114 @@ export function simulateBoomerang(start: Pose, target: Pose, opts: BoomOpts): Bo
   const leadSign = opts.backward ? 1 : -1;
   const fT = { x: Math.sin(target.heading * D2R), y: Math.cos(target.heading * D2R) };
   const dir = { x: leadSign * fT.x, y: leadSign * fT.y };
-  const initCarrot = { x: target.x + dir.x * lead * d0, y: target.y + dir.y * lead * d0 };
+  const initialLeadDist = lead * d0;
+  const initCarrot = {
+    x: target.x + dir.x * initialLeadDist,
+    y: target.y + dir.y * initialLeadDist
+  };
 
-  const ghostSwitch = Math.max(6, 0.14 * d0);
-  const endThresh = 2.5;
+  // Stage-switch radii, straight from boomerangTo: ghost→carrot at
+  // 6·(maxOutput/12 V) — 6 in at the full 12 V scale a diagram assumes — and
+  // carrot→target once the (by then fully retracted) carrot is within 0.7 in.
+  const ghostSwitch = 6;
+  const carrotSwitch = 0.7;
+  // Distance inside which drivePID (kP 0.5) stops saturating its 12 V ceiling.
+  const slowRadius = 24;
+
+  // Retraction is driven by the robot→CARROT distance, not the robot→target
+  // distance: closing on the carrot is what pulls the carrot (and with it the
+  // ghost) down onto the target. Normalising by the target distance instead
+  // lets `s` stall whenever the robot is not closing on the target itself.
+  const initCarrotDist = Math.hypot(initCarrot.x - start.x, initCarrot.y - start.y) || 1e-6;
+  let minCarrotDist = initCarrotDist;
+  let carrot = { x: initCarrot.x, y: initCarrot.y };
+
+  // Sticky stage latches: FAR → MID → END, one-way (never fall back to an aim
+  // point the robot has already passed).
+  let closeGhost = false;
+  let closeEnd = false;
 
   const samples: BoomSample[] = [];
   let px = start.x;
   let py = start.y;
   let travelH = start.heading; // heading of MOTION
-  let prevS = 1;
-  let prevDist = Infinity;
+  let minEnd = Infinity;
 
-  const cap = Math.ceil((d0 / stepLen) * 4) + 40;
+  const cap = Math.ceil(((d0 + initialLeadDist) / stepLen) * 12) + 400;
   for (let i = 0; i < cap; i++) {
-    const distEnd = Math.hypot(target.x - px, target.y - py);
-    const s = Math.min(prevS, distEnd / d0);
-    prevS = s;
+    // --- Retract the carrot (monotonic-min of the robot→carrot distance) ---
+    const curCarrotDist = Math.hypot(carrot.x - px, carrot.y - py);
+    if (curCarrotDist < minCarrotDist) minCarrotDist = curCarrotDist;
+    const s = minCarrotDist / initCarrotDist;
+    carrot = { x: target.x + dir.x * s * initialLeadDist, y: target.y + dir.y * s * initialLeadDist };
 
-    const carrot = { x: target.x + dir.x * s * lead * d0, y: target.y + dir.y * s * lead * d0 };
+    // --- Ghost trails behind the carrot toward the original carrot by gLead ---
     const ghost = {
       x: initCarrot.x + (carrot.x - initCarrot.x) * (1 - gLead),
       y: initCarrot.y + (carrot.y - initCarrot.y) * (1 - gLead)
     };
 
-    // Three-stage aim: FAR→ghost, MID→carrot, NEAR→target.
-    let aim = ghost;
+    const distEnd = Math.hypot(target.x - px, target.y - py);
+    const distCarrot = Math.hypot(carrot.x - px, carrot.y - py);
     const distGhost = Math.hypot(ghost.x - px, ghost.y - py);
-    if (distEnd < endThresh) aim = target;
-    else if (distGhost < ghostSwitch) aim = carrot;
+
+    // Three-stage aim: FAR→ghost, MID→carrot, END→target.
+    let aim: { x: number; y: number };
+    if (distCarrot < carrotSwitch || closeEnd) {
+      closeEnd = true;
+      aim = target;
+    } else if (distGhost < ghostSwitch || closeGhost) {
+      closeGhost = true;
+      aim = carrot;
+    } else {
+      aim = ghost;
+    }
 
     const facing = opts.backward ? travelH + 180 : travelH;
-    samples.push({ x: px, y: py, heading: facing, carrot, ghost, s });
+    samples.push({ x: px, y: py, heading: facing, carrot: { ...carrot }, ghost, s });
 
-    // Converged, or past the closest approach (distance now growing) in the
-    // second half of the move — stop here so the sim never orbits the target
-    // when the turn-rate cap makes a tight capture impossible.
-    if (distEnd < 1.2) break;
-    if (distEnd < 0.5 * d0 && distEnd > prevDist + 0.05) break;
-    prevDist = distEnd;
+    // Drive distance drives SPEED, exactly as boomerangTo picks its lateralError.
+    const driveDist = closeEnd || distEnd > distCarrot ? distEnd : distCarrot;
+
+    // A tick's travel shrinks with drive power, so the reachable turn radius
+    // (travel / maxTurn) tightens as the robot slows — which is the only reason
+    // a real chassis can capture a target the full-speed radius would orbit.
+    // drivePID is kP 0.5 against a 12 V ceiling, so power ramps down linearly
+    // inside 24 in; the floor keeps the step count finite.
+    const step = stepLen * Math.min(1, Math.max(0.05, driveDist / slowRadius));
+
+    // Pursuit ends at the closest approach: a step from the target, or the tick
+    // the robot starts receding inside the 0.7 in where boomerangTo stops
+    // steering at the point and hands off to its settle brake. Ending on the
+    // approach (rather than on a fixed radius) keeps the tail tangent — cutting
+    // out at a fixed 0.7 in leaves the robot crossing, and the arrival sample
+    // then hooks sideways to reach the target.
+    if (distEnd <= step) break;
+    if (distEnd < carrotSwitch && distEnd > minEnd) break;
+    minEnd = Math.min(minEnd, distEnd);
 
     // Steer motion toward the aim point, rate-limited for a smooth arc.
     const desired = Math.atan2(aim.x - px, aim.y - py) * R2D;
     travelH += Math.max(-maxTurn, Math.min(maxTurn, wrap(desired - travelH)));
-    px += Math.sin(travelH * D2R) * stepLen;
-    py += Math.cos(travelH * D2R) * stepLen;
+    px += Math.sin(travelH * D2R) * step;
+    py += Math.cos(travelH * D2R) * step;
   }
 
-  // Clean arrival exactly on target at the arrival facing.
-  samples.push({
-    x: target.x,
-    y: target.y,
-    heading: target.heading,
-    carrot: { x: target.x, y: target.y },
-    ghost: { x: target.x, y: target.y },
-    s: 0
-  });
+  // Clean arrival exactly on target at the arrival facing — but only when the
+  // remaining gap is too small to draw as a chord. When the turn-rate cap makes
+  // a tight capture impossible the robot really does pass beside the target,
+  // and bridging that gap would draw a hook the controller never produces.
+  const last = samples[samples.length - 1];
+  if (Math.hypot(target.x - last.x, target.y - last.y) <= 0.15) {
+    samples.push({
+      x: target.x,
+      y: target.y,
+      heading: target.heading,
+      carrot: { x: target.x, y: target.y },
+      ghost: { x: target.x, y: target.y },
+      s: 0
+    });
+  }
 
   const cumLen: number[] = [0];
   let total = 0;

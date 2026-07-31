@@ -18,8 +18,6 @@ export interface TraceHeader {
   batteryVolts: number; // battery volts at start; 0 = not in this trace
   trackwidth: number;
   headingDisableDist: number;
-  useLyapunov: boolean;
-  kLat: number;
   govern: {
     total: GovernConfig;
     drive: GovernConfig;
@@ -34,11 +32,9 @@ export type MovementType =
   | 'swingOnRight'
   | 'swingOnLeftToPoint'
   | 'swingOnRightToPoint'
-  | 'driveForward'
-  | 'driveBackward'
+  | 'drive'
   | 'moveTo'
   | 'boomerangTo'
-  | 'lyPose'
   | 'voldrive';
 
 export interface Movement {
@@ -55,29 +51,33 @@ export interface Movement {
   n: number;
   gLead: number; // ghost lead [0,1]
   leadChasePowerLimit: number; // centripetal slip cap grip constant; <=0 disabled
-  pathHeading: number; // lyPose: fixed line heading (deg) the robot rides
-  turnDisableLength: number; // lyPose: within this dist (in) the turn is disabled
+  pathHeading: number; // unused since lyPose was removed; kept so old traces still parse
+  turnDisableLength: number; // unused since lyPose was removed; kept so old traces still parse
   leftVolts: number; // voldrive: commanded left-side volts (open loop)
   rightVolts: number; // voldrive: commanded right-side volts (open loop)
   heading: number;
   cosineScaling: boolean;
   turnPriority: number;
   exitTimeout: number;
-  // settleD: settle is derivative-magnitude based — once inside exitDist, the move
-  // waits until |D term| < settleD before exiting. It is a THRESHOLD, not a switch:
-  // 0 makes settle unreachable (exitDist = 0 is the off switch). Units are Δerror
-  // per MILLISECOND, so the lib's default of 2 never binds at V5 speeds.
+  // NOTE: these five keep their original column names so old traces still parse,
+  // but three of them carry a different quantity since the EC overhaul. -1 is the
+  // off sentinel on all of them now (it used to be 0, or negative for the cross).
+  //
+  // settleD: carries ec.v — the settle SPEED threshold. Settle now needs the chassis
+  // to be slowing down AND inside exitDist AND under this speed. in/s on a lateral,
+  // rad/s on a turn. It is NOT the PID D term it used to be.
   settleD: number;
-  // exitDist: the SETTLE activation zone (ec.setR) on BOTH channels — inches on a
-  // lateral, DEGREES on a turn. 0 = settle off.
+  // exitDist: carries ec.settleGate — the SETTLE activation zone on BOTH channels,
+  // inches on a lateral, DEGREES on a turn.
   exitDist: number;
-  // exitPerpLine: the CROSS offset (ec.crossD), in. The line is infinite, runs ⊥ to
-  // the robot's heading through the target, and fires on which SIDE of it we're on —
-  // crossD slides it that many inches back toward the robot to fire early. 0 = the
-  // line sits on the target; NEGATIVE = cross is off (so test >= 0, not > 0).
+  // exitPerpLine: carries ec.d on a lateral. The line is infinite, runs ⊥ to the
+  // robot's heading through the target, and fires on which SIDE of it we're on — d
+  // slides it that many inches back toward the robot to fire early. 0 = the line sits
+  // on the target. drive() has no point target, so cross is skipped there entirely
+  // and d acts as a plain remaining-distance tolerance instead.
   exitPerpLine: number;
-  // exitAng: turns only — the ANGLE exit (ec.extA), deg. Independent of settle and
-  // ungated, so it fires mid-rotation as soon as |error| <= extA. 0 = off.
+  // exitAng: turns only — carries ec.d, the ungated ANGLE exit in deg. Fires
+  // mid-rotation as soon as |error| <= d, without waiting for the robot to slow.
   exitAng: number;
   exitReason: string;
   startTime: number;
@@ -122,8 +122,6 @@ export interface Tick {
   ghostY: number;
   arcRadius: number; // travelArcRadius() — instantaneous turn radius (in)
   maxSlip: number; // slip cap √(leadChasePowerLimit·|r|); 0 = inactive
-  ex: number;
-  ey: number;
   driveI: number; // drive channel integral (∫ lateral error)
   driveD: number; // drive channel derivative
   turnI: number; // turn/heading channel integral

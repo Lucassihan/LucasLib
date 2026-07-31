@@ -938,12 +938,19 @@ export function exportCpp(): string {
   const rows = plan.points.map((pt) => `    {${fmt(pt.x)}, ${fmt(pt.y)}, ${fmt(pt.v)}},`).join('\n');
   const dur = planDuration(plan.points).toFixed(1);
 
+  // followPath()/PathPoint went away with pure pursuit, and RAMSETE's
+  // followTrajectory() isn't in the library yet \u2014 so emit the baked data with a
+  // local struct (compiles as-is) instead of a call to something that no longer
+  // exists. Point this at followTrajectory once that lands.
   return `// ${plan.points.length} points \u00b7 ${plan.total.toFixed(1)}" \u00b7 ~${dur}s \u00b7 baked by the Trajectory Generator
-static const std::vector<PathPoint> ${name} = {
+//
+// NOTE: pure pursuit was removed from LucasLib, so followPath() and PathPoint are
+// gone, and followTrajectory() does not exist yet. This is the baked data only \u2014
+// wire it into a consumer once RAMSETE lands.
+struct TrajPoint { double x, y, v; };
+static const std::vector<TrajPoint> ${name} = {
 ${rows}
-};
-
-followPath(${name});`;
+};`;
 }
 
 function sanitize(name: string): string {

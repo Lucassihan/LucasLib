@@ -13,7 +13,7 @@
   export interface BoomOverride {
     end: { x: number; y: number };
     targetH: number;
-    /** ec.crossD — ⊥ trip-line offset back toward the robot; negative = cross off */
+    /** ec.d — ⊥ trip-line offset back toward the robot; -1 = cross off */
     perpLine: number;
     backward: boolean;
     init: { x: number; y: number };
@@ -68,7 +68,7 @@
 
     // CROSS trip plane (⊥ the approach heading). The real line is infinite; draw a
     // 24"-wide stub (faded at the ends) so it reads as local to the target rather
-    // than cutting the field in half. perpLine (= ec.crossD) slides it back toward
+    // than cutting the field in half. perpLine (= ec.d) slides it back toward
     // the robot along the direction of travel; negative means cross is off entirely.
     const arm = 12;
     const pX = Math.cos(targetH * D2R);
@@ -140,7 +140,7 @@
     <circle cx={geo.arc.cx} cy={geo.arc.cy} r={geo.arc.r} fill="none" stroke="#3b82f6" stroke-width="1" stroke-dasharray="2 3" opacity="0.3" vector-effect="non-scaling-stroke" />
   {/if}
 
-  <!-- CROSS trip plane (omitted when crossD < 0 — cross is off) -->
+  <!-- CROSS trip plane (omitted when d < 0 — cross is off) -->
   {#if geo.perpOn}
     <defs>
       <linearGradient id="boom-perp-fade" gradientUnits="userSpaceOnUse" x1={geo.pe1.sx} y1={geo.pe1.sy} x2={geo.pe2.sx} y2={geo.pe2.sy}>

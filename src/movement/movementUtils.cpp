@@ -1,8 +1,7 @@
 // movementUtils.cpp
 // Shared machinery the movements in movement.cpp are built on: global motion
 // state + reset, the output pipeline (blend → slew → govern), the heading-error
-// resolvers, and the Lyapunov control law. These are not movements themselves —
-// movement.cpp calls into them.
+// resolvers. These are not movements themselves — movement.cpp calls into them.
 
 #include "movement/movementUtils.h"
 #include "movement/movement.h"
@@ -32,6 +31,8 @@ double targetStraightDistance;
 bool close;
 bool exitConditionFulfilled;
 double initialHeading;
+double lastV;
+double lastω;
 
 // Global drive direction — persists across movements. Initializes false; no
 // movement resets it (clearAllValues deliberately leaves it untouched).
@@ -60,6 +61,8 @@ void clearAllValues() {
     targetY = 0;
     targetH = 0;
     targetStraightDistance = 0;
+    lastV = 0;
+    lastω = 0;
 
     close = false;
     exitConditionFulfilled = false;
@@ -166,97 +169,6 @@ double resolveHeadingTarget(double heading, bool backward, int& direction) {
 }
 
 // =========================================================================
-// Lyapunov control
-// =========================================================================
-
-double kLat = 0.04;
-
-double sinc(double x) { //Simple helper function for the sinc function. Uses taylor series approximation when x is small, so we don't accidentally divide by 0.
-    if (fabs(x) < 1e-3) {
-        return 1.0 - (x * x) / 6.0;
-    }
-    return sin(x) / x;
-}
-
-// Path-follow Lyapunov coupled controller. Tracks the FIXED line through
-// (tx, ty) at pathHeading, replacing the separate drivePID → headingPID →
-// blendOutputs chain. Writes drivePow, headingPow, driveOut, turnOut, leftOut,
-// rightOut, headingError, and lateralError for telemetry.
-void lyapunovCalculate(double tx, double ty, bool backward, double pathHeading) {
-    // 1. World-frame error vector from robot to target.
-    double dx = tx - chassis.x;
-    double dy = ty - chassis.y;
-
-    // 2. Reference frame = the fixed path line.
-    //    For backward: add π so "forward" in the rotated frame is physical reverse.
-    double refH = pathHeading * M_PI / 180.0;
-    if (backward) {
-        refH += M_PI;
-    }
-
-    // 3. Rotate (dx, dy) into the path frame.
-    //    e_x = signed distance to the target along the line.
-    //    e_y = signed perpendicular (lateral) offset from the line.
-    double e_x =  sin(refH) * dx + cos(refH) * dy;
-    double e_y = -cos(refH) * dx + sin(refH) * dy;
-
-    // 4. Heading error = robot_heading − path_heading, wrapped to [-π, π].
-    //    No atan2 singularity near the goal — this is what lets path-follow
-    //    settle cleanly.
-    double robotH = chassis.h * M_PI / 180.0;
-    if (backward) {
-        robotH += M_PI;
-    }
-    double e_theta = robotH - refH;
-    while (e_theta > M_PI) {
-        e_theta -= 2.0 * M_PI;
-    }
-    while (e_theta < -M_PI) {
-        e_theta += 2.0 * M_PI;
-    }
-
-    // 5. Drive power: PID on e_x (signed along-line distance). e_x flips negative
-    //    the instant the robot passes the target, so the PID backs it up — no
-    //    overshoot — and lateral error never bleeds into the forward command
-    //    (the coupling term in step 7 owns lateral recovery).
-    double v_d = drivePID.calculateOutput(e_x + drivePID.targetOffset);
-
-    // 6. Forward power (cosine-scaled, so the robot slows when badly misaligned).
-    //    For backward: negate v so "forward in the rotated frame" is physical reverse.
-    double v = fabs(cos(e_theta)) * v_d;
-    if (backward) {
-        v = -v;
-    }
-
-    // 7. Turn power (Lyapunov math convention: positive ω = CCW).
-    //    Negate to match VEX motors where positive turn = CW.
-    //    Coupling term uses cosine-scaled v, so it self-scales: v ≈ 0 when
-    //    heading error is large (coupling stays quiet, headingPID handles the big
-    //    turn), full when aligned (actively corrects lateral drift), and → 0 at
-    //    the target (no phantom spot turns).
-    double omega = lyPosePID.calculateOutput(e_theta * 180.0 / M_PI)
-                 + kLat * v * e_y * sinc(e_theta);
-    omega = -omega;
-
-    // 8. Blend to left/right.
-    leftOut  = v + omega;
-    rightOut = v - omega;
-
-    // Write telemetry globals. lateralError stays the TRUE distance to the
-    // target (not e_x), so exit conditions settle on the actual pose rather than
-    // just the right station along the line.
-    double dist = hypot(e_x, e_y);
-    lateralError = dist;
-    headingError = e_theta * 180.0 / M_PI;
-    drivePow     = v_d;
-    headingPow   = omega;
-    driveOut     = v;
-    turnOut      = omega;
-
-    debugger::probeLyapunov(e_x, e_y);  // along-line / cross-track for the overlay
-}
-
-// =========================================================================
 // Boomerang lead-point math
 // =========================================================================
 
@@ -278,4 +190,17 @@ double getBoomLeadY(BoomParams bp, bool backward) {
         leadSign = 1.0;
     }
     return bp.y + leadSign * cos(headingRad) * initialLeadDist;
+}
+
+bool crossed(double x, double y, double crossD) {
+
+    double dx = x - chassis.x;
+    double dy = y - chassis.y;
+    double hRad = chassis.h * (M_PI / 180.0);
+    double along   = dx * sin(hRad) + dy * cos(hRad);
+    double lateral = dx * cos(hRad) - dy * sin(hRad);
+
+    if (backward) along = -along;
+
+    return along <= crossD;
 }
