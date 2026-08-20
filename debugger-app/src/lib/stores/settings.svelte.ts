@@ -18,7 +18,7 @@ import { normalizeBackdropId, type FieldBackdrop } from '$lib/field/backdrops';
 // (gapFront) or 3rd (gapBack) slot left empty.
 export type SixWheelLayout = 'centered' | 'gapFront' | 'gapBack';
 
-export type AppMode = 'replay' | 'sandbox' | 'trajectory';
+export type AppMode = 'replay' | 'sandbox' | 'trajectory' | 'velocity';
 
 interface Settings {
   // which workspace the app shows: trace replay or the route-writing sandbox

@@ -3,54 +3,26 @@
 
 //Per-button state. Every controller button (no joysticks) gets one of these.
 struct ButtonState {
-    //--- Configurable ------------------------------------------------------
+    uint32_t TapTime = 250;        //ms threshold: released under it sets WasTapped, over it sets WasHeld
 
-    //ms threshold for tap vs hold classification.
-    //If a button is released with HeldFor < TapTime, WasTapped is set. Otherwise WasHeld is set.
-    uint32_t TapTime = 250;
+    bool Pressing = false;         //true while the button is currently pressed
 
-    //--- Raw state ---------------------------------------------------------
+    //--- One-cycle edge events ---
+    bool NewPress = false;         //rising edge of a press
+    bool JustReleased = false;     //falling edge of a release
+    bool WasTapped = false;        //released after less than TapTime
+    bool WasHeld = false;          //released after TapTime or more
 
-    //true while the button is currently pressed
-    bool Pressing = false;
+    uint32_t HeldFor = 0;          //ms accumulated while pressed; resets to 0 on release
+    uint32_t PressTime = 0;        //total hold duration, valid for one cycle alongside JustReleased, else 0
 
-    //--- One-cycle edge events --------------------------------------------
+    //--- Combo classification, set on the rising edge and stable until release ---
+    bool pressedFirst = false;     //this button was the FIRST of any held combination
+    bool pressedSecond = false;    //pressed while another was already held
 
-    //true for exactly one cycle on the rising edge of a press
-    bool NewPress = false;
+    bool Exhausted = false;        //set in user code to mark a press consumed; auto-resets on release
 
-    //true for exactly one cycle on the falling edge of a release
-    bool JustReleased = false;
-
-    //true for exactly one cycle on release if held < TapTime
-    bool WasTapped = false;
-
-    //true for exactly one cycle on release if held >= TapTime
-    bool WasHeld = false;
-
-    //--- Duration ---------------------------------------------------------
-
-    //ms accumulated while currently pressed; resets to 0 on release
-    uint32_t HeldFor = 0;
-
-    //snapshot of total hold duration; valid for one cycle alongside JustReleased, else 0
-    uint32_t PressTime = 0;
-
-    //--- Combo classification ---------------------------------------------
-    //Set on the press's rising edge. Stays stable until release.
-    //pressedFirst  = this button was the FIRST of any held combination
-    //pressedSecond = this button was pressed while another was already held
-
-    bool pressedFirst = false;
-    bool pressedSecond = false;
-
-    //--- User exhaustion flag ---------------------------------------------
-    //Set true in user code to mark a press's action as consumed. Auto-resets on release.
-
-    bool Exhausted = false;
-
-    //--- Internal ---------------------------------------------------------
-
+    //--- Internal ---
     const vex::controller::button* _btn = nullptr; //link to underlying VEX button
     bool _prev = false;                      //previous-cycle Pressing
 };

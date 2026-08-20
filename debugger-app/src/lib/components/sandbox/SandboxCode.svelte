@@ -2,11 +2,19 @@
   import {
     sandbox,
     getRoute,
-    resetSandboxCode,
-    saveAuton,
+    newAuton,
+    saveCurrentAuton,
+    saveAutonAs,
     loadAuton,
     deleteAuton,
-    refreshSavedAutons
+    refreshSavedAutons,
+    resetSandboxCode,
+    switchTab,
+    closeTab,
+    isTabDirty,
+    pushUndo,
+    undo,
+    redo
   } from '$lib/stores/sandbox.svelte';
   import { FN_BY_NAME, STRUCT_FIELDS, STRUCT_NAMES } from '$lib/sandbox/spec';
   import SandboxEditor from './SandboxEditor.svelte';
@@ -15,24 +23,208 @@
   const errors = $derived(route.parsed.errors);
 
   let caret = $state(0);
+  let editorRef: SandboxEditor | undefined = $state();
 
-  // --- saved autons (files in the "sandbox autons" folder) ---
-  let savedOpen = $state(false);
-  let saveName = $state('');
-  // load the folder listing once on mount, and whenever the drawer opens
+  // --- editor tabs (Feature 1) -------------------------------------------------
+  // Lucas picked tabs over a dropdown specifically because his saved files are
+  // versions of one route (sawp v1 … v4) and he flips between them — each tab
+  // holds its own buffer (sandbox.svelte.ts's TabState), so switching tabs
+  // never loses anything. Only CLOSING a dirty tab can lose work, hence the
+  // confirm in onCloseTab below; opening/newing only ever adds or focuses a
+  // tab, so neither one needs to ask first.
+  let pickerOpen = $state(false); // the repurposed drawer — open-only now, no save
+  let savingAs = $state(false);
+  let saveAsName = $state('');
+  let saveAsInput: HTMLInputElement | undefined = $state();
+
+  // load the folder listing once on mount, and again whenever the picker opens
   $effect(() => {
     refreshSavedAutons();
   });
-  function doSave() {
-    if (!saveName.trim()) return;
-    saveAuton(saveName);
-    savedOpen = true;
+
+  function togglePicker() {
+    pickerOpen = !pickerOpen;
+    if (pickerOpen) refreshSavedAutons();
+    savingAs = false;
   }
+
+  // caret is component-local (it drives the caret-tracking effect below,
+  // which re-derives sandbox.selected from wherever it points) — a stale
+  // offset left over from the PREVIOUS tab's text could coincidentally land
+  // inside some unrelated statement in the new one, so every tab-changing
+  // action here resets it to 0 alongside the store's own transient-state reset.
+  function onSwitchTab(i: number) {
+    if (i === sandbox.activeTab) return;
+    switchTab(i);
+    caret = 0;
+  }
+
+  // Destructive actions arm on the first click and fire on the second, rather
+  // than going through window.confirm(). The desktop build runs in a Tauri
+  // webview where the native dialogs are not available — confirm() there
+  // returns false, so the old code silently refused to close a dirty tab and
+  // looked broken. This also matches the two-click reset confirm the
+  // Trajectory Generator already uses, and it gives the file delete a
+  // confirmation it never had.
+  let armedClose = $state<string | null>(null); // tab id, not index — indices shift on close
+  let armedDelete = $state<string | null>(null); // file name
+  let armTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Arm one action and disarm everything else, auto-expiring so a stray click
+   *  never leaves a live trigger sitting under the cursor. */
+  function arm(which: 'close' | 'delete', key: string) {
+    armedClose = which === 'close' ? key : null;
+    armedDelete = which === 'delete' ? key : null;
+    if (armTimer) clearTimeout(armTimer);
+    armTimer = setTimeout(disarm, 3500);
+  }
+  function disarm() {
+    armedClose = null;
+    armedDelete = null;
+    if (armTimer) clearTimeout(armTimer);
+    armTimer = null;
+  }
+  $effect(() => () => {
+    if (armTimer) clearTimeout(armTimer);
+  });
+
+  function onCloseTab(i: number) {
+    const tab = sandbox.tabs[i];
+    if (!tab) return;
+    // A clean tab has nothing to lose, so it closes on the first click.
+    if (isTabDirty(i) && armedClose !== tab.id) {
+      arm('close', tab.id);
+      return;
+    }
+    disarm();
+    const wasActive = i === sandbox.activeTab;
+    closeTab(i);
+    if (wasActive) caret = 0;
+  }
+
+  function onDeleteFile(name: string) {
+    if (armedDelete !== name) {
+      arm('delete', name);
+      return;
+    }
+    disarm();
+    deleteAuton(name);
+  }
+
+  function onNewTab() {
+    newAuton();
+    caret = 0;
+    pickerOpen = false;
+  }
+
+  function onPickFile(name: string) {
+    loadAuton(name);
+    caret = 0;
+    pickerOpen = false;
+  }
+
+  function onReset() {
+    resetSandboxCode();
+    caret = 0;
+  }
+
+  /** Save — falls through to Save as when there's no file to overwrite yet
+   *  (an untitled tab). Shared by the Save button and ⌘S. */
+  async function onSave() {
+    if (!sandbox.dirty) return;
+    if (!sandbox.openAuton) {
+      beginSaveAs();
+      return;
+    }
+    await saveCurrentAuton();
+  }
+
+  function beginSaveAs() {
+    saveAsName = sandbox.openAuton ?? '';
+    savingAs = true;
+    pickerOpen = false;
+    queueMicrotask(() => {
+      saveAsInput?.focus();
+      saveAsInput?.select();
+    });
+  }
+
+  function cancelSaveAs() {
+    savingAs = false;
+  }
+
+  async function commitSaveAs() {
+    const name = saveAsName.trim();
+    if (!name) return;
+    await saveAutonAs(name);
+    savingAs = false;
+  }
+
+  // --- ⌘Z over the route text (Feature 3) --------------------------------------
+  // SandboxEditor is a controlled contenteditable that rebuilds its own DOM on
+  // every edit, which destroys the browser's native undo — this is the
+  // explicit replacement, mirroring pursuit.svelte.ts's pushHistory/undo/redo.
+
+  /** Every keystroke pushes before the value changes, coalesced under one key
+   *  so a burst of typing is one undo step rather than one per character
+   *  (sandbox.svelte.ts's pushUndo, 700ms window — same shape as pursuit). */
+  function onEditorInput(v: string) {
+    pushUndo('type');
+    sandbox.code = v;
+  }
+
+  function onUndo() {
+    if (!sandbox.tabs[sandbox.activeTab]?.undo.length) return;
+    undo();
+    // Caret placement after an external (non-typed) change to `value` is
+    // SandboxEditor's syncExternalChange — see its own doc for why this lands
+    // at end-of-text rather than the exact pre-edit offset.
+    editorRef?.syncExternalChange(sandbox.code.length);
+  }
+
+  function onRedo() {
+    if (!sandbox.tabs[sandbox.activeTab]?.redo.length) return;
+    redo();
+    editorRef?.syncExternalChange(sandbox.code.length);
+  }
+
+  // ⌘S saves, ⌘Z/⌘⇧Z/⌘Y undo/redo — bound globally rather than gated on focus
+  // like +page.svelte's playback shortcuts, because the whole point of both
+  // features is that they work WHILE typing in the code editor. The only
+  // thing that blocks them is focus sitting in a plain text <input> (the
+  // Save-as name field, the sole one in this panel) — typing a file name
+  // keeps the browser's own Cmd+Z/Cmd+S text-field behavior instead of it
+  // being hijacked into the route's history or a network request.
+  function onGlobalKeydown(e: KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    const inNameField = !!(t && t.closest('input, textarea'));
+    const key = e.key.toLowerCase();
+    if (key === 's') {
+      if (inNameField) return;
+      e.preventDefault();
+      onSave();
+    } else if (key === 'z') {
+      if (inNameField) return;
+      e.preventDefault();
+      if (e.shiftKey) onRedo();
+      else onUndo();
+    } else if (key === 'y') {
+      if (inNameField) return;
+      e.preventDefault();
+      onRedo();
+    }
+  }
+
   function fmtDate(ms: number): string {
     return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
-  // Track which statement the caret sits in → drives selection on the field.
+  // Track which statement the caret sits in → drives selection on the field
+  // (and, for a trajectory call or the pathDecl it references, which
+  // control-point handles show and whether the path panel replaces the
+  // regular params column). Clears on the way out — a caret sitting between
+  // statements, in a comment, or on a blank line selects nothing.
   $effect(() => {
     const c = caret;
     const stmts = route.parsed.stmts;
@@ -42,6 +234,7 @@
         return;
       }
     }
+    sandbox.selected = null;
   });
 
   // --- signature hint: scan text around the caret (works mid-typing) ---
@@ -117,12 +310,12 @@
       if (f.name === 't') return k.ecLatT;
       if (f.name === 'v') return k.ecLatV;
       if (f.name === 'd') return k.ecLatD;
-      if (f.name === 'settleGate') return k.ecLatGate;
+      if (f.name === 'settleWithin') return k.ecLatWithin;
     } else if (structKind === 'turnEc') {
       if (f.name === 't') return k.ecTurnT;
       if (f.name === 'v') return k.ecTurnV;
       if (f.name === 'd') return k.ecTurnD;
-      if (f.name === 'settleGate') return k.ecTurnGate;
+      if (f.name === 'settleWithin') return k.ecTurnWithin;
     }
     return f.def;
   }
@@ -136,48 +329,66 @@
   });
 </script>
 
+<svelte:window onkeydown={onGlobalKeydown} />
+
 <section class="panel codepanel">
+  <!-- tab strip (Feature 1) — active tab lifted with a gold top-edge accent,
+       an unsaved dot after the name, then ×, then +, then Save at the right
+       (disabled when the active tab is clean). -->
+  <div class="tabstrip">
+    {#each sandbox.tabs as tab, i (tab.id)}
+      <div class="tab" class:active={i === sandbox.activeTab}>
+        <button type="button" class="tab-body" onclick={() => onSwitchTab(i)} title={tab.name ?? 'Untitled'}>
+          <span class="tab-name">{tab.name ?? 'Untitled'}</span>
+          {#if isTabDirty(i)}<span class="tab-dot" aria-hidden="true"></span>{/if}
+        </button>
+        <button
+          type="button"
+          class="tab-close"
+          class:armed={armedClose === tab.id}
+          onclick={() => onCloseTab(i)}
+          title={armedClose === tab.id ? 'Click again to discard unsaved changes' : 'Close'}
+          aria-label="Close tab"
+        >{armedClose === tab.id ? 'Discard?' : '×'}</button>
+      </div>
+    {/each}
+    <button type="button" class="tab-add" class:on={pickerOpen} onclick={togglePicker} title="Open a saved auton" aria-label="Open">
+      +
+    </button>
+    <div class="tabstrip-spacer"></div>
+    <button type="button" class="tab-save" disabled={!sandbox.dirty} onclick={onSave} title="Save (⌘S)">Save</button>
+  </div>
+
   <div class="head">
     <span class="lbl">Route code</span>
     <span class="sub">LucasLib syntax · paste-ready</span>
-    <button
-      class="reset"
-      class:on={savedOpen}
-      onclick={() => {
-        savedOpen = !savedOpen;
-        if (savedOpen) refreshSavedAutons();
-      }}
-      title="Saved autons (sandbox autons folder)"
-    >
-      saved{sandbox.saved.length ? ` (${sandbox.saved.length})` : ''}
-    </button>
-    <button class="reset" onclick={resetSandboxCode} title="Replace with the starter route">reset</button>
+    <button class="reset" onclick={onReset} title="Replace the active tab's code with the starter route">reset</button>
   </div>
 
-  {#if savedOpen}
+  <!-- + opens this as an OPEN-ONLY list — no save affordance lives here any
+       more (Save/Save as are the tab strip's own Save button + the popover
+       below). -->
+  {#if pickerOpen}
     <div class="savedbar">
-      <form
-        class="saverow"
-        onsubmit={(e) => {
-          e.preventDefault();
-          doSave();
-        }}
-      >
-        <input class="savename" placeholder="save current as…" bind:value={saveName} />
-        <button class="savebtn" type="submit" disabled={!saveName.trim()}>save</button>
-      </form>
+      <button class="savedload new" onclick={onNewTab}>
+        <span class="sname">+ New untitled</span>
+      </button>
       {#if sandbox.saved.length === 0}
         <div class="saved-empty">No autons in the folder yet.</div>
       {:else}
         <div class="savedlist">
           {#each sandbox.saved as a (a.name)}
             <div class="savedrow">
-              <button class="savedload" onclick={() => loadAuton(a.name)} title="Open into the editor">
+              <button class="savedload" onclick={() => onPickFile(a.name)} title="Open into a tab (focuses it if already open)">
                 <span class="sname">{a.name}</span>
                 <span class="sdate">{fmtDate(a.savedAt)}</span>
               </button>
-              <button class="supdate" onclick={() => saveAuton(a.name)} title="Overwrite this file with the current route">↻</button>
-              <button class="sdel" onclick={() => deleteAuton(a.name)} title="Delete the file">×</button>
+              <button
+                class="sdel"
+                class:armed={armedDelete === a.name}
+                onclick={() => onDeleteFile(a.name)}
+                title={armedDelete === a.name ? 'Click again to delete this file from the folder' : 'Delete the file'}
+              >{armedDelete === a.name ? 'Delete?' : '×'}</button>
             </div>
           {/each}
         </div>
@@ -185,10 +396,27 @@
     </div>
   {/if}
 
+  <!-- Save as — the only place a name is ever typed (Feature 2). Shown for an
+       untitled tab's first Save, or explicitly via beginSaveAs. -->
+  {#if savingAs}
+    <form
+      class="saverow"
+      onsubmit={(e) => {
+        e.preventDefault();
+        commitSaveAs();
+      }}
+    >
+      <input bind:this={saveAsInput} class="savename" placeholder="save as…" bind:value={saveAsName} />
+      <button class="savebtn" type="submit" disabled={!saveAsName.trim()}>save</button>
+      <button class="savebtn cancel" type="button" onclick={cancelSaveAs}>cancel</button>
+    </form>
+  {/if}
+
   <SandboxEditor
+    bind:this={editorRef}
     value={sandbox.code}
     parsed={route.parsed}
-    oninput={(v) => (sandbox.code = v)}
+    oninput={onEditorInput}
     oncaret={(c) => (caret = c)}
     highlightLine={selLine}
   />
@@ -240,6 +468,133 @@
     padding: 12px 14px;
     gap: 8px;
   }
+
+  /* --- tab strip (Feature 1) --- */
+  .tabstrip {
+    display: flex;
+    align-items: stretch;
+    gap: 3px;
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    max-width: 160px;
+    min-width: 0;
+    background: var(--bg-base);
+    border-radius: var(--radius-small) var(--radius-small) 0 0;
+    box-shadow: var(--ring);
+    color: var(--text-ghost);
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .tab:hover {
+    color: var(--text-secondary);
+  }
+  /* active tab: lifted (panel-surface background) + a gold top-edge accent */
+  .tab.active {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow:
+      var(--ring),
+      inset 0 2px 0 0 #ecd88f;
+  }
+  .tab-body {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex: 1;
+    background: none;
+    border: none;
+    color: inherit;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 6px 2px 6px 10px;
+    cursor: pointer;
+  }
+  .tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #ecd88f;
+    flex-shrink: 0;
+  }
+  .tab-close {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-ghost);
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: color 0.15s ease;
+  }
+  .tab-close:hover {
+    color: #f87171;
+  }
+  /* armed = one more click discards. Reads as a warning rather than a glyph,
+     because the whole point is that it is no longer the same action. */
+  .tab-close.armed {
+    color: #f87171;
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: rgba(248, 113, 113, 0.14);
+  }
+  .tab-add {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-ghost);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0 9px;
+    cursor: pointer;
+    border-radius: var(--radius-small);
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .tab-add:hover,
+  .tab-add.on {
+    color: var(--text-primary);
+    background: var(--bg-base);
+  }
+  .tabstrip-spacer {
+    flex: 1;
+    min-width: 8px;
+  }
+  .tab-save {
+    flex-shrink: 0;
+    align-self: center;
+    background: var(--bg-raised);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: color 0.15s ease;
+  }
+  .tab-save:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+  .tab-save:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
   .head {
     display: flex;
     align-items: baseline;
@@ -266,13 +621,12 @@
     border-radius: var(--radius-small);
     transition: color 0.15s ease, background 0.15s ease;
   }
-  .reset:hover,
-  .reset.on {
+  .reset:hover {
     color: var(--text-primary);
     background: var(--bg-base);
   }
 
-  /* saved autos drawer */
+  /* saved-autons picker (open-only) + save-as popover */
   .savedbar {
     display: flex;
     flex-direction: column;
@@ -288,6 +642,7 @@
   .saverow {
     display: flex;
     gap: 6px;
+    flex-shrink: 0;
   }
   .savename {
     flex: 1;
@@ -326,6 +681,9 @@
     opacity: 0.4;
     cursor: default;
   }
+  .savebtn.cancel {
+    color: var(--text-ghost);
+  }
   .saved-empty {
     font-size: 9px;
     color: var(--text-ghost);
@@ -357,6 +715,11 @@
   .savedload:hover {
     background: var(--bg-surface);
   }
+  /* "+ New untitled" row — its own gold to read as a distinct action from
+     the file rows below it */
+  .savedload.new .sname {
+    color: #ecd88f;
+  }
   .sname {
     font-size: 10px;
     font-weight: 600;
@@ -373,7 +736,6 @@
     color: var(--text-ghost);
     flex-shrink: 0;
   }
-  .supdate,
   .sdel {
     background: none;
     border: none;
@@ -385,11 +747,15 @@
     border-radius: 3px;
     transition: color 0.15s ease;
   }
-  .supdate:hover {
-    color: var(--accent-text);
-  }
   .sdel:hover {
     color: #f87171;
+  }
+  .sdel.armed {
+    color: #f87171;
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 2px 6px;
+    background: rgba(248, 113, 113, 0.14);
   }
 
   .hintbox {

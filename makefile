@@ -16,6 +16,8 @@ SRC_C  = $(wildcard src/*.cpp)
 SRC_C += $(wildcard src/*.c)
 SRC_C += $(wildcard src/*/*.cpp)
 SRC_C += $(wildcard src/*/*.c)
+SRC_C += $(wildcard src/*/*/*.cpp)
+SRC_C += $(wildcard src/*/*/*.c)
 
 OBJ = $(addprefix $(BUILD)/, $(addsuffix .o, $(basename $(SRC_C))))
 
@@ -30,7 +32,7 @@ SRC_A  =
 INC_F  = include
 INC_F += include/misc
 INC_F += include/movement
-INC_F += include/mcl
+INC_F += include/ramsete
 
 # build targets
 all: $(BUILD)/$(PROJECT).bin

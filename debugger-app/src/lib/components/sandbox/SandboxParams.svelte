@@ -1,35 +1,41 @@
 <script lang="ts">
-  import { sandbox, getRoute, getTrajectory, ensureTrajectory, setTrajParam, DEFAULT_TRAJ_PARAMS } from '$lib/stores/sandbox.svelte';
+  import { sandbox, getRoute } from '$lib/stores/sandbox.svelte';
   import { deriveMotion } from '$lib/sandbox/sim';
+  import { trajectoryDuration } from '$lib/sandbox/ramsete';
   import { prettyMovement } from '$lib/trace/labels';
+  import { GAMES, MODES } from '$lib/field/backdrops';
   import SliderRow from './SliderRow.svelte';
 
   const route = $derived(getRoute());
 
-  // selected [TRAJECTORY] → its follow settings (defaults until first edited)
-  const selTraj = $derived.by(() => {
-    if (sandbox.selected === null) return null;
-    if (route.parsed.stmts[sandbox.selected]?.kind !== 'trajectory') return null;
-    const seg = route.sim.segments.find((s) => s.stmtIndex === sandbox.selected);
-    const params = getTrajectory(sandbox.selected)?.params ?? DEFAULT_TRAJ_PARAMS;
-    return { stmtIndex: sandbox.selected, seg, params };
-  });
-  function setTraj(key: 'maxVel' | 'exitVel' | 'maxAccel' | 'beta' | 'zeta', v: number) {
-    if (!selTraj?.seg) return;
-    ensureTrajectory(selTraj.stmtIndex, selTraj.seg.start);
-    setTrajParam(selTraj.stmtIndex, key, v);
-  }
   // motion limits derived from the drivetrain spec (shown as a readout)
   const motion = $derived(deriveMotion(sandbox.knobs));
   const selSeg = $derived(
     sandbox.selected !== null ? route.sim.segments.find((s) => s.stmtIndex === sandbox.selected) ?? null : null
   );
 
-  // per-movement heading-correction effort for the selected moveTo / drive
+  // trajectory's baked schedule, summarized for the Selected card —
+  // arc length is the sum of consecutive baked rows' distance, which is an
+  // honest measure since the rows themselves are arc-spaced samples of the
+  // spline (see bakeTrajectory / arcSpacedParams in ramsete.ts).
+  const trajStats = $derived.by(() => {
+    const traj = selSeg?.traj;
+    if (!traj) return null;
+    const rows = traj.rows;
+    let arc = 0;
+    let topV = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (i > 0) arc += Math.hypot(rows[i].x - rows[i - 1].x, rows[i].y - rows[i - 1].y);
+      topV = Math.max(topV, Math.abs(rows[i].v));
+    }
+    return { rows: rows.length, duration: trajectoryDuration(rows), arc, topV };
+  });
+
+  // per-movement heading-correction effort for the selected moveTo / driveForward / driveBackward
   const effortKind = $derived.by(() => {
     if (!selSeg) return null;
     if (selSeg.fn === 'moveTo') return 'moveTo' as const;
-    if (selSeg.fn === 'drive') return 'drive' as const;
+    if (selSeg.fn === 'driveForward' || selSeg.fn === 'driveBackward') return 'drive' as const;
     return null;
   });
   const effortDefault = $derived(
@@ -70,17 +76,33 @@
 </script>
 
 <div class="col">
-  {#if selTraj}
-    <section class="panel group traj-group">
-      <div class="gtitle">Trajectory <span class="gsub">follow settings for this [TRAJECTORY]</span></div>
-      <SliderRow label="max velocity" min={5} max={90} step={1} unit="in/s" value={selTraj.params.maxVel} onchange={(v) => setTraj('maxVel', v)} />
-      <SliderRow label="exit velocity" min={0} max={90} step={1} unit="in/s" value={selTraj.params.exitVel} onchange={(v) => setTraj('exitVel', v)} />
-      <SliderRow label="max acceleration" min={10} max={300} step={5} unit="in/s²" value={selTraj.params.maxAccel} onchange={(v) => setTraj('maxAccel', v)} />
-      <SliderRow label="RAMSETE β" min={0} max={10} step={0.05} decimals={2} value={selTraj.params.beta} onchange={(v) => setTraj('beta', v)} />
-      <SliderRow label="RAMSETE ζ" min={0.05} max={1} step={0.05} decimals={2} value={selTraj.params.zeta} onchange={(v) => setTraj('zeta', v)} />
-      <div class="note">Drag anchors + tangent handles on the field to shape the spline; double-click the curve to insert a point. The first end stays pinned to the robot's pose here.</div>
-    </section>
-  {/if}
+  <section class="panel group">
+    <div class="gtitle">Field <span class="gsub">saved with this auton</span></div>
+    <div class="fieldrows">
+      <button class="frow solo" class:on={sandbox.field === 'perimeter'} onclick={() => (sandbox.field = 'perimeter')}>Empty field</button>
+      {#each GAMES as g (g.key)}
+        <div class="glabel">{g.label}</div>
+        {#each MODES as mode (mode)}
+          <div class="frow">
+            <span class="fname">{mode === 'match' ? 'Match' : 'Skills'}</span>
+            <div class="fvars">
+              <button class="fvar" class:on={sandbox.field === `${g.key}-${mode}-h`} onclick={() => (sandbox.field = `${g.key}-${mode}-h`)}>
+                Highlighted
+              </button>
+              <button class="fvar" class:on={sandbox.field === `${g.key}-${mode}`} onclick={() => (sandbox.field = `${g.key}-${mode}`)}>
+                Plain
+              </button>
+            </div>
+          </div>
+        {/each}
+      {/each}
+    </div>
+    <div class="note">
+      Each auton keeps its own backdrop and saves it into the route file. Settings' field picker still drives Replay and the Trajectory
+      Generator; it doesn't apply here.
+    </div>
+  </section>
+
   <section class="panel group">
     <div class="gtitle">Drivetrain <span class="gsub">6 × 11 W V5 motors — motion is derived</span></div>
 
@@ -112,27 +134,25 @@
         </div>
       {/each}
     </div>
-    <SliderRow label="Weight" min={2} max={10} step={0.25} unit="lb" value={sandbox.knobs.robotWeight} onchange={(v) => (sandbox.knobs.robotWeight = Math.max(2, v))} />
+    <SliderRow label="Weight" min={1} max={20} step={0.25} unit="kg" value={sandbox.knobs.robotWeight} onchange={(v) => (sandbox.knobs.robotWeight = Math.max(1, v))} />
     <div class="note derived">
       → top <b>{fmt(motion.topLinear, 0)} in/s</b> · <b>{fmt(motion.topAngular, 0)}°/s</b> · accel
       <b>{fmt(motion.linAccel, 0)} in/s²</b> · <b>{fmt(motion.angAccel, 0)}°/s²</b>
     </div>
     <div class="note">
-      Base weight 2 lb. Angular numbers use the trackwidth from robot settings (width − 3 in =
-      {fmt(sandbox.knobs.trackwidth)}).
+      Base weight 1 kg; angular numbers use the trackwidth from robot settings (width − 3 in = {fmt(sandbox.knobs.trackwidth)}).
     </div>
   </section>
 
   <section class="panel group">
     <div class="gtitle">PID gains <span class="gsub">movement aggressiveness</span></div>
 
-    <SliderRow label="drive kP" min={0} max={2} step={0.005} decimals={3} unit="V/in" value={sandbox.knobs.driveKp} onchange={(v) => (sandbox.knobs.driveKp = v)} />
+    <SliderRow label="drive kP" min={0} max={10} step={0.005} decimals={3} unit="V/in" value={sandbox.knobs.driveKp} onchange={(v) => (sandbox.knobs.driveKp = v)} />
     <SliderRow label="turn kP" min={0} max={2} step={0.005} decimals={3} unit="V/°" value={sandbox.knobs.turnKp} onchange={(v) => (sandbox.knobs.turnKp = v)} />
     <SliderRow label="swing kP" min={0} max={2} step={0.005} decimals={3} unit="V/°" value={sandbox.knobs.swingKp} onchange={(v) => (sandbox.knobs.swingKp = v)} />
     <SliderRow label="heading kP" min={0} max={2} step={0.005} decimals={3} unit="V/°" value={sandbox.knobs.headingKp} onchange={(v) => (sandbox.knobs.headingKp = v)} />
     <div class="note">
-      How hard each channel pushes on its error. Turns and swings still never overshoot — the kP shapes the
-      approach under the braking limit. Heading kP scales the laterals' correction (× the per-movement effort).
+      How hard each channel pushes on its error — turns and swings never overshoot regardless, since kP only shapes the approach under the braking limit.
     </div>
   </section>
 
@@ -149,9 +169,7 @@
     <SliderRow label="Lateral momentum" min={0} max={1} step={0.01} decimals={2} capMax value={sandbox.knobs.lateralMomentum} onchange={(v) => (sandbox.knobs.lateralMomentum = v)} />
     <SliderRow label="Angular momentum" min={0} max={1} step={0.01} decimals={2} capMax value={sandbox.knobs.angularMomentum} onchange={(v) => (sandbox.knobs.angularMomentum = v)} />
     <div class="note">
-      Early-exit a turn into a moveTo and the leftover spin swings through the first split second; early-exit
-      a lateral into a facePoint and the robot keeps translating through the turn. Omni wheels barely resist
-      that slide (much more pronounced); grip wheels arc it with the robot and shed it fast.
+      How much leftover speed or spin carries into the next movement on an early exit — omni wheels carry it much farther than grip wheels.
     </div>
   </section>
 
@@ -169,17 +187,17 @@
         onchange={setSelEffort}
       />
       <div class="note">
-        Tuning the SELECTED movement only — click another movement to tune that one.
+        This tunes only the selected movement; click another to tune it instead.
         {#if sandbox.efforts[selSeg.stmtIndex] !== undefined}
           <button class="mini" onclick={clearSelEffort}>reset to default ({fmt(effortDefault, 2)})</button>
         {/if}
       </div>
     {:else}
-      <div class="note">Click a moveTo / drive on the field to tune how fast IT corrects heading. Defaults below apply to untuned movements.</div>
+      <div class="note">Click a moveTo / driveForward / driveBackward on the field to tune how fast it corrects heading; untuned movements use the defaults below.</div>
     {/if}
 
     <SliderRow label="moveTo default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.moveToHeadingEffort} onchange={(v) => (sandbox.knobs.moveToHeadingEffort = v)} />
-    <SliderRow label="drive() default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.driveHeadingEffort} onchange={(v) => (sandbox.knobs.driveHeadingEffort = v)} />
+    <SliderRow label="driveForward()/driveBackward() default" min={0} max={2} step={0.01} decimals={2} value={sandbox.knobs.driveHeadingEffort} onchange={(v) => (sandbox.knobs.driveHeadingEffort = v)} />
   </section>
 
   <section class="panel group">
@@ -189,36 +207,56 @@
   </section>
 
   <section class="panel group">
+    <div class="gtitle">RAMSETE <span class="gsub">trajectory — the law that tracks the baked schedule</span></div>
+
+    <div class="subhdr">Chassis <span class="mono2">config.cpp — setRamseteSettings()</span></div>
+    <SliderRow label="max velocity" min={5} max={150} step={1} unit="in/s" value={sandbox.knobs.rsMaxVel} onchange={(v) => (sandbox.knobs.rsMaxVel = v)} />
+    <SliderRow label="max acceleration" min={10} max={300} step={5} unit="in/s²" value={sandbox.knobs.rsMaxAccel} onchange={(v) => (sandbox.knobs.rsMaxAccel = v)} />
+    <div class="kv"><span>Trackwidth</span><span class="mono">{fmt(sandbox.knobs.trackwidth)} in <span class="mono2">— derived, not a knob</span></span></div>
+
+    <div class="subhdr">Profile bake <span class="mono2">ProfileConfig — profile.h</span></div>
+    <SliderRow label="velMargin" min={0.1} max={1} step={0.01} decimals={2} value={sandbox.knobs.rsVelMargin} onchange={(v) => (sandbox.knobs.rsVelMargin = v)} />
+    <SliderRow label="spacing" min={0.5} max={6} step={0.25} unit="in" value={sandbox.knobs.rsSpacing} onchange={(v) => (sandbox.knobs.rsSpacing = v)} />
+    <SliderRow label="endSpeed" min={0} max={90} step={1} unit="in/s" value={sandbox.knobs.rsEndSpeed} onchange={(v) => (sandbox.knobs.rsEndSpeed = v)} />
+    <div class="note">
+      <span class="mono2">ramsete.trajectory</span> no longer takes a <span class="mono2">ProfileConfig</span> argument, so these are tuned
+      here instead. Per-segment ceilings live on the segment as <span class="mono2">.maxVel</span> / <span class="mono2">.maxAccel</span>.
+    </div>
+
+    <div class="note">
+      trajectory runs the real RAMSETE law against a perfect actuator, so <span class="mono2">b</span>, <span class="mono2">ζ</span>,
+      <span class="mono2">vMinGain</span> and <span class="mono2">clockCoupling</span> come from the library's own measured constants rather than a
+      knob here.
+    </div>
+
+    <div class="subhdr">Point movement <span class="mono2">ramsete.moveTo()</span></div>
+    <SliderRow label="kLat" min={0} max={0.2} step={0.002} decimals={3} unit="1/in" value={sandbox.knobs.rsKLat} onchange={(v) => (sandbox.knobs.rsKLat = v)} />
+    <div class="note">
+      <span class="mono2">ramsete.moveTo</span> is the one thing in the module that does not use the velocity layer — it runs on
+      <span class="mono2">drivePID</span> and <span class="mono2">headingPID</span> in volts, so <b>kLat is not comparable to the law's b</b>: b
+      multiplies a speed in in/s, this multiplies a voltage. Raise it and the robot commits to the straight line to the target sooner; drop it to
+      zero and the movement is a plain point-chase with no cross-track term at all.
+    </div>
+  </section>
+
+  <section class="panel group">
     <div class="gtitle">Default exit conditions <span class="gsub">for ec fields you leave out</span></div>
 
     <div class="subhdr">Lateral <span class="mono2">LateralExitConditions</span></div>
     <SliderRow label="t" slider={false} min={-1} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecLatT} onchange={(v) => (sandbox.knobs.ecLatT = v)} />
     <SliderRow label="v" slider={false} min={-1} max={80} step={0.1} decimals={2} unit="in/s" value={sandbox.knobs.ecLatV} onchange={(v) => (sandbox.knobs.ecLatV = v)} />
     <SliderRow label="d" slider={false} min={-1} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatD} onchange={(v) => (sandbox.knobs.ecLatD = v)} />
-    <SliderRow label="settleGate" slider={false} min={0} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatGate} onchange={(v) => (sandbox.knobs.ecLatGate = v)} />
+    <SliderRow label="settleWithin" slider={false} min={0} max={144} step={0.1} decimals={2} unit="in" value={sandbox.knobs.ecLatWithin} onchange={(v) => (sandbox.knobs.ecLatWithin = v)} />
 
     <div class="subhdr">Turn <span class="mono2">TurnExitConditions</span></div>
     <SliderRow label="t" slider={false} min={-1} max={60000} step={50} decimals={0} unit="ms" value={sandbox.knobs.ecTurnT} onchange={(v) => (sandbox.knobs.ecTurnT = v)} />
     <SliderRow label="v" slider={false} min={-1} max={20} step={0.05} decimals={2} unit="rad/s" value={sandbox.knobs.ecTurnV} onchange={(v) => (sandbox.knobs.ecTurnV = v)} />
     <SliderRow label="d" slider={false} min={-1} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnD} onchange={(v) => (sandbox.knobs.ecTurnD = v)} />
-    <SliderRow label="settleGate" slider={false} min={0} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnGate} onchange={(v) => (sandbox.knobs.ecTurnGate = v)} />
+    <SliderRow label="settleWithin" slider={false} min={0} max={180} step={0.25} decimals={2} unit="°" value={sandbox.knobs.ecTurnWithin} onchange={(v) => (sandbox.knobs.ecTurnWithin = v)} />
     <div class="note">
-      <b>-1 turns a field off</b> on both channels. <span class="mono2">d</span> is the cross line on point movements
-      (0 = the line sits on the target, higher slides it toward the robot to fire early) and the ungated angle exit on
-      turns. On <span class="mono2">drive()</span> there is no point target, so <span class="mono2">d</span> falls back
-      to a plain remaining-distance tolerance.
-      <br /><br />
-      Settle is a <b>speed</b> test now, not a PID D term: it needs the chassis to be slowing down, the error inside
-      <span class="mono2">settleGate</span>, and the speed under <span class="mono2">v</span>. It can never fire on a
-      movement's first tick, so a hot handoff can't settle instantly. Top speed here is
-      <b>{fmt(motion.topLinear, 1)} in/s</b> and <b>{fmt(motion.topAngular * (Math.PI / 180), 2)} rad/s</b> — a
-      <span class="mono2">v</span> above those can never fail, collapsing settle to "slowing down inside settleGate".
-      <br /><br />
-      Turn <span class="mono2">v</span> is in <b>rad/s</b> while <span class="mono2">settleGate</span> is in degrees —
-      that mismatch is the library's, mirrored here on purpose (checkTurnExit compares chassis.ω, which updateVelocity
-      computes in radians).
-      <br /><br />
-      A value written in the code overrides its default here. Click any number to type it.
+      <b>-1 turns a field off</b> on both channels; turn <span class="mono2">v</span> is <b>rad/s</b> while
+      <span class="mono2">settleWithin</span> is degrees, matching the library's own mismatch (checkTurnExit compares
+      <span class="mono2">chassis.ω</span>, which updateVelocity computes in radians).
     </div>
   </section>
 
@@ -230,6 +268,12 @@
       <div class="kv"><span>End</span><span class="mono">({fmt(selSeg.end.x)}, {fmt(selSeg.end.y)}) · {fmt(selSeg.end.h, 0)}°</span></div>
       <div class="kv"><span>Exit</span><span class="mono">{selSeg.exit}</span></div>
       <div class="kv"><span>Direction</span><span class="mono">{selSeg.backward ? 'backward' : 'forward'}</span></div>
+      {#if trajStats}
+        <div class="kv"><span>Baked rows</span><span class="mono">{trajStats.rows}</span></div>
+        <div class="kv"><span>Schedule</span><span class="mono">{trajStats.duration.toFixed(2)} s</span></div>
+        <div class="kv"><span>Path length</span><span class="mono">{fmt(trajStats.arc)} in</span></div>
+        <div class="kv"><span>Top planned speed</span><span class="mono">{fmt(trajStats.topV)} in/s</span></div>
+      {/if}
     </section>
   {/if}
 
@@ -392,6 +436,84 @@
       var(--ring),
       inset 0 0 0 1px rgba(236, 216, 143, 0.45);
   }
+  /* per-auton field picker — same rows as Settings' own picker, restyled to
+     this panel's chip idiom (amber outline rather than Settings' solid fill) */
+  .fieldrows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .glabel {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-ghost);
+    margin: 6px 0 0 2px;
+  }
+  .frow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: var(--bg-raised);
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    padding: 4px 5px 4px 9px;
+    min-height: 30px;
+  }
+  .fname {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .frow.solo {
+    border: none;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    padding: 7px 9px;
+    transition: color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .frow.solo:hover {
+    color: var(--text-primary);
+  }
+  .frow.solo.on {
+    color: #ecd88f;
+    box-shadow:
+      var(--ring),
+      inset 0 0 0 1px rgba(236, 216, 143, 0.45);
+  }
+  .fvars {
+    display: flex;
+    gap: 4px;
+  }
+  .fvar {
+    background: var(--bg-surface);
+    border: none;
+    border-radius: var(--radius-small);
+    box-shadow: var(--ring);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .fvar:hover {
+    color: var(--text-primary);
+  }
+  .fvar.on {
+    color: #ecd88f;
+    box-shadow:
+      var(--ring),
+      inset 0 0 0 1px rgba(236, 216, 143, 0.45);
+  }
+
   .subhdr {
     font-size: 9px;
     font-weight: 700;

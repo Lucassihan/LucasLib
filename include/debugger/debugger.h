@@ -1,68 +1,74 @@
 #pragma once
 
-// =========================================================================
-// debugger — trace capture for the LucasLib Debugger app.
-//
-// Records movements + a 10ms-cadence tick stream into RAM during an auton,
-// then dumps a LUCASLIB_TRACE the app can import. Designed to be invisible:
-//   • one debugger::start()/stop() pair around the auton,
-//   • one tag line at the top of each movement (already wired in movement.cpp),
-//   • a single hook inside voltageDrive() does all the per-tick sampling.
-// Everything is a no-op until start() is called, so it costs nothing when off.
-//
-// Console hygiene: the dump prefixes every line with a marker and mutes the
-// brain/controller screen tasks for its duration, so scrambled screen text on
-// the terminal can't corrupt the trace. The app strips the marker on import.
-// =========================================================================
+// debugger — records movements and a 10ms tick stream into RAM during an auton, then dumps a LUCASLIB_TRACE for the Debugger app. No-op until start().
 
 #include "movement/exitConditions.h"
 #include "movement/movementUtils.h"   // BoomParams
+#include "ramsete/trajectory.h"       // TrajPoint
 
-class PID;  // forward decl — the debugger keeps PID internals in its own table
+#include <vector>
+
+class PID;  // the debugger keeps PID internals in its own table
 
 namespace debugger {
 
 // ---- Lifecycle: call once around the auton ----
-// start() snapshots the header (pose, battery, trackwidth, gains, governors)
-// and arms capture. stop() auto-dumps to the console (no input needed) once
-// minSecondsSinceStart have elapsed. It prints the trace SEVERAL times back to
-// back: VEXcode re-opens the USB port mid-stream so the first copy is partial,
-// but the rest stream complete and the importer keeps only the last complete
-// one. stop("trace.txt") instead writes to the microSD card (single clean copy).
 void start(const char* autonName);
-void stop(double minSecondsSinceStart = 3.0);
-void stop(const char* filename);
+// Writes to the microSD as <autonName>.txt, the name start() was given. Never
+// overwrites: an existing traj.txt pushes the new one to traj2.txt, traj3.txt…
+// With no card it falls back to dumping over the console so the run isn't lost.
+void stop();
 
-// ---- Movement tags: one line at the top of each movement ----
-// (Already placed in movement.cpp — you shouldn't need to touch these.)
+// ---- Movement tags: already placed in movement.cpp ----
 void moveTurn(const char* type, double targetHeading,
               const TurnExitConditions& ec, double partiality = 0);
 void movePointTurn(const char* type, double tx, double ty,
                    const TurnExitConditions& ec, double partiality = 0);
 void moveStraight(const char* type, double distance, double heading,
                   const LateralExitConditions& ec, bool backward);
+// cosineScaling is what this movement hands blendOutputs, not what it does with the cosine: ramsete.moveTo folds it into drivePow and blends with the stage OFF.
 void movePoint(const char* type, double tx, double ty,
-               const LateralExitConditions& ec, bool backward);
+               const LateralExitConditions& ec, bool backward,
+               bool cosineScaling = true);
 void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec);
 void moveVoltage(double left, double right);
 
-// ---- Per-tick sampling (hooked inside voltageDrive); no-op unless capturing ----
+// Overrides the open movement's exit reason with what ACTUALLY ended it.
+// The reason recorded when a movement starts is a guess read off the ARMED exit
+// conditions, so it can't name an exit those conditions don't own —
+// ramsete.trajectory normally ends on its reference clock reaching the last row,
+// which isn't an exit condition at all. `reason` must outlive the trace (a string
+// literal), the same contract the movement type has.
+void movementExit(const char* reason);
+
+// The whole baked schedule behind the current ramsete.trajectory, recorded once
+// before the follow loop and attached to the movement that is open now.
+// The per-tick refX/refY only trace the reference as far as the CLOCK got, at
+// the tick rate — so a braked clock smears the shape and an early exit truncates
+// it. The planned curve has to travel on its own to be drawn whole.
+void trajectorySchedule(const std::vector<TrajPoint>& traj);
+
+// ---- Per-tick sampling, hooked inside voltageDrive ----
 void tick();
 
-// ---- PID internals mirror (one line at the end of PID::calculateOutput) ----
-// Hands the debugger a PID instance's running integral + locked gains so nothing
-// debugger-only has to live on the PID class. Keyed by instance. No-op off-capture.
+// ---- PID internals mirror, one line at the end of PID::calculateOutput ----
+// Keyed by instance, so nothing debugger-only has to live on the PID class.
 void samplePID(const PID* pid, double integral, double kP, double kI, double kD);
 
-// ---- Overlay telemetry, published once per loop by the boomerang controller
-//      right before voltageDrive (consumed by the next tick) ----
+// ---- Overlay telemetry, published by the boomerang controller right before voltageDrive ----
+// Published by ramsete.trajectory every tick: the pose the schedule wanted.
+// The app draws it as a ghost robot and trails it into the reference path.
+void probeTrajectory();   // reads ramsete.telemetry directly — nothing to keep in sync
+
 void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY,
                     double leadRetraction, double maxSlip, int stage);
 
-// ---- Read-wall correction hook (from Odometry::readWall) ----
-// Call readWallBefore() right before the setPos() correction, then readWall()
-// right after: the debugger snapshots the pre-pose itself and pairs it with the
-// corrected pose, so no before/after locals leak into the odometry code.
+// ---- ramsete.moveTo's cross-track error ----
+// The one number in MoveToError without a trace column; recomputing it app-side as le·sin(he) is only right while drivePID.targetOffset is 0.
+void probeRamseteMove(double crossTrack);
+
+// ---- Read-wall correction hook, from Odometry::readWall ----
+// Call readWallBefore() right before the setPos() correction and readWall() right after, so no before/after locals leak into the odometry code.
 void readWallBefore();
 void readWall(int wall, int sensor);
 

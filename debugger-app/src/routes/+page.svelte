@@ -6,11 +6,14 @@
   import Timeline from '$lib/components/Timeline.svelte';
   import MovementInspector from '$lib/components/MovementInspector.svelte';
   import PidReadout from '$lib/components/PidReadout.svelte';
+  import RamseteMoveReadout from '$lib/components/RamseteMoveReadout.svelte';
+  import TrajectoryReadout from '$lib/components/TrajectoryReadout.svelte';
   import ControlPipeline from '$lib/components/ControlPipeline.svelte';
   import MotorDiagram from '$lib/components/MotorDiagram.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
   import LibraryPanel from '$lib/components/LibraryPanel.svelte';
   import SandboxParams from '$lib/components/sandbox/SandboxParams.svelte';
+  import SandboxPathPanel from '$lib/components/sandbox/SandboxPathPanel.svelte';
   import SandboxStats from '$lib/components/sandbox/SandboxStats.svelte';
   import SandboxField from '$lib/components/sandbox/SandboxField.svelte';
   import SandboxCode from '$lib/components/sandbox/SandboxCode.svelte';
@@ -18,11 +21,13 @@
   import PursuitField from '$lib/components/pursuit/PursuitField.svelte';
   import PursuitParams from '$lib/components/pursuit/PursuitParams.svelte';
   import PursuitExport from '$lib/components/pursuit/PursuitExport.svelte';
+  import VelocityPage from '$lib/components/velocity/VelocityPage.svelte';
   import { sandbox, getRoute, togglePlaySandbox } from '$lib/stores/sandbox.svelte';
   import { pursuit, deleteAnchor } from '$lib/stores/pursuit.svelte';
   import { traceState, movementAt, tickAt, togglePlay, stepTicks, jumpMovement } from '$lib/stores/trace.svelte';
   import { settings } from '$lib/stores/settings.svelte';
-  import { PID_TERM, COLORS, isVolDrive } from '$lib/trace/labels';
+  import { PID_TERM, COLORS, isVolDrive, isRamseteMove, isTrajectory } from '$lib/trace/labels';
+  import { moveToLaw } from '$lib/trace/ramseteMove';
   import type { Tick } from '$lib/trace/types';
 
   let settingsOpen = $state(false);
@@ -72,6 +77,19 @@
     }
   }
 
+  // The PARAMS tab shows the spline editor instead of the regular sliders
+  // whenever the caret's statement is a trajectory call or the
+  // std::vector<BezierSegment> it references — same selection SandboxField
+  // reads for its control-point handles, driven by SandboxCode's caret effect.
+  const sandboxRoute = $derived(getRoute());
+  const pathPanelActive = $derived.by(() => {
+    const idx = sandbox.selected;
+    if (idx === null) return false;
+    const s = sandboxRoute.parsed.stmts[idx];
+    if (!s) return false;
+    return s.kind === 'pathDecl' || (s.kind === 'call' && s.fn === 'ramsete.trajectory');
+  });
+
   let split: { side: 'left' | 'right'; startX: number; startW: number } | null = null;
   function startSplit(e: PointerEvent, side: 'left' | 'right') {
     e.preventDefault();
@@ -101,6 +119,7 @@
     if (t && t.closest('input, textarea, select, [contenteditable="true"]')) return;
     // a focused button owns Space (avoid double-toggling via the play button)
     if (e.key === ' ' && t && t.closest('button')) return;
+    if (settings.appMode === 'velocity') return; // a worksheet, not a playback surface
     if (settings.appMode === 'trajectory') {
       // planner: Delete/Backspace removes the selected anchor
       if ((e.key === 'Delete' || e.key === 'Backspace') && pursuit.selected !== null) {
@@ -177,16 +196,22 @@
   }
 
   // lateral movements steer with the HEADING pid; turns use turn/swing pid
+  const trajActive = $derived(!!active && isTrajectory(active.type));
+  const driveTitle = $derived(trajActive ? 'V controller output' : 'Drive PID');
+
   const turnTitle = $derived.by(() => {
     if (!active) return 'Heading PID';
+    if (isTrajectory(active.type)) return 'ω controller output';
     if (active.type === 'face' || active.type === 'facePoint') return 'Turn PID';
     if (active.type.startsWith('swing')) return 'Swing PID';
+    if (isRamseteMove(active.type)) return 'Lyapunov ω';
     return 'Heading PID';
   });
 
   // voldrive is open-loop: nothing changes within the call, so the right column
   // collapses to just the motor diagram (no readout / graphs / pipeline).
   const vdActive = $derived(!!active && isVolDrive(active.type));
+  const rsActive = $derived(!!active && isRamseteMove(active.type));
   const curTick = $derived(tickAt(traceState.time));
 
   // normal: single governed-output line per channel
@@ -217,14 +242,91 @@
       : []
   );
 
-  const driveSeries = $derived(settings.showBreakdown ? driveBreakdown : driveNormal);
-  const turnSeries = $derived(settings.showBreakdown ? turnBreakdown : turnNormal);
+  // ramsete.moveTo ω breakdown: headingPID's own output vs the lyapunov coupling
+  // stacked on top of it. Unlike lyPose the DRIVE channel needs no special case —
+  // its PID runs on lateralError like every other lateral movement.
+  const rsOmegaSeries = $derived(
+    active && rsActive
+      ? [
+          {
+            data: activeTicks.map((t) => ({
+              t: t.t,
+              v: moveToLaw(active, t, traceState.trace.header.kLat).propTerm
+            })),
+            color: COLORS.rsProp
+          },
+          {
+            data: activeTicks.map((t) => ({
+              t: t.t,
+              v: moveToLaw(active, t, traceState.trace.header.kLat).latTerm
+            })),
+            color: COLORS.rsLat
+          }
+        ]
+      : []
+  );
+
+  // breakdown ON: ramsete.moveTo splits ω into PID + coupling; others show P/I/D.
+  // breakdown OFF: single governed-output line for all.
+  //
+  // A trajectory is excluded from the breakdown entirely — it runs the velocity
+  // layer, not a PID, so its driveKp/Ki/Kd are all zero and every term line would
+  // be a flat zero. The legend already skipped it; the series has to as well or
+  // the panel just draws nothing.
+  const driveSeries = $derived(settings.showBreakdown && !trajActive ? driveBreakdown : driveNormal);
+  const turnSeries = $derived(
+    settings.showBreakdown && !trajActive ? (rsActive ? rsOmegaSeries : turnBreakdown) : turnNormal
+  );
 
   const pidLegend = $derived([
     { label: 'P', color: PID_TERM.p },
     { label: 'I', color: PID_TERM.i },
     { label: 'D', color: PID_TERM.d }
   ]);
+  const rsLegend = $derived([
+    { label: 'PID', color: COLORS.rsProp },
+    { label: 'kLat', color: COLORS.rsLat }
+  ]);
+  // measured chassis motion. v is in/s and ω is deg/s, so they get a panel each
+  // rather than sharing one y-axis and lying about the scale of whichever loses.
+  const vSeries = $derived([
+    { data: activeTicks.map((t) => ({ t: t.t, v: t.cmdV })), color: '#22d3ee', dashed: true },
+    { data: activeTicks.map((t) => ({ t: t.t, v: t.v })), color: '#e8e8e8' }
+  ]);
+  const wSeries = $derived([
+    { data: activeTicks.map((t) => ({ t: t.t, v: t.cmdW })), color: '#22d3ee', dashed: true },
+    { data: activeTicks.map((t) => ({ t: t.t, v: t.w })), color: '#e8e8e8' }
+  ]);
+  const chassisLegend = [
+    { label: 'cmd', color: '#22d3ee', dashed: true },
+    { label: 'meas', color: '#e8e8e8' }
+  ];
+
+  /**
+   * Symmetric range with a little headroom, rounded to something legible.
+   *
+   * The peak is taken at the 99th percentile, not the maximum: one bad sample
+   * would otherwise set the axis for the whole run and flatten every real number
+   * into the centre line. Anything above the range still draws, pinned to the
+   * edge of the plot, and hovering it reads its true value.
+   */
+  function span(data: { v: number }[], floor: number): number {
+    const mags = data.map((d) => Math.abs(d.v)).sort((a, b) => a - b);
+    const peak = mags.length ? mags[Math.floor((mags.length - 1) * 0.99)] : 0;
+    const padded = Math.max(peak * 1.15, floor);
+    const step = padded > 200 ? 50 : padded > 50 ? 20 : padded > 20 ? 10 : 5;
+    return Math.ceil(padded / step) * step;
+  }
+  // Only RAMSETE movements command a velocity, so only they have a v/ω worth
+  // reading. Everything else drives voltage straight and these would just show
+  // whatever the chassis happened to be doing.
+  const showChassis = $derived(!!active && (isTrajectory(active.type) || isRamseteMove(active.type)));
+
+  const vSpan = $derived(span([...vSeries[0].data, ...vSeries[1].data], 10));
+  const wSpan = $derived(span([...wSeries[0].data, ...wSeries[1].data], 30));
+  const vActive = $derived(vSeries[1].data.some((d) => Math.abs(d.v) > 0.5));
+  const wActive = $derived(wSeries[1].data.some((d) => Math.abs(d.v) > 1));
+
   const driveActive = $derived(driveNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
   const turnActive = $derived(turnNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
 </script>
@@ -256,6 +358,8 @@
           </div>
           {#if leftView === 'pid'}
             <SandboxStats />
+          {:else if pathPanelActive}
+            <SandboxPathPanel />
           {:else}
             <SandboxParams />
           {/if}
@@ -282,6 +386,10 @@
       <div class="sandbox-code-col" style="width: {colW.right}px">
         <SandboxCode />
       </div>
+    </div>
+  {:else if settings.appMode === 'velocity'}
+    <div class="workspace">
+      <VelocityPage />
     </div>
   {:else if settings.appMode === 'trajectory'}
     <div class="workspace">
@@ -333,15 +441,53 @@
           </div>
         </section>
       {:else}
-        <PidReadout />
+        {#if trajActive}
+          <TrajectoryReadout />
+        {:else if rsActive}
+          <RamseteMoveReadout />
+        {:else}
+          <PidReadout />
+        {/if}
 
+        {#if showChassis}
         <GraphPanel
-          title="Drive PID"
+          title="Chassis v"
+          yLabel="in/s"
+          legend={chassisLegend}
+          grow={0.85}
+          accent="#e8e8e8"
+          active={vActive}
+          series={vSeries}
+          yMin={-vSpan}
+          yMax={vSpan}
+          yTicks={[vSpan, vSpan / 2, 0, -vSpan / 2, -vSpan]}
+          {tStart}
+          {tEnd}
+          playheadT={traceState.time}
+        />
+        <GraphPanel
+          title="Chassis ω"
+          yLabel="deg/s"
+          legend={chassisLegend}
+          grow={0.85}
+          accent="#e8e8e8"
+          active={wActive}
+          series={wSeries}
+          yMin={-wSpan}
+          yMax={wSpan}
+          yTicks={[wSpan, wSpan / 2, 0, -wSpan / 2, -wSpan]}
+          {tStart}
+          {tEnd}
+          playheadT={traceState.time}
+        />
+        {/if}
+        <GraphPanel
+          title={driveTitle}
           grow={1.1}
           accent="#e8e8e8"
           active={driveActive}
           series={driveSeries}
-          legend={settings.showBreakdown ? pidLegend : []}
+          legend={settings.showBreakdown && !trajActive ? pidLegend : []}
           {tStart}
           {tEnd}
           playheadT={traceState.time}
@@ -352,7 +498,7 @@
           accent="#e8e8e8"
           active={turnActive}
           series={turnSeries}
-          legend={settings.showBreakdown ? pidLegend : []}
+          legend={settings.showBreakdown && !trajActive ? (rsActive ? rsLegend : pidLegend) : []}
           {tStart}
           {tEnd}
           playheadT={traceState.time}

@@ -89,7 +89,7 @@ static TurnTestResult runTurnTest(const TurnTuneCfg& cfg, double kD, double targ
             break;
         }
 
-        double error = chassis.wrappedHeadingError(targetH, false);
+        double error = chassis.wrappedHeadingError(targetH);
         double turnPow = turnPID.calculateOutput(error);
         voltageDrive(turnPow, -turnPow);
 
@@ -413,7 +413,7 @@ static DriveTestResult runDriveTest(const DriveTuneCfg& cfg, double kD, double d
         double error = distance - chassis.yInchesTracked;
         double driveOutput = drivePID.calculateOutput(error);
 
-        double hError = chassis.wrappedHeadingError(holdHeading, false);
+        double hError = chassis.wrappedHeadingError(holdHeading);
         double headingOutput = headingPID.calculateOutput(hError);
 
         double left = driveOutput + headingOutput;

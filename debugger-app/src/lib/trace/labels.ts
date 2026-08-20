@@ -8,14 +8,23 @@ const PRETTY: Record<string, string> = {
   swingOnRight: 'Swing Right',
   swingOnLeftToPoint: 'Swing Left to Point',
   swingOnRightToPoint: 'Swing Right to Point',
-  drive: 'Drive',
+  driveForward: 'Drive Forward',
+  driveBackward: 'Drive Backward',
   moveTo: 'Move To',
   boomerangTo: 'Boomerang',
   voldrive: 'Voltage Drive',
-  // retired — kept so archived traces still render with a readable name
-  driveForward: 'Drive Forward',
-  driveBackward: 'Drive Backward',
-  lyPose: 'lyPose'
+  'ramsete.trajectory': 'Trajectory',
+  'ramsete.moveTo': 'Ramsete Move To',
+  lyPose: 'lyPose',
+  // retired — renamed twice: executeTrajectory() → trajectory() → ramsete.trajectory().
+  // Kept so traces recorded before each rename still render with a readable name
+  // instead of the raw type.
+  trajectory: 'Trajectory',
+  executeTrajectory: 'Trajectory',
+  // retired — the lib went back to driveForward/driveBackward, so `drive` no
+  // longer parses in the sandbox. Kept only so traces recorded during the brief
+  // single-drive() era still render with a readable name instead of the raw type.
+  drive: 'Drive'
 };
 
 export function prettyMovement(type: string): string {
@@ -39,7 +48,7 @@ export function isTurn(type: string): boolean {
 // Movements whose (targetX, targetY) is where the robot is supposed to END
 // (so a field waypoint there is meaningful). Excludes facePoint / swing-to-point
 // — those take an (x, y) but only FACE it; the robot ends elsewhere.
-const ENDS_AT_TARGET = new Set(['moveTo', 'boomerangTo']);
+const ENDS_AT_TARGET = new Set(['moveTo', 'boomerangTo', 'ramsete.moveTo']);
 
 export function endsAtTarget(type: string): boolean {
   return ENDS_AT_TARGET.has(type);
@@ -50,6 +59,16 @@ export function isVolDrive(type: string): boolean {
   return type === 'voldrive';
 }
 
+/** ramsete.trajectory — the scheduled follow, which carries a reference pose. */
+export function isTrajectory(type: string): boolean {
+  return type === 'ramsete.trajectory';
+}
+
+/** ramsete.moveTo — the lyapunov point movement, steered by kLat·v·e_y·sinc. */
+export function isRamseteMove(type: string): boolean {
+  return type === 'ramsete.moveTo';
+}
+
 const MOVEMENT_COLORS: Record<string, string> = {
   face: '#ef4444',
   facePoint: '#ef4444',
@@ -57,14 +76,18 @@ const MOVEMENT_COLORS: Record<string, string> = {
   swingOnRight: '#f97316',
   swingOnLeftToPoint: '#f97316',
   swingOnRightToPoint: '#f97316',
-  drive: '#3b82f6',
+  driveForward: '#3b82f6',
+  driveBackward: '#3b82f6',
   moveTo: '#22c55e',
   boomerangTo: '#eab308',
   voldrive: '#a855f7',
-  // retired — archived traces keep their original colors
-  driveForward: '#3b82f6',
-  driveBackward: '#3b82f6',
-  lyPose: '#2dd4bf'
+  trajectory: '#06b6d4',
+  'ramsete.moveTo': '#4ade80',
+  lyPose: '#2dd4bf',
+  // retired — pre-rename traces keep the same cyan
+  executeTrajectory: '#06b6d4',
+  // retired — archived single-drive()-era traces keep the same blue
+  drive: '#3b82f6'
 };
 
 export function movementColor(type: string): string {
@@ -73,4 +96,6 @@ export function movementColor(type: string): string {
 
 export const PID_TERM = { p: '#ef4444', i: '#e8e8e8', d: '#3b82f6' };
 
-export const COLORS = { drive: '#3b82f6', turn: '#ef4444', lyP: '#fb923c', lyLat: '#2dd4bf' };
+// rsProp / rsLat split ramsete.moveTo's steering into its two halves: headingPID's
+// own output, and the lyapunov cross-track coupling stacked on top of it.
+export const COLORS = { drive: '#3b82f6', turn: '#ef4444', rsProp: '#fb923c', rsLat: '#4ade80' };

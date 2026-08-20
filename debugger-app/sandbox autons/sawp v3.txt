@@ -1,0 +1,86 @@
+//!params {"name":"sawp v3","knobs":{"wheelRpm":450,"wheelDiameter":2.75,"robotWeight":6.5,"driveKp":0.865,"turnKp":0.205,"swingKp":0.5,"headingKp":0.19,"lateralMomentum":0.56,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"trackwidth":9.5,"ecLatT":5000,"ecLatV":8,"ecLatD":-1,"ecLatWithin":4,"ecTurnT":5000,"ecTurnV":0.35,"ecTurnD":-1,"ecTurnWithin":20,"rsMaxVel":54,"rsMaxAccel":150,"rsVelMargin":0.9,"rsMaxLateralAccel":0,"rsSpacing":2},"efforts":{},"knobsVersion":7}
+chassis.setPos(-62.5,6.2,-90);
+
+//toggle
+driveForward(5);
+driveBackward(5);
+driveForward(5);
+
+
+//Score preload at goal
+backward = true;
+drivePID.targetOffset = -6;
+moveTo(-48,24);
+delay(300);
+
+//Move off goal
+backward = false;
+moveTo(-55.5,11.3);
+
+//Get wall cup
+backward = true;
+face(140);
+drivePID.targetOffset = -9;
+moveTo(-70,24, {.v = 0.5});
+drivePID.maxOutput = 3;
+driveForward(12,chassis.h,{.d = 5});
+drivePID.maxOutput = 12;
+driveForward(5);
+driveBackward(5);
+
+//Score wall cup
+backward = true;
+drivePID.targetOffset = -6;
+facePoint(-48,24);
+moveTo(-48,24);
+delay(300);
+
+
+//Take standing cup
+backward = false;
+moveTo(-60,12,{.d = 5});
+backward = true;
+face(-90);
+std::vector<BezierSegment> path1 = {
+  {.a = {-51.7, 13.9}, .b = {-42.9, 13.1}, .c = {-38.3, 14}, .d = {-30.6, 19.7}}
+};
+trajectory(path1);
+
+//Score standing cup
+std::vector<BezierSegment> path2 = {
+  {.a = {-19.9, 26.1}, .b = {-12.3, 34.3}, .c = {-7.4, 45.8}, .d = {15.4, 47}}
+};
+trajectory(path2);
+delay(300);
+
+//Take teammate's preload
+backward = false;
+swingOnRight(-20);
+BoomParams preload{.x=4.6, .y=61.3, .heading = -90, .lead = 0.4}
+boomerangTo(preload);
+
+//Score teammate's preload
+backward = true;
+std::vector<BezierSegment> path3 = {
+  {.a = {11.9, 57.7}, .b = {19.4, 51.6}, .c = {12.4, 23.5}, .d = {-16.9, 42.8}}
+};
+trajectory(path3);
+
+
+//Get standing cup
+backward = false;
+moveTo(-14.7,30.9);
+backward = true;
+facePoint(-48,48);
+std::vector<BezierSegment> path4 = {
+  {.a = {-12.8, 32.1}, .b = {-22, 36.1}, .c = {-34.9, 40.4}, .d = {-40.7, 43.7}}
+};
+trajectory(path4);
+
+//Score standing cup
+facePoint(-24,48);
+drivePID.targetOffset = -6;
+moveTo(-24,48);
+delay(300);
+
+

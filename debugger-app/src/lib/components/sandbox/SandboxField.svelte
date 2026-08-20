@@ -5,20 +5,26 @@
   import TurnOverlay from '../TurnOverlay.svelte';
   import BoomerangOverlay from '../BoomerangOverlay.svelte';
   import { settings, holesToInches } from '$lib/stores/settings.svelte';
-  import { sandbox, getRoute, sandboxPoseAt, segmentAt, editNumber, editStructField } from '$lib/stores/sandbox.svelte';
   import {
-    getTrajectory,
-    ensureTrajectory,
-    moveTrajAnchor,
-    moveTrajHandle,
-    insertTrajAnchor
+    sandbox,
+    getRoute,
+    sandboxPoseAt,
+    segmentAt,
+    editNumber,
+    editStructField,
+    editPoint,
+    segsFromPathDecl,
+    pathInsertAt,
+    pathExtendTo,
+    moveAnchor,
+    pushUndo
   } from '$lib/stores/sandbox.svelte';
-  import { bakeTrajectory, speedColor, defaultTrajectory, dir as splineDir, type Anchor } from '$lib/trajectory/spline';
+  import { bezierAt } from '$lib/sandbox/ramsete';
   import { toScreen } from '$lib/field/coords';
   import { backdropSrc, fieldImageRect } from '$lib/field/backdrops';
   import { movementColor, isTurn } from '$lib/trace/labels';
   import { base } from '$app/paths';
-  import type { CallStmt, BoomDeclStmt } from '$lib/sandbox/parse';
+  import type { CallStmt, BoomDeclStmt, PathDeclStmt, PointLit } from '$lib/sandbox/parse';
   import type { Movement } from '$lib/trace/types';
   import type { SimSegment } from '$lib/sandbox/sim';
 
@@ -29,13 +35,50 @@
 
   const SIZE = 144;
   const fieldRect = fieldImageRect(SIZE);
-  const fieldImg = $derived(backdropSrc(settings.fieldBackdrop, base));
+  // the OPEN AUTON's field, not settings.fieldBackdrop — Settings' picker
+  // still drives Replay and the Trajectory Generator, but a sandbox route
+  // carries its own game (see TabState.field).
+  const fieldImg = $derived(backdropSrc(sandbox.field, base));
 
   const route = $derived(getRoute());
   const pose = $derived(sandboxPoseAt(sandbox.time));
 
   const D2R = Math.PI / 180;
   const R2D = 180 / Math.PI;
+
+  // Speed → color ramp for the trajectory spline — the SAME ramp and
+  // mapping the Trajectory Generator's field uses (pursuit.svelte.ts's
+  // speedColor/speedRange: red → yellow → green, spanning the path's OWN
+  // [min,max] speed so a uniformly-fast path doesn't just saturate green).
+  // Reproduced locally rather than imported — that module is read-only here,
+  // edited by a different session.
+  const TRAJ_RAMP: [number, number, number][] = [
+    [0xef, 0x44, 0x44],
+    [0xfa, 0xcc, 0x15],
+    [0x3e, 0xc9, 0x7e]
+  ];
+  function trajSpeedColor(v: number, lo: number, hi: number): string {
+    const span = Math.max(1e-6, hi - lo);
+    const t = Math.max(0, Math.min(1, (v - lo) / span));
+    const f = t < 0.5 ? t * 2 : (t - 0.5) * 2;
+    const [a, b] = t < 0.5 ? [TRAJ_RAMP[0], TRAJ_RAMP[1]] : [TRAJ_RAMP[1], TRAJ_RAMP[2]];
+    const c = a.map((x, i) => Math.round(x + (b[i] - x) * f));
+    return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  }
+  /** The colour window for a baked schedule: its own [min,max] |speed|, so the
+   *  slowest stretch reads red and the fastest green — falls back to [0,vmax]
+   *  when the path is nearly constant-speed (nothing to spread across). */
+  function trajSpeedRange(rows: { v: number }[], vmax: number): { lo: number; hi: number } {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const r of rows) {
+      const av = Math.abs(r.v);
+      if (av < lo) lo = av;
+      if (av > hi) hi = av;
+    }
+    if (!isFinite(lo) || hi - lo < 3) return { lo: 0, hi: Math.max(1, vmax) };
+    return { lo, hi };
+  }
 
   // --- handle model -----------------------------------------------------------
 
@@ -111,17 +154,20 @@
           }
           break;
         }
-        case 'drive': {
+        case 'driveForward':
+        case 'driveBackward': {
           const d = num(0);
           if (d !== null) {
-            // drive(distance, heading, ec, bs) — distance is SIGNED, so the handle
-            // lands behind the start for a negative one. No direction flag needed.
+            // driveForward(distance, ...) / driveBackward(distance, ...) — distance
+            // is a POSITIVE magnitude in both. The handle sits `distance` along the
+            // held heading for forward, and `-distance` along it for backward.
             const hh = num(1) ?? seg.start.h;
+            const dirSign = s.fn === 'driveBackward' ? -1 : 1;
             out.push({
               stmtIndex: i,
               role: 'distance',
-              x: seg.start.x + d * Math.sin(hh * D2R),
-              y: seg.start.y + d * Math.cos(hh * D2R),
+              x: seg.start.x + dirSign * d * Math.sin(hh * D2R),
+              y: seg.start.y + dirSign * d * Math.cos(hh * D2R),
               color: col,
               ox: seg.start.x,
               oy: seg.start.y
@@ -162,6 +208,13 @@
 
   let svgEl: SVGSVGElement | undefined = $state();
   let drag: { stmtIndex: number; role: Role } | null = $state(null);
+  // Has this drag gesture (either `drag` or `pathDrag` below — mutually
+  // exclusive) committed its one undo snapshot yet? Mirrors pursuit's own
+  // dragDirty (PursuitField.svelte): a drag can run many pointermove frames,
+  // and pushUndo must fire exactly once per gesture, not once per frame — see
+  // sandbox.svelte.ts's pushUndo doc for why a coalesce key alone isn't
+  // enough for this case (a slow drag can outlast the coalescing window).
+  let dragDirty = false;
 
   // live field coordinate under the cursor (inches), shown as a readout
   let hoverCoord = $state<{ x: number; y: number } | null>(null);
@@ -183,6 +236,7 @@
     e.stopPropagation();
     e.preventDefault();
     drag = { stmtIndex: h.stmtIndex, role: h.role };
+    dragDirty = false;
     sandbox.selected = h.stmtIndex;
     sandbox.playing = false;
   }
@@ -211,6 +265,13 @@
     if (!drag) return;
     const f = toFieldCoords(e);
     if (!f) return;
+    // Push exactly once per drag gesture, at the first frame that actually
+    // edits something — every later frame just rewrites the same undo step's
+    // "after" state (Feature 3).
+    if (!dragDirty) {
+      pushUndo();
+      dragDirty = true;
+    }
     const { stmtIndex, role } = drag;
     const { stmt, seg, parsed } = fresh(stmtIndex);
     if (!stmt) return;
@@ -270,9 +331,13 @@
       const ux = Math.sin(hh * D2R);
       const uy = Math.cos(hh * D2R);
       const proj = (f.x - seg.start.x) * ux + (f.y - seg.start.y) * uy;
-      // signed — dragging the handle behind the start writes a negative distance,
-      // which is how drive() reverses
-      const d = round(proj, 0.5);
+      // driveForward(distance, ...) / driveBackward(distance, ...) both take a
+      // POSITIVE magnitude — forward reads the projection along the held heading
+      // directly, backward reads it negated (dragging further behind the start
+      // grows a driveBackward's distance). Dragging past the pivot to the wrong
+      // side clamps at 0 rather than writing a negative distance.
+      const raw = stmt.fn === 'driveBackward' ? -proj : proj;
+      const d = Math.max(0, round(raw, 0.5));
       const a0 = stmt.args[0];
       if (a0?.kind === 'num') editNumber(a0.lit, d);
       return;
@@ -430,15 +495,15 @@
   let pan: { ctm: DOMMatrix; startView: { x: number; y: number }; center0: { sx: number; sy: number }; moved: boolean } | null =
     $state(null);
   function onSvgPointerDown(e: PointerEvent) {
-    if (drag) return; // a handle grabbed it (stopPropagation) — not our event
+    if (drag || pathDrag) return; // a handle grabbed it (stopPropagation) — not our event
     const m = svgEl?.getScreenCTM();
     if (!m) return;
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
     pan = { ctm: m, startView: { x: p.x, y: p.y }, center0: { ...center }, moved: false };
   }
   function onPointerMoveTop(e: PointerEvent) {
-    if (trajDrag) {
-      onTrajDragMove(e);
+    if (pathDrag) {
+      onPathDragMove(e);
       return;
     }
     if (drag) {
@@ -457,8 +522,8 @@
     }
   }
   function onPointerUpTop() {
-    if (trajDrag) {
-      trajDrag = null;
+    if (pathDrag) {
+      pathDrag = null;
       return;
     }
     if (drag) {
@@ -466,7 +531,21 @@
       return;
     }
     if (pan) {
-      if (!pan.moved) sandbox.selected = null; // background click = deselect
+      // A click on open field used to deselect here. It no longer does: the CARET
+      // owns the selection now, so clearing it behind the caret's back left the
+      // left column showing the wrong thing while the cursor still sat on the
+      // movement, and it ate the first click of a double-click-to-extend before
+      // ondblclick could read the active path. Move the caret to change what is
+      // selected.
+      //
+      // selectedSeg is a much narrower piece of state (which control point the
+      // path panel's Insert midpoint / Delete anchor buttons target) — reaching
+      // this branch at all means the pointerdown didn't land on an anchor/handle
+      // (those stopPropagation before onSvgPointerDown ever starts a pan), so a
+      // plain click on open field is unambiguously "off" any control point. The
+      // store's own selected-changed effect can't catch this — sandbox.selected
+      // never changes here — so clear it directly.
+      sandbox.selectedSeg = null;
       pan = null;
     }
   }
@@ -475,100 +554,203 @@
     drag = null;
   }
 
-  // --- [TRAJECTORY] editing overlay -----------------------------------------------
-  // The active trajectory is the selected [TRAJECTORY] stmt, else the followTrajectory
-  // segment under the playhead. Anchor 0 is pinned to the sim's start pose for it.
-  const activeTraj = $derived.by(() => {
-    const { parsed, sim } = route;
-    let idx: number | null = null;
-    if (sandbox.selected !== null && parsed.stmts[sandbox.selected]?.kind === 'trajectory') idx = sandbox.selected;
-    else {
-      const seg = sandbox.time > 0 ? segmentAt(sandbox.time) : null;
-      if (seg && seg.fn === 'followTrajectory') idx = seg.stmtIndex;
-    }
+  // --- BezierSegment path editing -----------------------------------------------
+  // Active when the selected statement is either the trajectory call
+  // (resolve its path argument) or the std::vector<BezierSegment> declaration
+  // itself (the caret can land there directly while typing).
+  interface EditPath {
+    pathName: string;
+    decl: PathDeclStmt;
+  }
+  const activePath = $derived.by((): EditPath | null => {
+    const { parsed } = route;
+    const idx = sandbox.selected;
     if (idx === null) return null;
-    const seg = sim.segments.find((s) => s.stmtIndex === idx);
-    if (!seg) return null;
-    const stored = getTrajectory(idx);
-    const anchors: Anchor[] = (stored ? stored.anchors.map((a) => ({ ...a })) : defaultTrajectory(seg.start));
-    anchors[0] = { ...anchors[0], x: seg.start.x, y: seg.start.y }; // pin to the robot
-    const params = stored?.params ?? { maxVel: 60, exitVel: 0, maxAccel: 60, beta: 2, zeta: 0.7 };
-    const editable = sandbox.selected === idx;
-    return { stmtIndex: idx, seg, anchors, params, editable };
+    const s = parsed.stmts[idx];
+    if (!s) return null;
+    if (s.kind === 'pathDecl') return { pathName: s.name, decl: s };
+    if (s.kind === 'call' && s.fn === 'ramsete.trajectory') {
+      const a0 = s.args[0];
+      if (a0?.kind === 'ident') {
+        const decl = parsed.paths[a0.name];
+        if (decl) return { pathName: a0.name, decl };
+      }
+    }
+    return null;
   });
 
-  // baked spline for the active trajectory (speed-coloured dots + insert hit-test)
-  const trajPlan = $derived.by(() => {
-    if (!activeTraj) return null;
-    const { anchors, params } = activeTraj;
-    return bakeTrajectory(
-      anchors,
-      { maxVel: params.maxVel, maxAccel: params.maxAccel, startVel: 0, exitVel: params.exitVel },
-      sandbox.knobs.trackwidth
-    );
-  });
+  // While a trajectory (its trajectory call, or the path declaration
+  // itself) is the active statement, the field shows ONLY that trajectory:
+  // every other movement's polyline/waypoints/turns/boomerang geometry/tip
+  // handles disappear so the spline being edited isn't competing with the
+  // rest of the route. The robot and the field backdrop are unaffected.
+  const editingTraj = $derived(activePath !== null);
+  function trajVisible(seg: SimSegment): boolean {
+    return !editingTraj || (seg.fn === 'ramsete.trajectory' && seg.traj?.pathName === activePath!.pathName);
+  }
 
-  // tangent handle endpoints for each anchor (field coords)
-  const trajHandles = $derived.by(() => {
-    if (!activeTraj) return [];
-    return activeTraj.anchors.map((a, i) => {
-      const d = splineDir(a.ang);
-      const out = i < activeTraj.anchors.length - 1 ? { x: a.x + d.x * a.out, y: a.y + d.y * a.out } : null;
-      const inn = i > 0 ? { x: a.x - d.x * a.in, y: a.y - d.y * a.in } : null;
-      return { i, a, out, inn };
+  // One draggable control point: 'a'/'d' are the segment's endpoints (shared
+  // with the neighboring segment at a joint), 'b'/'c' are its handles.
+  interface PathPoint {
+    segIndex: number;
+    key: 'a' | 'b' | 'c' | 'd';
+    x: number;
+    y: number;
+  }
+  const pathPoints = $derived.by((): PathPoint[] => {
+    if (!activePath) return [];
+    const out: PathPoint[] = [];
+    activePath.decl.segs.forEach((seg, segIndex) => {
+      (['a', 'b', 'c', 'd'] as const).forEach((key) => {
+        const pt = seg.points[key];
+        if (pt) out.push({ segIndex, key, x: pt.x.value, y: pt.y.value });
+      });
     });
+    return out;
   });
 
-  type TrajDrag = { stmtIndex: number; kind: 'anchor'; ai: number } | { stmtIndex: number; kind: 'handle'; ai: number; side: 'out' | 'in' };
-  let trajDrag: TrajDrag | null = $state(null);
+  // Dashed stems from each endpoint to its own handle (a→b, d→c) — the same
+  // shape as the boomerang's carrot/gLead connectors, one per segment.
+  interface PathStem {
+    segIndex: number;
+    ax: number;
+    ay: number;
+    hx: number;
+    hy: number;
+  }
+  const pathStems = $derived.by((): PathStem[] => {
+    if (!activePath) return [];
+    const out: PathStem[] = [];
+    activePath.decl.segs.forEach((seg, segIndex) => {
+      const a = seg.points.a;
+      const b = seg.points.b;
+      const c = seg.points.c;
+      const d = seg.points.d;
+      if (a && b) out.push({ segIndex, ax: a.x.value, ay: a.y.value, hx: b.x.value, hy: b.y.value });
+      if (d && c) out.push({ segIndex: segIndex + 0.5, ax: d.x.value, ay: d.y.value, hx: c.x.value, hy: c.y.value });
+    });
+    return out;
+  });
 
-  function startTrajAnchorDrag(e: PointerEvent, ai: number) {
-    if (!activeTraj) return;
+  let pathDrag: { segIndex: number; key: 'a' | 'b' | 'c' | 'd' } | null = $state(null);
+
+  function startPathDrag(e: PointerEvent, segIndex: number, key: 'a' | 'b' | 'c' | 'd') {
     e.stopPropagation();
     e.preventDefault();
-    ensureTrajectory(activeTraj.stmtIndex, activeTraj.seg.start);
-    sandbox.selected = activeTraj.stmtIndex;
     sandbox.playing = false;
-    if (ai !== 0) trajDrag = { stmtIndex: activeTraj.stmtIndex, kind: 'anchor', ai };
+    sandbox.selectedSeg = segIndex; // targets the path panel's Insert midpoint / Delete anchor
+    // clicking an ENDPOINT (not a handle) also selects it as an anchor — feeds
+    // the selected-anchor widget in SandboxPathPanel.
+    if (key === 'a' || key === 'd') sandbox.selectedAnchor = key === 'a' ? segIndex : segIndex + 1;
+    pathDrag = { segIndex, key };
+    dragDirty = false;
   }
-  function startTrajHandleDrag(e: PointerEvent, ai: number, side: 'out' | 'in') {
-    if (!activeTraj) return;
-    e.stopPropagation();
-    e.preventDefault();
-    ensureTrajectory(activeTraj.stmtIndex, activeTraj.seg.start);
-    sandbox.selected = activeTraj.stmtIndex;
-    sandbox.playing = false;
-    trajDrag = { stmtIndex: activeTraj.stmtIndex, kind: 'handle', ai, side };
-  }
-  function onTrajDragMove(e: PointerEvent) {
-    if (!trajDrag) return;
-    const f = toFieldCoords(e);
-    if (!f) return;
-    if (trajDrag.kind === 'anchor') moveTrajAnchor(trajDrag.stmtIndex, trajDrag.ai, f.x, f.y);
-    else moveTrajHandle(trajDrag.stmtIndex, trajDrag.ai, trajDrag.side, f.x, f.y);
-  }
-  function onTrajDblClick(e: MouseEvent) {
-    if (!activeTraj || !trajPlan) return;
-    const m = svgEl?.getScreenCTM();
+
+  /** Double-click the curve to insert an anchor at the nearest point — dense-
+   *  samples every segment's raw control points (no baked profile involved)
+   *  and de-Casteljau-splits whichever one the click landed closest to. */
+  function onFieldDblClick(e: MouseEvent) {
+    if (!activePath || !svgEl) return;
+    const m = svgEl.getScreenCTM();
     if (!m) return;
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
     const fx = p.x - SIZE / 2;
     const fy = SIZE / 2 - p.y;
-    // nearest dense sample → insert if close to the curve
-    let best = -1;
-    let bd = Infinity;
-    for (let i = 0; i < trajPlan.dense.length; i++) {
-      const d = Math.hypot(trajPlan.dense[i].x - fx, trajPlan.dense[i].y - fy);
-      if (d < bd) {
-        bd = d;
-        best = i;
+    const segs = segsFromPathDecl(activePath.decl);
+    const SAMPLES = 40;
+    let bestSeg = -1;
+    let bestT = 0.5;
+    let bestD = Infinity;
+    segs.forEach((seg, si) => {
+      for (let k = 0; k <= SAMPLES; k++) {
+        const t = k / SAMPLES;
+        const pt = bezierAt(seg, t);
+        const d = Math.hypot(pt.x - fx, pt.y - fy);
+        if (d < bestD) {
+          bestD = d;
+          bestSeg = si;
+          bestT = t;
+        }
       }
+    });
+    if (bestSeg >= 0 && bestD < 4 / zoom + 2) {
+      pathInsertAt(activePath.decl, bestSeg, bestT);
+    } else {
+      // Away from the curve: extend the path out to the point instead. Both
+      // gestures are a double-click; which one you get depends only on whether
+      // you hit the line, the same as the Trajectory Generator.
+      pathExtendTo(activePath.decl, fx, fy);
     }
-    if (best >= 0 && bd < 4 / zoom + 2) {
-      ensureTrajectory(activeTraj.stmtIndex, activeTraj.seg.start);
-      const s = trajPlan.dense[best];
-      insertTrajAnchor(activeTraj.stmtIndex, s.seg, s.t);
+  }
+
+  /** re-read the active path after each write — earlier writes can shift later char ranges */
+  function freshPathDecl(): PathDeclStmt | undefined {
+    const idx = sandbox.selected;
+    if (idx === null) return undefined;
+    const r = getRoute();
+    const s = r.parsed.stmts[idx];
+    if (s?.kind === 'pathDecl') return s;
+    if (s?.kind === 'call' && s.fn === 'ramsete.trajectory') {
+      const a0 = s.args[0];
+      if (a0?.kind === 'ident') return r.parsed.paths[a0.name];
     }
+    return undefined;
+  }
+
+  function onPathDragMove(e: PointerEvent) {
+    if (!pathDrag) return;
+    const f = toFieldCoords(e);
+    if (!f) return;
+    // Same one-push-per-gesture rule as onDragMove above — covers both the
+    // 'a'/'d' anchor case (moveAnchor) and the 'b'/'c' handle case (editPoint
+    // directly), whichever this drag turns out to be.
+    if (!dragDirty) {
+      pushUndo();
+      dragDirty = true;
+    }
+    const nx = round(f.x, 0.1);
+    const ny = round(f.y, 0.1);
+    const { segIndex, key } = pathDrag;
+
+    if (key === 'a' || key === 'd') {
+      // The joint-translation logic (move both coincident points, slide both
+      // adjacent handles with them) now lives in the store as moveAnchor —
+      // shared with the selected-anchor widget's X/Y tiles instead of kept
+      // as a second copy here.
+      if (!activePath) return;
+      const anchorIndex = key === 'a' ? segIndex : segIndex + 1;
+      moveAnchor(activePath.pathName, anchorIndex, nx, ny);
+      return;
+    }
+
+    // a handle ('b' or 'c'): move it freely; if its endpoint is a joint, mirror
+    // the new direction through that endpoint into the partner handle on the
+    // other side. Collinear handles are what keeps the heading continuous
+    // across a joint (bezierTools.h) — a handle-based spline is only C1, so
+    // this is the only thing enforcing it. The partner keeps its own length.
+    const decl0 = freshPathDecl();
+    const seg0 = decl0?.segs[segIndex];
+    const anchorKey: 'a' | 'd' = key === 'b' ? 'a' : 'd';
+    const anchor = seg0?.points[anchorKey];
+    if (!anchor) return;
+    editPoint(seg0!.points[key]!, nx, ny);
+
+    const partnerIndex = anchorKey === 'a' ? segIndex - 1 : segIndex + 1;
+    if (partnerIndex < 0 || partnerIndex >= (decl0?.segs.length ?? 0)) return; // not a joint — nothing to mirror
+
+    const decl1 = freshPathDecl();
+    const jointPt = decl1?.segs[segIndex]?.points[anchorKey];
+    const partnerKey: 'b' | 'c' = anchorKey === 'a' ? 'c' : 'b';
+    const partnerHandle = decl1?.segs[partnerIndex]?.points[partnerKey];
+    if (!jointPt || !partnerHandle) return;
+    const ax = jointPt.x.value;
+    const ay = jointPt.y.value;
+    const plen = Math.hypot(partnerHandle.x.value - ax, partnerHandle.y.value - ay);
+    const dlen = Math.hypot(nx - ax, ny - ay);
+    if (dlen < 1e-6) return;
+    const mx = ax - ((nx - ax) / dlen) * plen;
+    const my = ay - ((ny - ay) / dlen) * plen;
+    editPoint(partnerHandle, round(mx, 0.1), round(my, 0.1));
   }
 
   // --- rendering helpers ----------------------------------------------------------
@@ -594,6 +776,12 @@
   // segment under the playhead (whether playing or scrubbed) — drives the live
   // boomerang lead visualization while the robot runs a boomerang.
   const playheadSeg = $derived(sandbox.time > 0 ? segmentAt(sandbox.time) : null);
+
+  // There is no drawing flip for a backward trajectory any more. `backward` now
+  // reverses the PATH itself (executeTrajectory.cpp XORs it onto every segment's
+  // .reversed), so the bake already emits headings flipped 180 and negative
+  // speeds — pose.h is nose-last on its own, and flipping it again here would
+  // cancel out and draw the robot facing its direction of travel.
   // static lead geometry (axis + estimate tracks) shows when the boom is
   // selected for editing OR the playhead is inside it
   const activeBoom = $derived(playheadSeg?.boom ?? null);
@@ -663,11 +851,11 @@
       }
       if (x === null || y === null) continue;
       // omitted fields fall back to the left-panel defaults
-      let settleR = k.ecLatGate;
+      let settleR = k.ecLatWithin;
       let crossD = k.ecLatD;
       if (ecArg?.kind === 'struct') {
         const f = ecArg.init.fields;
-        if (f.settleGate && typeof f.settleGate.value === 'number') settleR = f.settleGate.value;
+        if (f.settleWithin && typeof f.settleWithin.value === 'number') settleR = f.settleWithin.value;
         if (f.d && typeof f.d.value === 'number') crossD = f.d.value;
       }
       out.push({
@@ -707,8 +895,8 @@
       onpointerdown={onSvgPointerDown}
       onpointermove={onHoverMove}
       onpointerleave={() => (hoverCoord = null)}
-      ondblclick={onTrajDblClick}
       onwheel={onWheel}
+      ondblclick={onFieldDblClick}
       role="application"
       aria-label="Sandbox field"
     >
@@ -725,9 +913,14 @@
       <g transform={worldTransform}>
       <image href={fieldImg} x={fieldRect.x} y={fieldRect.y} width={fieldRect.w} height={fieldRect.h} preserveAspectRatio="none" />
 
-      <!-- simulated trajectory, per movement — replay Path.svelte design -->
+      <!-- simulated trajectory, per movement — replay Path.svelte design.
+           trajectory gets this line too now: the robot runs the real
+           RAMSETE law against a perfect actuator (item 1), so with an offset
+           start it converges onto the schedule rather than riding it exactly
+           — this is where the robot actually went, the glow-core spline
+           below is the plan it's converging onto. -->
       {#each route.sim.segments as seg (seg.stmtIndex)}
-        {#if seg.ticks.length > 0}
+        {#if seg.ticks.length > 0 && trajVisible(seg)}
           <polyline
             points={segPoints(seg)}
             class="traj"
@@ -747,9 +940,68 @@
         {/if}
       {/each}
 
-      <!-- turn overlays — the exact replay TurnOverlay, fed the sim's ticks -->
+      <!-- trajectory: the baked schedule as ONE glow-core spline, the
+           same treatment PursuitField.svelte uses for its planned curve — this
+           is the PLAN the robot is converging onto (the .traj polyline above
+           is where it actually went). Colour spans the schedule's own
+           [min,max] speed (trajSpeedRange), same as the generator. Reversed
+           rows (v < 0) dash the core so a backing-up stretch still reads as
+           backing up. -->
+      <defs>
+        <filter id="sb-traj-glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="1.5" />
+        </filter>
+      </defs>
+      {#each route.sim.segments as seg (seg.stmtIndex + ':sched')}
+        {#if seg.traj && trajVisible(seg)}
+          {@const range = trajSpeedRange(seg.traj.rows, seg.traj.profileMaxVel)}
+          <g opacity={segOpacity(seg.stmtIndex)}>
+            <g class="traj-glow" filter="url(#sb-traj-glow)">
+              {#each seg.traj.rows as row, i}
+                {#if i > 0}
+                  {@const a = toScreen(seg.traj.rows[i - 1].x, seg.traj.rows[i - 1].y)}
+                  {@const b = toScreen(row.x, row.y)}
+                  {@const avgV = (Math.abs(seg.traj.rows[i - 1].v) + Math.abs(row.v)) / 2}
+                  <line
+                    x1={a.sx}
+                    y1={a.sy}
+                    x2={b.sx}
+                    y2={b.sy}
+                    stroke={trajSpeedColor(avgV, range.lo, range.hi)}
+                    stroke-width={3.2}
+                    stroke-linecap="round"
+                  />
+                {/if}
+              {/each}
+            </g>
+            <g class="traj-core">
+              {#each seg.traj.rows as row, i}
+                {#if i > 0}
+                  {@const a = toScreen(seg.traj.rows[i - 1].x, seg.traj.rows[i - 1].y)}
+                  {@const b = toScreen(row.x, row.y)}
+                  {@const avgV = (Math.abs(seg.traj.rows[i - 1].v) + Math.abs(row.v)) / 2}
+                  <line
+                    x1={a.sx}
+                    y1={a.sy}
+                    x2={b.sx}
+                    y2={b.sy}
+                    stroke={trajSpeedColor(avgV, range.lo, range.hi)}
+                    stroke-width={1.8}
+                    stroke-linecap="round"
+                    stroke-dasharray={row.v < 0 ? '2.2 2.2' : undefined}
+                    vector-effect="non-scaling-stroke"
+                  />
+                {/if}
+              {/each}
+            </g>
+          </g>
+        {/if}
+      {/each}
+
+      <!-- turn overlays — the exact replay TurnOverlay, fed the sim's ticks.
+           Hidden while a trajectory is being edited (item 3). -->
       {#each route.sim.segments as seg (seg.stmtIndex + ':turn')}
-        {#if isTurn(seg.fn) && seg.ticks.length > 1}
+        {#if isTurn(seg.fn) && seg.ticks.length > 1 && !editingTraj}
           <g opacity={segOpacity(seg.stmtIndex)}>
             <TurnOverlay
               movement={asMovement(seg)}
@@ -762,8 +1014,9 @@
       {/each}
 
       <!-- waypoints — the exact replay Waypoint (dot + exit-condition halos),
-           plus the hdd stage circle, styled as in the replay field -->
-      {#each wpSegs as w (w.seg.stmtIndex + ':wp')}
+           plus the hdd stage circle, styled as in the replay field. Hidden
+           while a trajectory is being edited (item 3). -->
+      {#each editingTraj ? [] : wpSegs as w (w.seg.stmtIndex + ':wp')}
         {@const sp = toScreen(w.x, w.y)}
         <g opacity={segOpacity(w.seg.stmtIndex)}>
           {#if w.stageR > 0}
@@ -784,8 +1037,9 @@
       {/each}
 
       <!-- boomerang lead geometry for EDITING (selected, or playhead inside):
-           lead axis + carrot/ghost estimate tracks -->
-      {#if showBoom}
+           lead axis + carrot/ghost estimate tracks. Hidden while a trajectory
+           is being edited (item 3). -->
+      {#if showBoom && !editingTraj}
         {@const tp = toScreen(showBoom.target.x, showBoom.target.y)}
         {@const cp = toScreen(showBoom.initCarrot.x, showBoom.initCarrot.y)}
         <line x1={tp.sx} y1={tp.sy} x2={cp.sx} y2={cp.sy} class="lead-axis" vector-effect="non-scaling-stroke" />
@@ -799,8 +1053,9 @@
 
       <!-- LIVE boomerang at the playhead — the exact replay overlay: staging
            lines (ghost/carrot/end, active stage highlighted), retracting carrot,
-           trailing ghost, initial-carrot anchor, exit plane, turn arc -->
-      {#if boomOverride}
+           trailing ghost, initial-carrot anchor, exit plane, turn arc. Hidden
+           while a trajectory is being edited (item 3). -->
+      {#if boomOverride && !editingTraj}
         <BoomerangOverlay override={boomOverride} />
       {/if}
 
@@ -811,8 +1066,10 @@
 
       <!-- drag layer: invisible hit circles on the movement tips; the visible
            marks are the replay waypoint dots above. Secondary handles (heading /
-           carrot / gLead) appear only for the selected movement. -->
-      {#each handles as h (h.stmtIndex + ':' + h.role)}
+           carrot / gLead) appear only for the selected movement. Hidden while a
+           trajectory is being edited (item 3) — the path's own control points
+           (below) are the only handles that make sense then. -->
+      {#each editingTraj ? [] : handles as h (h.stmtIndex + ':' + h.role)}
         {@const sp = toScreen(h.x, h.y)}
         {@const isSel = selected === h.stmtIndex}
         {@const secondary = h.role === 'heading' || h.role === 'startheading' || h.role === 'carrot' || h.role === 'glead'}
@@ -846,33 +1103,43 @@
         {/if}
       {/each}
 
-      <!-- [TRAJECTORY] editing overlay: speed-coloured spline + anchors + handles -->
-      {#if activeTraj && trajPlan}
-        {#each trajPlan.points as p, i}
-          {#if i > 0}
-            {@const a = toScreen(trajPlan.points[i - 1].x, trajPlan.points[i - 1].y)}
-            {@const b = toScreen(p.x, p.y)}
-            <line x1={a.sx} y1={a.sy} x2={b.sx} y2={b.sy} stroke={speedColor(p.v, activeTraj.params.maxVel)} stroke-width={2.4} stroke-linecap="round" opacity="0.92" />
+      <!-- BezierSegment path editing: draggable control points for every
+           segment of the selected path (or the selected trajectory's
+           path), shown only while that statement is selected. Look matches
+           PursuitField's spline editor: thin light stems, small white anchor
+           dots, small white handle dots — a bigger invisible circle underneath
+           each carries the actual drag hit-test, same as the generator's
+           hit+dot split. -->
+      {#if activePath}
+        <!-- the segment Insert midpoint / Delete anchor will act on (selectedSeg)
+             gets its own stem colour + a highlight ring under its anchors, so
+             which segment is "selected" is visible, not just remembered. -->
+        {#each pathStems as st (st.segIndex)}
+          {@const ap = toScreen(st.ax, st.ay)}
+          {@const hp = toScreen(st.hx, st.hy)}
+          {@const segSel = sandbox.selectedSeg !== null && Math.floor(st.segIndex) === sandbox.selectedSeg}
+          <line x1={ap.sx} y1={ap.sy} x2={hp.sx} y2={hp.sy} class="bz-stem" class:seg-sel={segSel} vector-effect="non-scaling-stroke" />
+        {/each}
+        {#each pathPoints as p (p.segIndex + ':' + p.key)}
+          {@const sp = toScreen(p.x, p.y)}
+          {@const active = pathDrag?.segIndex === p.segIndex && pathDrag?.key === p.key}
+          {@const segSel = sandbox.selectedSeg === p.segIndex}
+          {#if p.key === 'a' || p.key === 'd'}
+            {@const anchorIdx = p.key === 'a' ? p.segIndex : p.segIndex + 1}
+            {@const anchorSel = sandbox.selectedAnchor === anchorIdx}
+            <g class="bz-anchor-grp" class:active class:seg-sel={segSel} onpointerdown={(e) => startPathDrag(e, p.segIndex, p.key)} role="presentation">
+              {#if segSel}<circle cx={sp.sx} cy={sp.sy} r={2.6 * hs} class="bz-seg-ring" vector-effect="non-scaling-stroke" />{/if}
+              {#if anchorSel}<circle cx={sp.sx} cy={sp.sy} r={3.6 * hs} class="bz-anchor-ring" vector-effect="non-scaling-stroke" />{/if}
+              <circle cx={sp.sx} cy={sp.sy} r={5 * hs} class="bz-hit" />
+              <circle cx={sp.sx} cy={sp.sy} r={0.95 * hs} class="bz-anchor" />
+            </g>
+          {:else}
+            <g class="bz-handle-grp" class:active class:seg-sel={segSel} onpointerdown={(e) => startPathDrag(e, p.segIndex, p.key)} role="presentation">
+              <circle cx={sp.sx} cy={sp.sy} r={4 * hs} class="bz-hit" />
+              <circle cx={sp.sx} cy={sp.sy} r={0.85 * hs} class="bz-handle" />
+            </g>
           {/if}
         {/each}
-        {#if activeTraj.editable}
-          {#each trajHandles as hb (hb.i)}
-            {@const ap = toScreen(hb.a.x, hb.a.y)}
-            {@const op = hb.out ? toScreen(hb.out.x, hb.out.y) : ap}
-            {@const ip = hb.inn ? toScreen(hb.inn.x, hb.inn.y) : ap}
-            <line x1={ip.sx} y1={ip.sy} x2={op.sx} y2={op.sy} class="tj-stem" vector-effect="non-scaling-stroke" />
-            {#if hb.out}
-              <circle cx={op.sx} cy={op.sy} r={1.4 * hs} class="tj-handle" onpointerdown={(e) => startTrajHandleDrag(e, hb.i, 'out')} role="presentation" />
-            {/if}
-            {#if hb.inn}
-              <circle cx={ip.sx} cy={ip.sy} r={1.4 * hs} class="tj-handle" onpointerdown={(e) => startTrajHandleDrag(e, hb.i, 'in')} role="presentation" />
-            {/if}
-          {/each}
-          {#each activeTraj.anchors as a, ai (ai)}
-            {@const sp = toScreen(a.x, a.y)}
-            <circle cx={sp.sx} cy={sp.sy} r={2 * hs} class="tj-anchor" class:locked={ai === 0} onpointerdown={(e) => startTrajAnchorDrag(e, ai)} role="presentation" />
-          {/each}
-        {/if}
       {/if}
       </g>
       </g>
@@ -971,6 +1238,18 @@
     stroke-width: 2.4;
   }
 
+  /* trajectory glow-core spline — same treatment as PursuitField's
+     .glow/.core: the blurred underlay carries the light, the core the line.
+     The glow's stroke-width is NOT non-scaling — it's meant to read as a
+     field-relative blur, exactly like the generator's. */
+  .traj-glow {
+    opacity: 0.42;
+    pointer-events: none;
+  }
+  .traj-core {
+    pointer-events: none;
+  }
+
   .lead-axis {
     stroke: #d9b64a;
     stroke-width: 1;
@@ -992,33 +1271,69 @@
 
   /* SVG drag-handle glyphs — radii scale ÷zoom (constant screen size), strokes
      stay a fixed pixel width via non-scaling-stroke */
-  /* [TRAJECTORY] editing overlay */
-  .tj-stem {
-    stroke: rgba(251, 191, 36, 0.55);
+  /* BezierSegment path editing — matches PursuitField's tangent bars: a thin
+     light stem, small white anchor/handle dots, white→gold while dragging.
+     Each dot sits on a bigger invisible circle that carries the drag hit-test
+     (PursuitField's .grab/.dot split). */
+  .bz-stem {
+    stroke: rgba(255, 255, 255, 0.22);
     stroke-width: 1;
+    opacity: 0.5;
     pointer-events: none;
   }
-  .tj-handle {
-    fill: rgba(16, 16, 16, 0.85);
-    stroke: #fbbf24;
-    stroke-width: 0.5;
-    cursor: grab;
+  /* the segment Insert midpoint / Delete anchor targets (selectedSeg) — a
+     brighter stem + a ring under its anchors, so the target reads at a
+     glance instead of only being remembered internally. */
+  .bz-stem.seg-sel {
+    stroke: rgba(251, 191, 36, 0.6);
+    opacity: 0.85;
   }
-  .tj-handle:hover {
-    fill: #fbbf24;
+  .bz-seg-ring {
+    fill: none;
+    stroke: rgba(251, 191, 36, 0.55);
+    stroke-width: 1.2;
+    pointer-events: none;
   }
-  .tj-anchor {
-    fill: #f4f4f4;
-    stroke: rgba(10, 10, 10, 0.75);
+  /* the anchor the selected-anchor widget (SandboxPathPanel) is editing — a
+     second, larger ring so it reads distinctly from the segment ring above.
+     Cyan instead of amber: matches trajectory's own movement color. */
+  .bz-anchor-ring {
+    fill: none;
+    stroke: rgba(6, 182, 212, 0.8);
     stroke-width: 1.3;
+    pointer-events: none;
+  }
+  .bz-anchor-grp,
+  .bz-handle-grp {
     cursor: grab;
   }
-  .tj-anchor:hover {
+  .bz-anchor-grp:active,
+  .bz-handle-grp:active {
+    cursor: grabbing;
+  }
+  .bz-hit {
+    fill: transparent;
+  }
+  .bz-anchor {
+    fill: #f4f4f4;
+    transition: fill 0.12s ease;
+  }
+  .bz-anchor-grp:hover .bz-anchor {
     fill: #fff;
   }
-  .tj-anchor.locked {
+  .bz-anchor-grp.active .bz-anchor {
     fill: #fbbf24;
-    cursor: not-allowed;
+  }
+  .bz-handle {
+    fill: rgba(240, 240, 240, 0.95);
+    opacity: 0.5;
+    transition: fill 0.12s ease;
+  }
+  .bz-handle-grp:hover .bz-handle {
+    fill: #fff;
+  }
+  .bz-handle-grp.active .bz-handle {
+    fill: #fbbf24;
   }
 
   .knob {

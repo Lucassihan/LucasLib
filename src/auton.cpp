@@ -4,6 +4,7 @@
 #include "coreConfigs.h"
 #include "misc/util.h"
 #include "debugger/debugger.h"
+#include "ramsete/ramsete.h"
 #include "pid.h"
 #include "main.h"
 #include "scheduler.h"
@@ -37,12 +38,38 @@ void initializePIDConstants() {
 
 void autonSettings() {
   initializePIDConstants(); //This is necessary, we need to make sure pid.cpp gets our constants
-  drivePID.maxAccelRate = 0.25;
-  drivePID.maxDecelRate = 0.5;
-  // totalOutput.maxAccelRate = 0.5;
-  // totalOutput.maxDecelRate = 0.5;
+  setRamseteSettings();                    //the law's gains + the chassis limits
+  initializeVelocityControllerConstants(); //what each channel measures, and its gains
+
+  totalOutput.maxOutput = 12;
 
   //You can put your own stuff in here too
+}
+
+void exampleAuto() {
+  debugger::start("exampleauto");
+  autonSettings();
+
+  chassis.setPos(0,0,0);
+  moveTo(0,24, {.d = 1});
+  BoomParams bp {.x = 24, .y = 48, .lead = 0.5};
+  facePoint(bp, {.d = 10});
+  drivePID.maxOutput = 6;
+  boomerangTo(bp, {.d = 3});
+  debugger::stop();
+
+}
+
+void trajectoryTest() {
+  debugger::start("secondTrajTest");
+  autonSettings();
+  chassis.setPos(48,-48,0);
+  std::vector<BezierSegment> test = {
+    {.a = {48, -48}, .b = {48, -42.1}, .c = {-74.1, 0.1}, .d = {0, 0}},
+    {.a = {0, 0}, .b = {48, -0.1}, .c = {-30, 48}, .d = {0, 48}}
+  };
+  ramsete.trajectory(bakeTrajectory(test, {.maxVel = 75.0, .maxAccel = 100.0}));
+  debugger::stop();
 }
 
 

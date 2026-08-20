@@ -1,15 +1,11 @@
 #pragma once
 
 #include "blendSettings.h"
+#include "misc/util.h"   // Pose
 
 #include <cmath>
 
-// =========================================================================
-// movementUtils — shared machinery the movements are built on.
-// Global motion state, the output pipeline (blend → slew → govern), and the
-// heading-error resolvers. The user-facing movements in movement.cpp call
-// into all of this; these are not movements themselves.
-// =========================================================================
+// movementUtils — the shared machinery under movement.cpp: motion state, the output pipeline, and the heading-error resolvers. Not movements themselves.
 
 // -------- Shared motion state (exposed for debugging / logging) --------
 extern double turnPow;
@@ -22,41 +18,30 @@ extern double leftOut;
 extern double rightOut;
 extern double headingError;
 extern double lateralError;
-extern double targetX;
-extern double targetY;
-extern double targetH;
+// Point movements fill x and y, turns fill h, boomerangTo fills all three.
+extern Pose   target;
 extern double targetStraightDistance;
 extern double initialHeading;
 extern bool   close;
 extern bool   exitConditionFulfilled;
 
-// Previous tick's chassis velocities, held for the exit conditions' settle test
-// ("am I slower than I was?"). clearAllValues() zeroes them, so every movement
-// starts from 0 and settle needs two real samples before it can fire — that is
-// what stops a hot handoff, where the robot is already decelerating into the
-// next movement, from settling on its very first tick.
+// Previous tick's velocities for the exit conditions' settle test. clearAllValues() zeroes them, so settle needs two real samples and a hot handoff can't settle on tick one.
 extern double lastV;
 extern double lastω;
 
-// Global drive direction. Every point/pose movement (facePoint-to-point, swing-
-// to-point, moveTo, boomerangTo) runs backward while this is true. It is
-// a persistent mode, NOT a per-move argument: it initializes to false and NO
-// movement ever resets it — clearAllValues() leaves it alone. Flip it yourself to
-// change direction; it stays flipped until you flip it back.
+// Global drive direction for every point/pose movement. A persistent mode, NOT a per-move argument: no movement ever resets it, including clearAllValues().
 extern bool   backward;
 
 // -------- Reset: zeroes all motion state + clears every PID --------
 void clearAllValues();
 
 // -------- Output pipeline --------
-// blendOutputs: cosine scaling + turn-priority → writes leftOut/rightOut.
-// governOutputs: per-side slew, ratio-preserving max cap, per-side min floor.
-void blendOutputs(BlendSettings bs);
-void governOutputs();
+void blendOutputs(BlendSettings bs);   // cosine scaling + turn priority → leftOut/rightOut
+void governOutputs();                  // per-side slew, ratio-preserving max cap, per-side min floor
 
 // -------- Heading-error resolvers (choose a turn direction) --------
 double resolveTurnDirection(double wrapped, double positive, double negative, int& direction);
-double resolveHeadingTarget(double heading, bool backward, int& direction);
+double resolveHeadingTarget(double heading, int& direction);
 
 // -------- Boomerang lead-point math --------
 struct BoomParams {

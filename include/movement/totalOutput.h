@@ -1,7 +1,6 @@
 #pragma once
 
-//Stage 2 of output governance — applied to combined left/right power AFTER blending drive + turn.
-//Same four fields as the per-PID governors. See "Output Governors — spec" in the notebook.
+//Stage 2 of output governance — applied to combined left/right power AFTER blending drive + turn. Same four fields as the per-PID governors.
 struct TotalOutput {
     double minOutput    = 0;     // floor when nonzero (overcome static friction), volts
     double maxOutput    = 12.0;  // hard cap on motor output (volts)
@@ -11,7 +10,5 @@ struct TotalOutput {
 
 extern TotalOutput totalOutput;
 
-//Applies all four total-output governors to leftOut/rightOut globals.
-//Slew is per-side. Max cap is proportional (ratio-preserving). Min floor is per-side.
-//Reads lastLeftOut/lastRightOut globals (must persist across loop iterations) and totalOutput.
+//Applies all four governors to leftOut/rightOut: slew per-side, max cap proportional (ratio-preserving), min floor per-side.
 void governOutputs();

@@ -11,6 +11,7 @@
 #include "movement/pid.h"
 #include "movement/totalOutput.h"
 #include "movement/odometry.h"
+#include "ramsete/ramseteController.h"   // ramsete.kLat, for the header
 
 #include <cstdio>
 #include <cstdarg>
@@ -22,9 +23,10 @@ extern double turnDisableLength;        // moveTo heading-disable radius (header
 namespace debugger {
 
 // ---- Capacity (tune if your autons are longer; ~10ms/tick) ----
-static const int TICK_CAP = 4000;   // 40 s of ticks
-static const int MOVE_CAP = 96;
-static const int WALL_CAP = 64;
+static const int TICK_CAP  = 4000;   // 40 s of ticks
+static const int MOVE_CAP  = 96;
+static const int WALL_CAP  = 64;
+static const int SCHED_CAP = 2000;   // baked rows, pooled across every trajectory
 
 // Console dump is repeated this many times: the 1st copy is mangled when VEXcode
 // (re)opens the USB port mid-stream; the rest stream clean once it's connected.
@@ -55,6 +57,19 @@ struct Mv {
     PID*         drivePidPtr;
     PID*         turnPidPtr;
     float        leftVolts, rightVolts;  // voldrive only
+    // slice of the schedule pool this movement's baked rows occupy (0 rows = not
+    // a trajectory, or the pool was already full)
+    int          schedFirst, schedLen;
+};
+
+// One baked row, straight off TrajPoint. Kept apart from the tick stream because
+// it is the PLAN: sampled by arc, not by time, and it exists in full before the
+// first tick runs.
+struct Sched {
+    uint16_t mi;
+    float    t;              // ms into the schedule's own clock
+    float    x, y, h;
+    float    v, w;           // in/s (signed) and deg/s
 };
 
 struct Tk {
@@ -66,6 +81,12 @@ struct Tk {
     float    yi, xi;
     float    driveI, driveD, turnI, turnD;
     float    carrotX, carrotY, ghostX, ghostY, arcRadius, maxSlip, leadRet, perp;
+    float    xt;          // ramsete.moveTo cross-track error (in)
+    float    refX, refY, refH;  // where the trajectory said to be this tick
+    float    cmdV, cmdW;        // what the law asked the velocity layer for
+    float    errFwd, errCross, errHead;  // robot-frame gap to the reference
+    float    clockRate;         // the adaptive clock's throttle on reference time
+    float    v, w;        // measured chassis speed: in/s and deg/s
     float    bat, mtemp;  // battery % + drive-motor temp average (°C), per tick
 };
 
@@ -82,22 +103,31 @@ static bool     muted     = false;
 static int      moveCount = 0;
 static int      tickCount = 0;
 static int      wallCount = 0;
+static int      schedCount = 0;
 static int      curMi     = -1;
 static uint32_t startMs   = 0;
 
-static Mv   moves[MOVE_CAP];
-static Tk   ticks[TICK_CAP];
-static Wall walls[WALL_CAP];
+static Mv    moves[MOVE_CAP];
+static Tk    ticks[TICK_CAP];
+static Wall  walls[WALL_CAP];
+static Sched scheds[SCHED_CAP];
 
 static char autonName[40] = "auton";
 static float startPoseX = 0, startPoseY = 0, startPoseH = 0;
 static float batteryPct = -1, batteryVolts = 0;  // snapshot at start(); -1 = never armed
 
-// Overlay telemetry published by boomerang, consumed by the next tick().
+// Overlay telemetry published by boomerang / ramsete.moveTo, consumed by the
+// next tick().
 struct Pending {
     bool  set = false;
     float carrotX = 0, carrotY = 0, ghostX = 0, ghostY = 0;
     float leadRet = 0, maxSlip = 0;
+    float crossTrack = 0;
+    float refX = 0, refY = 0, refH = 0;   // trajectory reference pose
+    bool  refSet = false;
+    float cmdV = 0, cmdW = 0;
+    float errFwd = 0, errCross = 0, errHead = 0;
+    float clockRate = 0;
     int   stage = -1;  // -1 = use default staging
 };
 static Pending pending;
@@ -152,7 +182,7 @@ static Mv& newMove(const char* type, Kind kind) {
 static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
     m.exTimeout = ec.t;
     m.settleD   = ec.v;
-    m.exDist    = ec.settleGate;  // settle activation radius
+    m.exDist    = ec.settleWithin;  // settle activation radius
     m.exPerp    = ec.d;           // cross line offset toward the robot (perp-line exit)
     if (ec.d != -1)      m.exReason = "perpLine";
     else if (ec.v != -1) m.exReason = "settle";
@@ -163,7 +193,7 @@ static void copyLateralEC(Mv& m, const LateralExitConditions& ec) {
 static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
     m.exTimeout = ec.t;
     m.settleD   = ec.v;
-    m.exDist    = ec.settleGate;  // settle activation zone — DEGREES on a turn
+    m.exDist    = ec.settleWithin;  // settle activation zone — DEGREES on a turn
     m.exAng     = ec.d;           // ungated "close enough" angle exit
     // settle's zone is normally the wider of the two, so it trips first
     if (ec.v != -1)      m.exReason = "settle";
@@ -175,7 +205,7 @@ static void copyTurnEC(Mv& m, const TurnExitConditions& ec) {
 // Lifecycle
 // =========================================================================
 void start(const char* name) {
-    moveCount = tickCount = wallCount = 0;
+    moveCount = tickCount = wallCount = schedCount = 0;
     pidSnapCount = 0;
     curMi = -1;
     startMs = nowMs();
@@ -221,11 +251,13 @@ void moveStraight(const char* type, double distance, double heading, const Later
     copyLateralEC(m, ec);
 }
 
-void movePoint(const char* type, double tx, double ty, const LateralExitConditions& ec, bool backward) {
+void movePoint(const char* type, double tx, double ty, const LateralExitConditions& ec, bool backward,
+               bool cosineScaling) {
     Mv& m = newMove(type, K_POINT);
     m.targetX     = tx;
     m.targetY     = ty;
     m.backwards   = backward ? 1 : 0;
+    m.cosineScaling = cosineScaling;
     m.drivePidPtr = &drivePID;
     m.turnPidPtr  = &headingPID;
     copyLateralEC(m, ec);
@@ -253,6 +285,36 @@ void moveVoltage(double left, double right) {
     m.leftVolts  = left;
     m.rightVolts = right;
     m.exReason   = "duration";
+}
+
+void movementExit(const char* reason) {
+    if (!capturing || curMi < 0 || !reason) return;
+    moves[curMi].exReason = reason;
+}
+
+void trajectorySchedule(const std::vector<TrajPoint>& traj) {
+    if (!capturing || curMi < 0) return;
+
+    // All or nothing: half a schedule would draw as a path that stops in the
+    // middle of the field, which is exactly the lie this section exists to stop
+    // telling. Out of room, the app falls back to the per-tick reference trail.
+    int rows = (int) traj.size();
+    if (rows < 2 || schedCount + rows > SCHED_CAP) return;
+
+    Mv& m = moves[curMi];
+    m.schedFirst = schedCount;
+    m.schedLen   = rows;
+
+    for (int i = 0; i < rows; i++) {
+        Sched& s = scheds[schedCount++];
+        s.mi = (uint16_t) curMi;
+        s.t  = (float) (traj[i].t * 1000.0);   // ms, like every other section
+        s.x  = (float) traj[i].x;
+        s.y  = (float) traj[i].y;
+        s.h  = (float) traj[i].heading;
+        s.v  = (float) traj[i].v;
+        s.w  = (float) traj[i].ω;
+    }
 }
 
 // =========================================================================
@@ -298,10 +360,30 @@ void tick() {
         t.turnD = m.turnPidPtr->derivative;
     }
 
-    // overlay telemetry (boomerang carrot/ghost/slip)
+    // overlay telemetry (boomerang carrot/ghost/slip, moveTo cross-track)
     t.carrotX = pending.carrotX;  t.carrotY = pending.carrotY;
     t.ghostX = pending.ghostX;    t.ghostY = pending.ghostY;
     t.leadRet = pending.leadRet;  t.maxSlip = pending.maxSlip;
+    t.xt = pending.crossTrack;
+    t.refX = pending.refX;  t.refY = pending.refY;  t.refH = pending.refH;
+    t.cmdV = pending.cmdV;  t.cmdW = pending.cmdW;
+
+    // The stop command after the follow loop ticks too, and no probe ran behind
+    // it — so the reference pose would read (0, 0, 0) and drag the drawn
+    // reference path back to the field origin. Hold the last one instead. The
+    // commands and errors below it stay zero, which is the truth on a stop tick.
+    if (not pending.refSet and tickCount > 1 and ticks[tickCount - 2].mi == curMi) {
+        const Tk& prev = ticks[tickCount - 2];
+        t.refX = prev.refX;  t.refY = prev.refY;  t.refH = prev.refH;
+    }
+
+    t.errFwd = pending.errFwd;  t.errCross = pending.errCross;  t.errHead = pending.errHead;
+    t.clockRate = pending.clockRate;
+
+    // What the velocity layer is actually being asked to realize. ω is stored in
+    // deg/s, the unit omegaController is scaled to and the tuner logs.
+    t.v = (float) chassis.v;
+    t.w = (float) TO_DEG(chassis.ω);
 
     // stage
     if (pending.stage >= 0)              t.stage = (uint8_t) pending.stage;
@@ -331,6 +413,23 @@ void samplePID(const PID* pid, double integral, double kP, double kI, double kD)
 // =========================================================================
 // Overlay telemetry probes
 // =========================================================================
+void probeTrajectory() {
+    if (!capturing) return;
+    const RamseteTelemetry& tm = ramsete.telemetry;
+
+    pending.set       = true;
+    pending.refSet    = true;
+    pending.refX      = (float) tm.refX;
+    pending.refY      = (float) tm.refY;
+    pending.refH      = (float) tm.refHeading;
+    pending.cmdV      = (float) tm.cmdV;
+    pending.cmdW      = (float) tm.cmdω;
+    pending.errFwd    = (float) tm.errX;
+    pending.errCross  = (float) tm.errY;
+    pending.errHead   = (float) tm.errHeading;
+    pending.clockRate = (float) tm.clockRate;
+}
+
 void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY,
                     double leadRetraction, double maxSlip, int stage) {
     if (!capturing) return;
@@ -338,6 +437,11 @@ void probeBoomerang(double carrotX, double carrotY, double ghostX, double ghostY
     pending.ghostX = ghostX;    pending.ghostY = ghostY;
     pending.leadRet = leadRetraction;  pending.maxSlip = maxSlip;
     pending.stage = stage;  pending.set = true;
+}
+
+void probeRamseteMove(double crossTrack) {
+    if (!capturing) return;
+    pending.crossTrack = crossTrack;  pending.set = true;
 }
 
 // =========================================================================
@@ -398,11 +502,23 @@ static void emitf(const char* fmt, ...) {
 static void dumpTrace() {
     emit("#LUCASLIB_TRACE v1");
     emitf("#auton_name=%s", autonName);
+
+    // The brain has a real-time clock, so a trace says when it was taken. The
+    // struct reports the year as an offset from 1980 on some firmware and in
+    // full on others, so normalize. Unknown #keys are ignored by the importer.
+    struct date d;
+    struct time tm;
+    vexGetdate(&d);
+    vexGettime(&tm);
+    int year = d.da_year < 1980 ? d.da_year + 1980 : d.da_year;
+    emitf("#timestamp=%04d-%02d-%02d %02d:%02d:%02d",
+          year, d.da_mon, d.da_day, tm.ti_hour, tm.ti_min, tm.ti_sec);
     emitf("#start_pose=%g,%g,%g", startPoseX, startPoseY, startPoseH);
     emitf("#battery_pct=%g", batteryPct);
     emitf("#battery_volts=%g", batteryVolts);
     emitf("#trackwidth=%g", chassis.getTrackwidth());
     emitf("#headingDisableDist=%g", turnDisableLength);
+    emitf("#kLat=%g", ramsete.kLat);
     emitf("#gov_total_min=%g", totalOutput.minOutput);
     emitf("#gov_total_max=%g", totalOutput.maxOutput);
     emitf("#gov_total_accel=%g", totalOutput.maxAccelRate);
@@ -424,7 +540,7 @@ static void dumpTrace() {
          "pathHeading,turnDisableLength,leftVolts,rightVolts");
     for (int i = 0; i < moveCount; i++) {
         Mv& m = moves[i];
-        emitf("%d,%s,%g,%g,%g,%g,%d,%d,%g,%g,0,%g,%d,%g,%g,%g,%g,%g,%s,%u,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%d,%s,%g,%g,%g,%g,%d,%d,%g,%g,0,%g,%d,%g,%g,%g,%g,%g,%g,%s,%u,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             m.index, m.type, m.targetX, m.targetY, m.targetH, m.distance, m.backwards, m.direction,
             m.partiality, m.dLead, m.heading, m.cosineScaling ? 1 : 0, m.turnPriority,
             m.exTimeout, m.settleD, m.exDist, m.exPerp, m.exAng, m.exReason, m.startTime, m.endTime,
@@ -432,17 +548,31 @@ static void dumpTrace() {
             m.turnDisable, m.leftVolts, m.rightVolts);
     }
 
+    // The plan, per trajectory movement: every baked row, in order. Rows are
+    // ProfileConfig.dt apart on the CLOCK, so they crowd up in distance where the
+    // profile is slow — that cadence is the schedule's own, not a resampling of it.
+    emit("");
+    emit("[SCHEDULE]");
+    emit("mi,t,x,y,heading,v,w");
+    for (int i = 0; i < schedCount; i++) {
+        Sched& s = scheds[i];
+        emitf("%u,%g,%g,%g,%g,%g,%g", (unsigned) s.mi, s.t, s.x, s.y, s.h, s.v, s.w);
+    }
+
     emit("");
     emit("[TICKS]");
     emit("t,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,"
-         "driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp");
+         "driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,xt,"
+         "refX,refY,refH,cmdV,cmdW,errFwd,errCross,errHead,clockRate,v,w,bat,mtemp");
     for (int i = 0; i < tickCount; i++) {
         Tk& t = ticks[i];
-        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             t.t, (unsigned) t.mi, t.x, t.y, t.h, (unsigned) t.stage, t.le, t.he, t.dp, t.hp, t.tp, t.sp,
             t.driveO, t.turnO, t.lo, t.ro, t.yi, t.xi, t.leadRet, t.perp,
             t.driveI, t.driveD, t.turnI, t.turnD,
-            t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip, t.bat, t.mtemp);
+            t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip, t.xt,
+            t.refX, t.refY, t.refH, t.cmdV, t.cmdW, t.errFwd, t.errCross, t.errHead,
+            t.clockRate, t.v, t.w, t.bat, t.mtemp);
     }
 
     emit("");
@@ -465,7 +595,7 @@ static void dumpTrace() {
 // Pick a value that lands after your auton finishes but before the period ends.
 // Then every line is written to the serial FIFO with retry-on-full so nothing
 // drops; each carries the marker prefix.
-void stop(double minSecondsSinceStart) {
+static void stopToConsole(double minSecondsSinceStart = 3.0) {
     if (!capturing) return;
     capturing = false;
 
@@ -492,12 +622,30 @@ void stop(double minSecondsSinceStart) {
     muted = false;
 }
 
-// SD-card dump: writes the trace to a file on the microSD (no console, no
-// scrambling, no throttle). Falls back to the console dump if the card is
-// missing. Pull the card / read the file and import it into the app.
-void stop(const char* filename) {
+// The only way out. The file is named for whatever start() was given, with a
+// number appended if that name is taken, so a rerun never clobbers the trace
+// you just collected.
+void stop() {
     if (!capturing) return;
     capturing = false;
+
+    // The name is user text, so anything FAT might choke on is folded to an underscore.
+    char base[48];
+    size_t j = 0;
+    for (size_t i = 0; autonName[i] && j < sizeof(base) - 1; i++) {
+        char c  = autonName[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '_' || c == '-';
+        base[j++] = ok ? c : '_';
+    }
+    if (j == 0) base[j++] = 't';   // never produce a bare ".txt"
+    base[j] = '\0';
+
+    char filename[56];
+    snprintf(filename, sizeof filename, "%s.txt", base);
+    for (int n = 2; n < 100 && Brain.SDcard.exists(filename); n++) {
+        snprintf(filename, sizeof filename, "%s%d.txt", base, n);
+    }
 
     FILE* f = fopen(filename, "w");
     if (!f) {
@@ -505,7 +653,7 @@ void stop(const char* filename) {
         Brain.Screen.clearScreen();
         Brain.Screen.printAt(10, 30, "No SD card - dumping to console");
         capturing = true;  // re-arm so the console path runs
-        stop();
+        stopToConsole();
         return;
     }
     outFile = f;
@@ -513,9 +661,6 @@ void stop(const char* filename) {
     fclose(f);
     outFile = nullptr;
 
-    // Confirm on the brain screen — no terminal involved on this path.
-    // (printAt's format overload needs the explicit opaque flag to disambiguate
-    // from the bool overload, since a string literal converts to bool.)
     Brain.Screen.clearScreen();
     Brain.Screen.printAt(10, 30, false, "Saved %s", filename);
     Brain.Screen.printAt(10, 60, false, "%d ticks / %d movements", tickCount, moveCount);

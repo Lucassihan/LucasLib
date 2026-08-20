@@ -4,12 +4,14 @@
   import Waypoint from './Waypoint.svelte';
   import TurnOverlay from './TurnOverlay.svelte';
   import BoomerangOverlay from './BoomerangOverlay.svelte';
+  import TrajectoryOverlay from './TrajectoryOverlay.svelte';
+  import RamseteMoveOverlay from './RamseteMoveOverlay.svelte';
   import BatteryDots from './BatteryDots.svelte';
   import MotorTempBadge from './MotorTempBadge.svelte';
   import { untrack } from 'svelte';
   import { settings, holesToInches } from '$lib/stores/settings.svelte';
   import { traceState, poseAt, poseAtIn, tickAt, clearGhost, movementEndHeading } from '$lib/stores/trace.svelte';
-  import { endsAtTarget, isTurn, prettyMovement, movementColor } from '$lib/trace/labels';
+  import { endsAtTarget, isTurn, isRamseteMove, isTrajectory, prettyMovement, movementColor } from '$lib/trace/labels';
   import { toScreen } from '$lib/field/coords';
   import { backdropSrc, fieldImageRect } from '$lib/field/backdrops';
   import { base } from '$app/paths';
@@ -18,12 +20,12 @@
   // VEX field: 144" × 144", 24" foam tiles (6 × 6 grid).
   const SIZE = 144;
 
-  // Distance-based "close" stage zone radius. Only moveTo / boomerang flip a
-  // stage purely on distance to target (headingDisableDist); other movements
-  // have no distance-based stage, so no circle.
+  // Distance-based "close" stage zone radius. Only moveTo / ramsete.moveTo /
+  // boomerang flip a stage purely on distance to target (headingDisableDist);
+  // other movements have no distance-based stage, so no circle.
   const hdd = $derived(traceState.trace.header.headingDisableDist || 6);
   function stageRadius(m: Movement): number {
-    return m.type === 'moveTo' || m.type === 'boomerangTo' ? hdd : 0;
+    return m.type === 'moveTo' || m.type === 'boomerangTo' || isRamseteMove(m.type) ? hdd : 0;
   }
 
   // Robot pose tracks the scrubber position over the loaded trace.
@@ -257,6 +259,14 @@
         />
       {/if}
 
+      <!-- the schedule's planned + served reference curves, UNDER the driven
+           path: the plan is the backdrop, the run is the subject -->
+      {#each traceState.trace.movements as m (m.index)}
+        {#if isTrajectory(m.type)}
+          <TrajectoryOverlay movement={m} layer="paths" />
+        {/if}
+      {/each}
+
       <!-- actual (odometry) path, colored by movement -->
       <Path ticks={traceState.trace.ticks} movements={traceState.trace.movements} />
 
@@ -271,6 +281,20 @@
       {#each traceState.trace.movements as m (m.index)}
         {#if m.type === 'boomerangTo'}
           <BoomerangOverlay movement={m} />
+        {/if}
+      {/each}
+
+      <!-- the reference pose itself stays on top, where it can be read -->
+      {#each traceState.trace.movements as m (m.index)}
+        {#if isTrajectory(m.type)}
+          <TrajectoryOverlay movement={m} layer="ghost" />
+        {/if}
+      {/each}
+
+      <!-- point-chase geometry for the ramsete.moveTo under the scrubber -->
+      {#each traceState.trace.movements as m (m.index)}
+        {#if isRamseteMove(m.type)}
+          <RamseteMoveOverlay movement={m} />
         {/if}
       {/each}
 

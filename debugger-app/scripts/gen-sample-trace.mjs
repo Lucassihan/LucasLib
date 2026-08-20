@@ -24,6 +24,7 @@ const clamp = (v, m) => Math.max(-m, Math.min(m, v));
 const noise = (amp) => (Math.random() * 2 - 1) * amp;
 const D2R = Math.PI / 180;
 const sign = (x) => (x < 0 ? -1 : 1);
+const sincFn = (x) => (Math.abs(x) < 1e-3 ? 1 - (x * x) / 6 : Math.sin(x) / x);
 
 // Unicycle (differential-drive) model: the robot can only translate along its
 // own heading and rotate — no sideways motion. Lateral moves are simulated as a
@@ -55,7 +56,7 @@ function governSide(raw, last) {
 }
 
 // Build one auton trace. Returns { name, text }.
-function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, battery = { pct: 100, volts: 13.1 }, motorTemp = { start: 32, rise: 0.25 }, segments }) {
+function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kLat = 0.02, battery = { pct: 100, volts: 13.1 }, motorTemp = { start: 32, rise: 0.25 }, segments }) {
   const movements = [];
   const ticks = [];
   const readWalls = [];
@@ -73,7 +74,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
     const v = {
       le: 0, he: 0, dp: 0, hp: 0, tp: 0, sp: 0, do: 0, to: 0, lo: 0, ro: 0,
       yi: 0, xi: 0, leadX: 0, leadY: 0, leadRetraction: 0, perpDist: 0,
-      carrotX: 0, carrotY: 0, ghostX: 0, ghostY: 0, arcRadius: 0, maxSlip: 0,
+      carrotX: 0, carrotY: 0, ghostX: 0, ghostY: 0, arcRadius: 0, maxSlip: 0, xt: 0,
       ...f
     };
     if (mi !== pid.mi) {
@@ -115,7 +116,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
       r(v.do), r(v.to), r(glo), r(gro), r(v.yi), r(v.xi),
       r(v.leadX), r(v.leadY), r(v.leadRetraction), r(v.perpDist),
       r(driveI), r(driveD), r(turnI), r(turnD),
-      r(v.carrotX), r(v.carrotY), r(v.ghostX), r(v.ghostY), r(v.arcRadius), r(v.maxSlip),
+      r(v.carrotX), r(v.carrotY), r(v.ghostX), r(v.ghostY), r(v.arcRadius), r(v.maxSlip), r(v.xt),
       bat, r(tempSum / 6)
     ]);
   }
@@ -250,6 +251,90 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
     }
     movements.push(mvRow({
       index: mi, type: 'moveTo', targetX, targetY,
+      exitDist, exitReason: 'settle', settleD: 10,
+      startTime: startT, endTime: t,
+      driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
+    }));
+    mi++;
+  }
+
+  // ramsete.moveTo — the lyapunov point movement (src/ramsete/moveTo.cpp).
+  //
+  // Same two stages as moveTo above, but the steering carries a second term:
+  // kLat·v·sinc(eθ)·e_y, where e_y = distance·sin(eθ) is the target's offset
+  // from the direction of travel. The term is ADDED to headingPID (lyPose
+  // subtracted its own), it multiplies drivePow — the already-cosine-scaled
+  // command, signed, not |cos| — and it dies at the FAR/CLOSE boundary.
+  //
+  // blendOutputs runs with cosine off in this movement because the cosine is
+  // already inside dp, so `do` equals `dp` here rather than being scaled again.
+  function ramseteMoveTo(targetX, targetY, opts = {}) {
+    const startT = t;
+    const exitDist = opts.exitDist ?? 3;
+    const hdd = opts.hdd ?? headingDisableDist;
+    const maxSteps = Math.round((opts.maxMs ?? 4000) / TICK);
+    let close = false, steps = 0;
+    let heldH = 0, straightDist = 0, trackX = 0, trackY = 0;
+
+    while (steps < maxSteps) {
+      const dx = targetX - pose.x, dy = targetY - pose.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < exitDist) break;
+
+      // MoveToError, rebuilt every tick off the live bearing
+      const travel = (Math.atan2(dx, dy) * 180) / Math.PI;
+      const eTheta = wrap(travel - pose.h);
+      const eY = dist * Math.sin(eTheta * D2R);
+
+      let le, he, stage = 0;
+      if (!close) {
+        he = eTheta;
+        le = dist;
+        if (dist < hdd) {
+          close = true;
+          heldH = pose.h;
+          straightDist = le;
+          trackX = pose.x;
+          trackY = pose.y;
+        }
+      }
+      if (close) {
+        stage = 1;
+        he = wrap(heldH - pose.h);
+        const hr = heldH * D2R;
+        const traveled = (pose.x - trackX) * Math.sin(hr) + (pose.y - trackY) * Math.cos(hr);
+        le = straightDist - traveled;
+      }
+
+      const dp = Math.cos(he * D2R) * clamp(le * 0.45, 12);
+      let hp = clamp(he * 0.8, 12);
+      if (!close) hp += kLat * dp * sincFn(eTheta * D2R) * eY;
+
+      // the law mixes its own left/right — no second cosine, no turn priority
+      const v = (dp / 12) * MAXV;
+      const w = (hp / 12) * MAXW;
+      pose.h += w * DT + noise(0.04);
+      const hr = pose.h * D2R;
+      pose.x += v * Math.sin(hr) * DT + noise(0.02);
+      pose.y += v * Math.cos(hr) * DT + noise(0.02);
+      const dsv = Math.abs(v * DT);
+      const dthr = Math.abs(w * DT * D2R);
+      let arcRadius = 1e4;
+      if (dthr > 1e-5 && dsv > 1e-6) arcRadius = dsv / dthr;
+      lastArcRadius = arcRadius;
+
+      tick(stage, {
+        le, he, dp, hp, do: dp, to: hp, lo: dp + hp, ro: dp - hp,
+        xt: eY, arcRadius
+      });
+      t += TICK;
+      steps++;
+    }
+
+    movements.push(mvRow({
+      index: mi, type: 'ramsete.moveTo', targetX, targetY,
+      // the cosine is already inside dp, so blendOutputs gets it OFF
+      cosineScaling: 0,
       exitDist, exitReason: 'settle', settleD: 10,
       startTime: startT, endTime: t,
       driveKp: 0.45, driveKi: 0.01, driveKd: 0.1, turnKp: 0.8, turnKd: 0.05
@@ -444,13 +529,13 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
   }
 
   // Run segments
-  for (const seg of segments) seg({ face, drive, moveTo, boomerangTo, swing, voldrive, note });
+  for (const seg of segments) seg({ face, drive, moveTo, ramseteMoveTo, boomerangTo, swing, voldrive, note });
 
   // Assemble trace text
   const COLS_M =
     'index,type,targetX,targetY,targetH,distance,backwards,direction,partiality,dLead,n,heading,cosineScaling,turnPriority,exitTimeout,settleD,exitDist,exitPerpLine,exitAng,exitReason,startTime,endTime,driveKp,driveKi,driveKd,turnKp,turnKi,turnKd,gLead,leadChasePowerLimit,pathHeading,turnDisableLength,leftVolts,rightVolts';
   const COLS_T =
-    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,bat,mtemp';
+    't,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,xt,bat,mtemp';
   const COLS_R = 't,mi,wall,sensor,preX,preY,preH,postX,postY,postH';
 
   let out = '';
@@ -461,6 +546,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
   out += `#battery_volts=${battery.volts}\n`;
   out += `#trackwidth=${trackwidth}\n`;
   out += `#headingDisableDist=${headingDisableDist}\n`;
+  out += `#kLat=${kLat}\n`;
   out += `#gov_total_min=${GOV.total.min}\n#gov_total_max=${GOV.total.max}\n#gov_total_accel=${GOV.total.accel}\n#gov_total_decel=${GOV.total.decel}\n`;
   out += `#gov_drive_min=${GOV.drive.min}\n#gov_drive_max=${GOV.drive.max}\n#gov_drive_accel=${GOV.drive.accel}\n#gov_drive_decel=${GOV.drive.decel}\n`;
   out += `#gov_turn_min=${GOV.turn.min}\n#gov_turn_max=${GOV.turn.max}\n#gov_turn_accel=${GOV.turn.accel}\n#gov_turn_decel=${GOV.turn.decel}\n\n`;
@@ -478,7 +564,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, ba
 
 const autons = [];
 
-// 1. The original demo: face + drive + boomerang + moveTo
+// 1. The original demo: face + drive + boomerang + moveTo + ramsete.moveTo
 autons.push(buildAuton({
   name: 'sample_demo',
   start: { x: -48, y: -48, h: 0 },
@@ -489,6 +575,9 @@ autons.push(buildAuton({
     ({ drive }) => drive(72),
     ({ boomerangTo }) => boomerangTo(48, 36, 0, { gLead: 0.35, leadChasePowerLimit: 2 }),
     ({ moveTo }) => moveTo(0, 12),
+    // entered with a large bearing gap, so the cross-track term has something
+    // to bend against before the CLOSE stage switches it off
+    ({ ramseteMoveTo }) => ramseteMoveTo(-36, 24),
     // open-loop curve: voldrive(6,3) for 900 ms — left faster than right, so it
     // arcs clockwise with no PID/exit, running purely on the caller's delay
     ({ voldrive }) => voldrive(6, 3, 900)

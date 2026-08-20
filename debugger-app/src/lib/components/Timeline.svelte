@@ -1,10 +1,37 @@
 <script lang="ts">
   import { traceState, movementAt, togglePlay } from '$lib/stores/trace.svelte';
-  import { prettyMovement, movementColor } from '$lib/trace/labels';
+  import { prettyMovement, movementColor, isTrajectory, isRamseteMove } from '$lib/trace/labels';
+  import { speedColor, speedRange } from '$lib/trace/speedRamp';
+  import type { Movement } from '$lib/trace/types';
 
   const duration = $derived(traceState.trace.duration || 1);
   const movements = $derived(traceState.trace.movements);
   const notes = $derived(traceState.trace.notes ?? []);
+
+  // A RAMSETE movement's driven path is colored by measured speed on the field,
+  // so its timeline segment carries the same ramp — the bar reads as a speed
+  // trace of the run, and a slow patch on the field is findable in time.
+  // Sampled rather than one stop per tick: a 600-tick movement would otherwise
+  // build a 600-stop gradient string on every render.
+  const SEG_STOPS = 40;
+
+  function segBackground(m: Movement): string {
+    if (!(isTrajectory(m.type) || isRamseteMove(m.type))) return movementColor(m.type);
+
+    const ticks = traceState.trace.ticks.filter((t) => t.mi === m.index);
+    if (ticks.length < 2) return movementColor(m.type);
+
+    const speeds = ticks.map((t) => ({ v: Math.abs(t.v) }));
+    const { lo, hi } = speedRange(speeds, 60);
+
+    const stops: string[] = [];
+    for (let i = 0; i < SEG_STOPS; i++) {
+      const u = i / (SEG_STOPS - 1);
+      const v = speeds[Math.round(u * (speeds.length - 1))].v;
+      stops.push(`${speedColor(v, lo, hi)} ${(u * 100).toFixed(1)}%`);
+    }
+    return `linear-gradient(to right, ${stops.join(', ')})`;
+  }
 
   let trackEl: HTMLElement | undefined = $state();
   let dragging = $state(false);
@@ -273,7 +300,7 @@
       {#each movements as m, i (m.index)}
         <div
           class="seg"
-          style="left: {pct(m.startTime)}%; width: {pct(m.endTime - m.startTime)}%; background: {movementColor(m.type)}"
+          style="left: {pct(m.startTime)}%; width: {pct(m.endTime - m.startTime)}%; background: {segBackground(m)}"
         ></div>
         {#if i > 0}
           <div class="marker" style="left: {pct(m.startTime)}%"></div>

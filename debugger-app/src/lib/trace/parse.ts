@@ -4,7 +4,15 @@
 // sections, each a CSV with a header row. Columns are read by NAME, so column
 // order and future additions don't break parsing.
 
-import type { Trace, TraceHeader, Movement, Tick, ReadWall, TraceNote } from './types';
+import type {
+  Trace,
+  TraceHeader,
+  Movement,
+  Tick,
+  ReadWall,
+  TraceNote,
+  ScheduleRow
+} from './types';
 
 type Row = Record<string, string>;
 
@@ -110,6 +118,9 @@ function parseHeader(headerLines: string[]): TraceHeader {
     batteryVolts: Number(kv['battery_volts'] ?? 0),
     trackwidth: Number(kv['trackwidth'] ?? 0),
     headingDisableDist: Number(kv['headingDisableDist'] ?? 6),
+    // -1, not the library default: a guessed constant would render as a real
+    // coupling term in the readout.
+    kLat: kv['kLat'] !== undefined ? Number(kv['kLat']) : -1,
     govern: {
       total: gov('total', 12),
       drive: gov('drive', 12),
@@ -201,8 +212,21 @@ function parseTicks(rows: Row[]): Tick[] {
     carrotY: num(r, 'carrotY'),
     ghostX: num(r, 'ghostX'),
     ghostY: num(r, 'ghostY'),
+    // absent from traces taken before these columns existed; num() gives 0
+    refX: num(r, 'refX'),
+    refY: num(r, 'refY'),
+    refH: num(r, 'refH'),
+    cmdV: num(r, 'cmdV'),
+    cmdW: num(r, 'cmdW'),
+    errFwd: num(r, 'errFwd'),
+    errCross: num(r, 'errCross'),
+    errHead: num(r, 'errHead'),
+    clockRate: num(r, 'clockRate'),
+    v: num(r, 'v'),
+    w: num(r, 'w'),
     arcRadius: num(r, 'arcRadius'),
     maxSlip: num(r, 'maxSlip'),
+    crossTrack: r['xt'] !== undefined ? num(r, 'xt') : Number.NaN,
     driveI: num(r, 'driveI'),
     driveD: num(r, 'driveD'),
     turnI: num(r, 'turnI'),
@@ -233,6 +257,25 @@ function parseNotes(lines: string[] | undefined): TraceNote[] {
   return notes.sort((a, b) => a.t - b.t);
 }
 
+// [SCHEDULE] rows are one flat list for the whole run, tagged with the movement
+// they belong to, so they bucket by `mi`. Row order inside a bucket is the
+// schedule's order and is preserved.
+function parseSchedules(rows: Row[]): Record<number, ScheduleRow[]> {
+  const out: Record<number, ScheduleRow[]> = {};
+  for (const r of rows) {
+    const mi = num(r, 'mi');
+    (out[mi] ??= []).push({
+      t: num(r, 't'),
+      x: num(r, 'x'),
+      y: num(r, 'y'),
+      h: num(r, 'heading'),
+      v: num(r, 'v'),
+      w: num(r, 'w')
+    });
+  }
+  return out;
+}
+
 function parseReadWalls(rows: Row[]): ReadWall[] {
   return rows.map((r) => ({
     t: num(r, 't'),
@@ -255,8 +298,9 @@ export function parseTrace(text: string): Trace {
   const ticks = parseTicks(toRows(sections['TICKS']));
   const readWalls = parseReadWalls(toRows(sections['READWALLS']));
   const notes = parseNotes(sections['NOTES']);
+  const schedules = parseSchedules(toRows(sections['SCHEDULE']));
 
   const duration = ticks.length ? ticks[ticks.length - 1].t : 0;
 
-  return { header, movements, ticks, readWalls, notes, duration };
+  return { header, movements, ticks, readWalls, notes, schedules, duration };
 }

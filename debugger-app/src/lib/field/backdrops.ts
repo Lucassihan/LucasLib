@@ -11,11 +11,12 @@ export interface GameSpec {
   label: string; // display name, e.g. 'Override'
 }
 
-// Newest season first. Add a game here + drop its four PNGs in static/field/.
+// This is the order the settings picker lists them in. Add a game here + drop
+// its four PNGs in static/field/.
 export const GAMES: GameSpec[] = [
+  { key: 'override', label: 'Override' },
   { key: 'pushback', label: 'Push Back' },
-  { key: 'highstakes', label: 'High Stakes' },
-  { key: 'override', label: 'Override' }
+  { key: 'highstakes', label: 'High Stakes' }
 ];
 
 export type FieldMode = 'match' | 'skills';

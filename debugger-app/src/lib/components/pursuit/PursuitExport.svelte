@@ -1,13 +1,13 @@
 <script lang="ts">
-  // Right panel — the planned-speed profile over arc length (interactive: hover
+  // Right panel — the baked speed profile over arc length (interactive: hover
   // to read (s, v), click/drag to scrub the field playhead), then the paste-ready
-  // LucasLib snippet (PathPoint[] array + the followPath call).
+  // LucasLib snippet (the BezierSegment[] + the ramsete.trajectory call).
   import { pursuit, viewOpts, playback, getPlan, exportCpp, speedColor, speedRange, planDuration } from '$lib/stores/pursuit.svelte';
-  import SavedPaths from './SavedPaths.svelte';
+  import PursuitFiles from './PursuitFiles.svelte';
 
   const plan = $derived(getPlan());
   const code = $derived(exportCpp());
-  const duration = $derived(planDuration(plan.points));
+  const duration = $derived(planDuration(plan));
 
   const UNITS: ViewUnit[] = ['in/s', 'ft/s', '%'];
   type ViewUnit = 'in/s' | 'ft/s' | '%';
@@ -17,39 +17,34 @@
     return v.toFixed(0) + ' in/s';
   }
 
-  // per-point cumulative time, aligned to plan.points, for playhead ↔ arc mapping
-  const times = $derived.by(() => {
-    const pts = plan.points;
-    const out = [0];
-    for (let i = 1; i < pts.length; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      const vAvg = Math.max(2, (pts[i].v + pts[i - 1].v) / 2);
-      out.push(out[i - 1] + ds / vAvg);
-    }
-    return out;
-  });
+  // Arc ↔ time both come straight off the baked schedule now: plan.points[i]
+  // and plan.traj[i] are the SAME row, one indexed by distance and one by the
+  // clock the follower will actually run on. No reconstruction from speeds, so
+  // the playhead can't drift away from the profile it is scrubbing.
 
   /** Arc length at playback time t. */
   function sAtT(t: number): number {
     const pts = plan.points;
+    const traj = plan.traj;
     if (pts.length < 2 || t <= 0) return 0;
     let i = 1;
-    while (i < times.length - 1 && times[i] < t) i++;
-    const t0 = times[i - 1];
-    const t1 = times[i];
+    while (i < traj.length - 1 && traj[i].t < t) i++;
+    const t0 = traj[i - 1].t;
+    const t1 = traj[i].t;
     const u = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
     return pts[i - 1].s + (pts[i].s - pts[i - 1].s) * u;
   }
   /** Playback time at arc length s. */
   function tAtS(s: number): number {
     const pts = plan.points;
+    const traj = plan.traj;
     if (pts.length < 2 || s <= 0) return 0;
     let i = 1;
     while (i < pts.length - 1 && pts[i].s < s) i++;
     const s0 = pts[i - 1].s;
     const s1 = pts[i].s;
     const u = s1 > s0 ? (s - s0) / (s1 - s0) : 0;
-    return times[i - 1] + (times[i] - times[i - 1]) * u;
+    return traj[i - 1].t + (traj[i].t - traj[i - 1].t) * u;
   }
   /** Planned speed at arc length s. */
   function vAtS(s: number): number {
@@ -161,8 +156,8 @@
         if (esc.trim().startsWith('//')) return `<span class="tk-c">${esc}</span>`;
         return esc
           .replace(/\b(static|const)\b/g, '<span class="tk-k">$1</span>')
-          .replace(/\b(std|vector|PathPoint)\b/g, '<span class="tk-t">$1</span>')
-          .replace(/\b(followPath)\b/g, '<span class="tk-f">$1</span>')
+          .replace(/\b(std|vector|BezierSegment)\b/g, '<span class="tk-t">$1</span>')
+          .replace(/\b(ramsete\.trajectory|bakeTrajectory)\b/g, '<span class="tk-f">$1</span>')
           .replace(NUM_RE, '$1<span class="tk-n">$2</span>');
       })
       .join('\n');
@@ -184,16 +179,17 @@
 </script>
 
 <div class="col">
+  <PursuitFiles />
+
   <section class="panel group">
     <div class="head-row">
       <div class="gtitle">Export</div>
-      <input class="name" type="text" bind:value={pursuit.name} spellcheck="false" aria-label="Path name" />
     </div>
 
     <div class="statgrid">
       <div class="stat"><span class="slbl">time</span><span class="sval">{duration.toFixed(1)}<span class="sunit">s</span></span></div>
       <div class="stat"><span class="slbl">length</span><span class="sval">{plan.total.toFixed(1)}<span class="sunit">in</span></span></div>
-      <div class="stat"><span class="slbl">points</span><span class="sval">{plan.points.length}</span></div>
+      <div class="stat"><span class="slbl">rows</span><span class="sval">{plan.points.length}</span></div>
     </div>
 
     <div class="vel">
@@ -250,8 +246,6 @@
     </div>
   </section>
 
-  <SavedPaths />
-
   <section class="panel group code-group">
     <div class="head-row">
       <div class="gtitle">Snippet <span class="gsub">paste into auton.cpp</span></div>
@@ -294,29 +288,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    max-width: 220px;
-    background: none;
-    border: none;
-    outline: none;
-    padding: 2px 0;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-primary);
-    text-align: right;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    transition: border-color 0.15s ease;
-  }
-  .name:hover {
-    border-bottom-color: rgba(255, 255, 255, 0.18);
-  }
-  .name:focus {
-    border-bottom-color: rgba(236, 216, 143, 0.55);
   }
 
   .statgrid {

@@ -1,0 +1,25 @@
+//!params {"name":"yyq skills 1","knobs":{"wheelRpm":450,"wheelDiameter":2.75,"robotWeight":6.25,"driveKp":2,"turnKp":0.5,"swingKp":0.5,"headingKp":0.555,"lateralMomentum":0.35,"angularMomentum":0.35,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"trackwidth":9.5,"ecLatT":5000,"ecLatV":8,"ecLatD":-1,"ecLatWithin":4,"ecTurnT":5000,"ecTurnV":0.35,"ecTurnD":-1,"ecTurnWithin":20,"rsMaxVel":55,"rsMaxAccel":90,"rsVelMargin":0.9,"rsSpacing":2,"rsEndSpeed":0,"rsKLat":0.02},"efforts":{"16":0.59},"field":"override-skills","knobsVersion":7}
+chassis.setPos(5,-61,180);
+
+//toggle
+driveForward(5);
+driveBackward(5);
+driveForward(5);
+
+backward = true;
+std::vector<BezierSegment> goal1 = {
+  {.a = {5, -65.4}, .b = {5, -53.4}, .c = {9.1, -48}, .d = {15.1, -48}}
+};
+ramsete.trajectory(goal1);
+
+backward = false;
+moveTo(6,-48);
+backward = true;
+facePoint(24,-24);
+drivePID.targetOffset = -6;
+ramsete.moveTo(24,-24);
+
+drivePID.targetOffset = -6;
+facePoint(24,-48);
+moveTo(24,-48);
+delay(300);

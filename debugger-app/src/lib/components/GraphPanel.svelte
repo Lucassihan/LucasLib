@@ -14,6 +14,7 @@
     yMax = 12,
     yTicks = [12, 6, 0, -6, -12],
     playheadT = undefined,
+    yLabel = 'V (±12)',
     accent = 'transparent',
     legend = [],
     onscrub = undefined
@@ -28,6 +29,8 @@
     yMax?: number;
     yTicks?: number[];
     playheadT?: number;
+    /** what the y-axis is measuring — volts unless the panel says otherwise */
+    yLabel?: string;
     accent?: string;
     legend?: { label: string; color: string; dashed?: boolean }[];
     /** scrub target — defaults to the replay traceState; sandbox passes its own */
@@ -48,9 +51,15 @@
   function sx(t: number): number {
     return tEnd > tStart ? ((t - tStart) / (tEnd - tStart)) * 100 : 0;
   }
+  // Pinned to the plot edge rather than allowed off it: .data is overflow-visible
+  // so an out-of-range sample would otherwise draw straight across the panels
+  // above and below. Hovering still reads the sample's true value.
   function sy(v: number): number {
-    return (1 - (v - yMin) / (yMax - yMin)) * 100;
+    const p = (1 - (v - yMin) / (yMax - yMin)) * 100;
+    return p < 0 ? 0 : p > 100 ? 100 : p;
   }
+
+  const offScale = $derived(series.some((s) => s.data.some((d) => d.v < yMin || d.v > yMax)));
   function pts(s: Series): string {
     return s.data.map((d) => `${sx(d.t).toFixed(2)},${sy(d.v).toFixed(2)}`).join(' ');
   }
@@ -124,7 +133,10 @@
 </script>
 
 <section class="panel graph" style="flex: {grow}; border: 1px solid {accent}">
-  <div class="title" class:active>{title}</div>
+  <div class="title" class:active>
+    {title}
+    {#if offScale}<span class="off-scale">off scale</span>{/if}
+  </div>
 
   {#if legend.length}
     <div class="legend">
@@ -140,7 +152,7 @@
   {/if}
 
   <div class="plot">
-    <span class="y-axis-label">V (±12)</span>
+    <span class="y-axis-label">{yLabel}</span>
 
     <div
       class="frame"
@@ -227,6 +239,14 @@
   .title.active {
     font-weight: 700;
     color: var(--text-primary);
+  }
+  .off-scale {
+    margin-left: 6px;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-ghost);
   }
 
   .legend {

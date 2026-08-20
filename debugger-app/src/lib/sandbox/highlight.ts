@@ -31,7 +31,7 @@ export interface HSpan {
 const KNOWN_FNS = new Set(
   Object.keys(FN_BY_NAME).map((k) => (k.includes('.') ? k.split('.').pop()! : k))
 );
-const TYPES = new Set(['BoomParams']);
+const TYPES = new Set(['BoomParams', 'BezierSegment', 'vector', 'std']);
 const BOOLS = new Set(['true', 'false']);
 const CONSTS = new Set(['NAN', 'msec', 'sec', 'seconds', 'chassis', 'drivePID', 'turnPID', 'headingPID', 'totalOutput', 'backward']);
 

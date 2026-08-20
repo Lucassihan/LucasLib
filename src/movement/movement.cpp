@@ -22,23 +22,20 @@ void face(double heading, TurnExitConditions ec, int direction) {
     clearAllValues();
     debugger::moveTurn("face", heading, ec);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the target, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading, false)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, direction);
 
-        //calculate turn power based on the heading error calculated above
+        //calculate turn power based on the heading error calculated above using PID
         turnPow = turnPID.calculateOutput(headingError);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
         rightOut = -turnPow;
 
-        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate constraints based on the settings in totalOutput
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
         governOutputs();
 
         //apply to the motors
@@ -50,33 +47,30 @@ void face(double heading, TurnExitConditions ec, int direction) {
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void facePoint(double x, double y, TurnExitConditions ec, int direction) {
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetX = x;
-    targetY = y;
+    target.x = x;
+    target.y = y;
     debugger::movePointTurn("facePoint", x, y, ec);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the point, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(targetX, targetY, backward)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(target.x, target.y, backward)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(chassis.angleToPoint(target.x, target.y, backward) + turnPID.targetOffset * offsetDir, direction);
 
-        //calculate turn power based on the heading error calculated above
+        //calculate turn power based on the heading error calculated above using PID
         turnPow = turnPID.calculateOutput(headingError);
 
         //distribute turn power to the left and right sides of the drive
         leftOut = turnPow;
         rightOut = -turnPow;
 
-        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate constraints based on the settings in totalOutput
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
         governOutputs();
 
         //apply to the motors
@@ -88,7 +82,7 @@ void facePoint(double x, double y, TurnExitConditions ec, int direction) {
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void facePoint(BoomParams bp, TurnExitConditions ec, int direction) {
@@ -100,32 +94,33 @@ void swingOnLeft(double heading, TurnExitConditions ec, double partiality, int d
     clearAllValues();
     debugger::moveTurn("swingOnLeft", heading, ec, partiality);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the target, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading, false)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, direction);
 
+        //calculate swing power based on the heading error calculated above using PID
         if (partiality < 0) {
             swingPow = turnPID.calculateOutput(headingError);
         } else {
             swingPow = swingPID.calculateOutput(headingError);
         }
 
+        //distribute swing power to the left and right sides of the drive
         leftOut = -swingPow * partiality;
         rightOut = -swingPow;
 
+        //apply to the motors
         voltageDrive(leftOut, rightOut, true);
 
+        //check exit conditions
         exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void swingOnRight(double heading, TurnExitConditions ec, double partiality, int direction) {
@@ -133,102 +128,105 @@ void swingOnRight(double heading, TurnExitConditions ec, double partiality, int 
     clearAllValues();
     debugger::moveTurn("swingOnRight", heading, ec, partiality);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the target, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading, false)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedHeadingError(heading)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(heading + turnPID.targetOffset * offsetDir, direction);
 
+        //calculate swing power based on the heading error calculated above using PID
         if (partiality < 0) {
             swingPow = turnPID.calculateOutput(headingError);
         } else {
             swingPow = swingPID.calculateOutput(headingError);
         }
 
+        //distribute swing power to the left and right sides of the drive
         leftOut = swingPow;
         rightOut = swingPow * partiality;
 
+        //apply to the motors
         voltageDrive(leftOut, rightOut, true);
 
+        //check exit conditions
         exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void swingOnLeftToPoint(double x, double y, TurnExitConditions ec, double partiality, int direction) {
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetX = x;
-    targetY = y;
+    target.x = x;
+    target.y = y;
     debugger::movePointTurn("swingOnLeftToPoint", x, y, ec, partiality);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the point, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(targetX, targetY, backward)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(target.x, target.y, backward)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(chassis.angleToPoint(target.x, target.y, backward) + turnPID.targetOffset * offsetDir, direction);
 
+        //calculate swing power based on the heading error calculated above using PID
         if (partiality < 0) {
             swingPow = turnPID.calculateOutput(headingError);
         } else {
             swingPow = swingPID.calculateOutput(headingError);
         }
 
+        //distribute swing power to the left and right sides of the drive
         leftOut = -swingPow * partiality;
         rightOut = -swingPow;
 
+        //apply to the motors
         voltageDrive(leftOut, rightOut);
 
+        //check exit conditions
         exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void swingOnRightToPoint(double x, double y, TurnExitConditions ec, double partiality, int direction) {
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetX = x;
-    targetY = y;
+    target.x = x;
+    target.y = y;
     debugger::movePointTurn("swingOnRightToPoint", x, y, ec, partiality);
 
-    //latch the turn direction once (forced direction, else shortest path). turnPID.targetOffset is
-    //applied along it: positive overshoots past the point, negative undershoots short of it
-    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(targetX, targetY, backward)) : direction;
+    int offsetDir = (direction == 0) ? sign(chassis.wrappedPointHeadingError(target.x, target.y, backward)) : direction;
 
     while (not exitConditionFulfilled) {
-        //live error to the target heading (base + turnPID.targetOffset along the turn direction),
-        //recomputed each loop; the offset is in the target, not the PID input, so error -> 0
-        headingError = resolveHeadingTarget(chassis.angleToPoint(targetX, targetY, backward) + turnPID.targetOffset * offsetDir, false, direction);
+        //calculate heading error
+        headingError = resolveHeadingTarget(chassis.angleToPoint(target.x, target.y, backward) + turnPID.targetOffset * offsetDir, direction);
 
+        //calculate swing power based on the heading error calculated above using PID
         if (partiality < 0) {
             swingPow = turnPID.calculateOutput(headingError);
         } else {
             swingPow = swingPID.calculateOutput(headingError);
         }
 
+        //distribute swing power to the left and right sides of the drive
         leftOut = swingPow;
         rightOut = swingPow * partiality;
 
+        //apply to the motors
         voltageDrive(leftOut, rightOut);
 
+        //check exit conditions
         exitConditionFulfilled = checkTurnExit(ec, startTime);
 
         delay(10);
     }
     turnPID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -240,82 +238,117 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, double parti
 //  |______/_/    \_\_|  |______|_|  \_\/_/    \_\______| |_|  |_|\____/   \/   |______|_|  |_|______|_| \_|  |_| |_____/ 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////        
 
-void drive(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
+void driveForward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetH = heading;
-    debugger::moveStraight("drive", distance, heading, ec, distance < 0);
-
-    double target = distance + drivePID.targetOffset * sign(distance);
+    target.h = heading;
+    debugger::moveStraight("driveForward", distance, heading, ec, false);
 
     while (not exitConditionFulfilled) {
-        lateralError = target - chassis.yInchesTracked;
+        //calculate lateral error
+        lateralError = distance - chassis.yInchesTracked + drivePID.targetOffset;
 
-        headingError = chassis.wrappedHeadingError(targetH, false);
+        //calculate heading error
+        headingError = chassis.wrappedHeadingError(target.h);
 
+        //calculate drive and turn power based on the errors calculated above using PID
         drivePow   = drivePID.calculateOutput(lateralError);
         headingPow = headingPID.calculateOutput(headingError);
 
-        //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
+        //distribute drive and turn power to the left and right sides of the drive
         blendOutputs(bs);
 
-        //enforce output constraints (slew, ratio-preserving max cap, min floor)
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
         governOutputs();
 
         //apply to the motors
         voltageDrive(leftOut, rightOut);
 
-        //check exit conditions. There is no point target on a relative drive, so
-        //ec.d is a plain remaining-distance tolerance here rather than a cross line.
+        //check exit conditions
         exitConditionFulfilled = checkLateralExit(ec, startTime, false)
                                  or fabs(lateralError) < ec.d;
 
         delay(10);
     }
     drivePID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
+}
+
+void driveBackward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
+    double startTime = Brain.timer(msec);
+    clearAllValues();
+    target.h = heading;
+    debugger::moveStraight("driveBackward", distance, heading, ec, true);
+
+    while (not exitConditionFulfilled) {
+        //calculate lateral error
+        lateralError = -(distance + chassis.yInchesTracked)- drivePID.targetOffset;
+
+        //calculate heading error
+        headingError = chassis.wrappedHeadingError(target.h);
+
+        //calculate drive and turn power based on the errors calculated above using PID
+        drivePow   = drivePID.calculateOutput(lateralError);
+        headingPow = headingPID.calculateOutput(headingError);
+
+        //distribute drive and turn power to the left and right sides of the drive
+        blendOutputs(bs);
+
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
+        governOutputs();
+
+        //apply to the motors
+        voltageDrive(leftOut, rightOut);
+
+        //check exit conditions
+        exitConditionFulfilled = checkLateralExit(ec, startTime, false)
+                                 or fabs(lateralError) < ec.d;
+
+        delay(10);
+    }
+    drivePID.targetOffset = 0;
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 double turnDisableLength = 6;        // moveTo: within this distance, stop point-aiming and hold a fixed heading
 void moveTo(double x, double y, LateralExitConditions ec, BlendSettings bs) {
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetX = x;
-    targetY = y;
+    target.x = x;
+    target.y = y;
     debugger::movePoint("moveTo", x, y, ec, backward);
 
-    headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
-    lateralError = chassis.distanceTo(targetX, targetY, backward);
+    headingError = chassis.wrappedPointHeadingError(target.x, target.y, backward);
+    lateralError = chassis.distanceTo(target.x, target.y, backward);
 
     while (not exitConditionFulfilled) {
-        //if we're far from the target, use point based heading error and distance.
+        //calculate lateral and heading error: while far from the target, both are point based
         if (not close) {
-            headingError = chassis.wrappedPointHeadingError(targetX, targetY, backward);
-            lateralError = chassis.distanceTo(targetX, targetY, backward) + drivePID.targetOffset;
+            headingError = chassis.wrappedPointHeadingError(target.x, target.y, backward);
+            lateralError = chassis.distanceTo(target.x, target.y, backward) + (backward ? -drivePID.targetOffset : drivePID.targetOffset);
 
-            //check if we're close or not
-            if (fabs(lateralError - drivePID.targetOffset) < turnDisableLength) {
+            if (fabs(chassis.distanceTo(target.x, target.y, backward)) < turnDisableLength) {
                 close = true;
-                targetH = chassis.h;
+                target.h = chassis.h;
                 targetStraightDistance = lateralError;
                 chassis.clearTrackedInches();
             }
         }
 
-        // if we're close to the target, no more active point-based heading correction
+        //once close, both come off the latched heading and straight-line distance instead
         if (close) {
-            headingError = chassis.wrappedHeadingError(targetH, backward);
+            headingError = chassis.wrappedHeadingError(target.h);
             lateralError = targetStraightDistance - chassis.yInchesTracked;
         }
 
-        //drivePID.targetOffset biases the error: positive drives past the target (bigger output)
+        //calculate drive and turn power based on the errors calculated above using PID
         drivePow   = drivePID.calculateOutput(lateralError);
         headingPow = headingPID.calculateOutput(headingError);
 
-        //blend drive + turn into left/right voltages (cosine + turn-priority + blend)
+        //distribute drive and turn power to the left and right sides of the drive
         blendOutputs(bs);
 
-        //enforce output constraints (slew, ratio-preserving max cap, min floor)
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
         governOutputs();
 
         //apply to the motors
@@ -327,7 +360,7 @@ void moveTo(double x, double y, LateralExitConditions ec, BlendSettings bs) {
         delay(10);
     }
     drivePID.targetOffset = 0;
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 // Three-stage "ghost point" boomerang (ported from 2029C Inception's movePose),
@@ -348,9 +381,9 @@ void boomerangTo(BoomParams bp,
     double heading = bp.heading;
     double startTime = Brain.timer(msec);
     clearAllValues();
-    targetX = x;
-    targetY = y;
-    targetH = heading;
+    target.x = x;
+    target.y = y;
+    target.h = heading;
     debugger::moveBoomerang(bp, ec);
 
     double headingRad = TO_RAD(heading);
@@ -409,7 +442,7 @@ void boomerangTo(BoomParams bp,
         if (distCarrot < 0.7 or closeEnd) {
             closeEnd = true;
             if (distEnd < 0.7) {
-                headingError = chassis.wrappedHeadingError(heading, false);
+                headingError = chassis.wrappedHeadingError(heading);
             } else {
                 headingError = chassis.wrappedPointHeadingError(x, y, backward);
             }
@@ -428,6 +461,7 @@ void boomerangTo(BoomParams bp,
             lateralError = chassis.distanceTo(carrotX, carrotY, backward);
         }
 
+        //calculate drive power based on the lateral error calculated above using PID
         drivePow = drivePID.calculateOutput(lateralError);
 
         // --- Centripetal slip cap: v_max = sqrt(grip * |r|). Skip right at the end. ---
@@ -449,19 +483,27 @@ void boomerangTo(BoomParams bp,
             drivePow *= cos(TO_RAD(chassis.wrappedPointHeadingError(x, y, backward)));
         }
 
+        //calculate turn power based on the heading error calculated above using PID
         headingPow = headingPID.calculateOutput(headingError);
 
+        //distribute drive and turn power to the left and right sides of the drive
         blendOutputs({.cosineScaling = false, .turnPriority = 0});
+
+        //make sure leftOut and rightOut follow minOutput, maxOutput, minAccelRate, and maxAccelRate from totalOutput
         governOutputs();
+
         debugger::probeBoomerang(carrotX, carrotY, ghostX, ghostY, s, maxSlip,
                                  closeEnd ? 2 : (closeGhost ? 1 : 0));
+
+        //apply to the motors
         voltageDrive(leftOut, rightOut);
 
+        //check exit conditions
         exitConditionFulfilled = checkLateralExit(ec, startTime);
 
         delay(10);
     }
-    voltageDrive(0,0); //Stop the motors when the movement ends
+    voltageDrive(0,0); //stop the motors when the movement ends
 }
 
 void voldrive(double left, double right) {

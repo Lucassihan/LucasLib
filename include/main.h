@@ -5,33 +5,25 @@
 
 using namespace vex;
 
-// =========================================================================
-// Auton tracking
-// =========================================================================
+// ---- Auton tracking ----
 
 extern std::string currentAuton;
 extern bool didAuton;
 extern int  autonIndex;
 
-// =========================================================================
-// Mechanism motors
-// =========================================================================
+// ---- Mechanism motors ----
 
 extern motor intakeRollers;
 extern motor upperRollers;
 extern motor_group fourBar;
 
-// =========================================================================
-// Mechanism sensors
-// =========================================================================
+// ---- Mechanism sensors ----
 
 extern distance OtwDistSensor;
 extern distance ChamberDistSensor;
 extern optical  OtwColorSensor;
 
-// =========================================================================
-// Pneumatics
-// =========================================================================
+// ---- Pneumatics ----
 
 extern digital_out hood;
 extern digital_out hook;
@@ -41,15 +33,11 @@ extern digital_out intakeLift;
 extern digital_out odomLift;
 extern digital_out midGoalHook;
 
-// =========================================================================
-// Timers
-// =========================================================================
+// ---- Timers ----
 
 extern timer R2Time;
 
-// =========================================================================
-// Pneumatic state + helpers
-// =========================================================================
+// ---- Pneumatic state + helpers ----
 
 extern bool midDescoreIsUp;
 extern bool matchloaderIsDown;
@@ -72,9 +60,7 @@ void drop4bar();
 void extendMidGoalHook();
 void retractMidGoalHook();
 
-// =========================================================================
-// Roller helpers
-// =========================================================================
+// ---- Roller helpers ----
 
 extern double lowGoalSpeed;
 
@@ -84,9 +70,7 @@ void scoreFcn();
 void spitFcn();
 void lowGoalFcn(bool suspendUpper = false);
 
-// =========================================================================
-// Intake + color-sort runtime state
-// =========================================================================
+// ---- Intake + color-sort runtime state ----
 
 extern bool blockOtw;
 extern bool readingRed;
@@ -129,9 +113,7 @@ extern bool   suspendLower;
 extern double raiseIntakeIn;
 extern bool   printingDistances;
 
-// =========================================================================
-// Background tasks
-// =========================================================================
+// ---- Background tasks ----
 
 int magControlFcn();
 int magMonitorFcn();
@@ -143,9 +125,7 @@ int fourBarControlTask();
 int autoClampTask();
 int scoopTask();
 
-// =========================================================================
-// Lifecycle
-// =========================================================================
+// ---- Lifecycle ----
 
 extern competition Competition;
 

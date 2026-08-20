@@ -8,6 +8,7 @@
 #include "debugger/debugger.h"
 #include "pid.h"
 #include "scheduler.h"
+#include "velocityTuning.h"
 
 #include <cmath>
 #include <cstdio>
@@ -186,6 +187,7 @@ int trackDisplayTask() {
 
 int controllerScreenTask() {
   while (true) {
+    // velocityTuner.angular.display();
     if (debugger::screensMuted()) { vex::this_thread::sleep_for(40); continue; }  // clean console during a trace dump
     float leftMotorTempAvg = (
       fl.temperature(celsius) +
@@ -245,6 +247,7 @@ int brainScreenTaskFcn() {
 }
 
 void initialize() {
+
   // Sensor data-rate setup for the 1 ms odometry loop (delay(1) in odometryTask).
   //
   // The V5 IMU and rotation sensors round any requested data rate to a multiple of 5 ms, so
@@ -286,8 +289,10 @@ void autonomous() {
   didAuton = true;
 
   // Call your auton routine here, e.g. twoMidGoals();
-  redAuto();
+  // redAuto();
   // blueAuto();
+  // exampleAuto();
+  trajectoryTest();
 
   while (Competition.isAutonomous()) {
     delay(20);
@@ -305,10 +310,11 @@ void driver() {
   Controller.rumble(".");
 
   while (true) {
+    // velocityTuner.angular.collectData(2, 1.0, 3.0, 0.3);
     controllerButtonMonitoringFcn();
 
-    // arcadeDriveFcn();
-    singleStickDriveFcn();
+    arcadeDriveFcn();
+    // singleStickDriveFcn();
 
     if (r1.pressedFirst) {
       targetLevel = 0;

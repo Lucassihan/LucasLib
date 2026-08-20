@@ -1,0 +1,88 @@
+//!params {"name":"sawp v4","knobs":{"wheelRpm":450,"wheelDiameter":2.75,"robotWeight":6.5,"driveKp":0.865,"turnKp":0.205,"swingKp":0.5,"headingKp":0.19,"lateralMomentum":0.56,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"trackwidth":9.5,"ecLatT":5000,"ecLatV":8,"ecLatD":-1,"ecLatWithin":4,"ecTurnT":5000,"ecTurnV":0.35,"ecTurnD":-1,"ecTurnWithin":20,"rsMaxVel":54,"rsMaxAccel":150,"rsVelMargin":0.9,"rsSpacing":2,"rsEndSpeed":0,"rsKLat":0.02},"efforts":{},"field":"override-skills","knobsVersion":7}
+chassis.setPos(-62.5,6.2,-90);
+
+//toggle
+driveForward(5);
+driveBackward(5);
+driveForward(5);
+
+
+//Score preload at goal
+backward = true;
+drivePID.targetOffset = -6;
+moveTo(-48,24);
+delay(300);
+
+//Move off goal
+backward = false;
+moveTo(-55.5,11.3);
+
+//Get wall cup
+backward = true;
+face(140);
+drivePID.targetOffset = -9;
+moveTo(-70,24, {.v = 0.5});
+drivePID.maxOutput = 3;
+driveForward(12,chassis.h,{.d = 5});
+drivePID.maxOutput = 12;
+driveForward(5);
+driveBackward(5);
+
+//Score wall cup
+backward = true;
+drivePID.targetOffset = -6;
+facePoint(-48,24);
+moveTo(-48,24);
+delay(300);
+
+
+//Take standing cup
+backward = false;
+moveTo(-60,12,{.d = 5});
+backward = true;
+face(-90);
+std::vector<BezierSegment> path1 = {
+  {.a = {-51.7, 13.9}, .b = {-42.9, 13.1}, .c = {-38.3, 14}, .d = {-30.6, 19.7}}
+};
+ramsete.trajectory(path1);
+
+//Score standing cup
+std::vector<BezierSegment> path2 = {
+  {.a = {-19.9, 26.1}, .b = {-12.3, 34.3}, .c = {11.1, 34.3}, .d = {17.7, 41.5}}
+};
+ramsete.trajectory(path2);
+delay(300);
+
+//Take pin from standing cup
+backward = false;
+moveTo(12,36);
+backward = true;
+facePoint(12,24);
+std::vector<BezierSegment> path3 = {
+  {.a = {12.5, 32.3}, .b = {11.3, 31}, .c = {10.3, 28.7}, .d = {5.4, 26.8}}
+};
+ramsete.trajectory(path3);
+
+//Score pin
+std::vector<BezierSegment> path4 = {
+  {.a = {-3.1, 24.6}, .b = {-12.1, 26.5}, .c = {-21.1, 31}, .d = {-22.4, 39.1}}
+};
+ramsete.trajectory(path4);
+delay(300);
+
+//Grab last standing cup
+backward = false;
+moveTo(-24,30);
+backward = true;
+facePoint(-48,48);
+std::vector<BezierSegment> path5 = {
+  {.a = {-22.8, 31.4}, .b = {-32.6, 37.6}, .c = {-39.6, 42.2}, .d = {-41.4, 43.5}}
+};
+ramsete.trajectory(path5);
+
+facePoint(-24,48);
+drivePID.targetOffset = -6;
+moveTo(-24,48);
+delay(300);
+
+

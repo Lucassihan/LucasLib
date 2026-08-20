@@ -53,6 +53,7 @@
   // full-resolution (every dense vertex, not the 2" export points). Colour spans
   // the path's own [min,max] speed. Drawn twice: a blurred glow under a bright core.
   const RENDER_STEP = 0.6; // inches between rendered vertices
+  const HANDLE_SNAP = 3; // inches per stop when dragging a tangent handle's length
   const glowSegs = $derived.by(() => {
     const out: { x1: number; y1: number; x2: number; y2: number; color: string }[] = [];
     const dense = plan.dense;
@@ -228,19 +229,21 @@
         }
         moveAnchor(drag.i, x, y);
       } else {
-        let x = f.x;
-        let y = f.y;
-        // Shift snaps the tangent DIRECTION to 15° increments
-        if (e.shiftKey) {
-          const a = pursuit.anchors[drag.i];
-          const dx = x - a.x;
-          const dy = y - a.y;
-          const len = Math.hypot(dx, dy);
-          const snapped = (Math.round((Math.atan2(dx, dy) / D2R) / 15) * 15) * D2R;
-          x = a.x + Math.sin(snapped) * len;
-          y = a.y + Math.cos(snapped) * len;
-        }
-        moveHandle(drag.i, drag.side, x, y);
+        // A tangent handle is two independent quantities, so they snap
+        // independently: the DIRECTION to the toolbar's angle step (a start pose
+        // facing exactly 0°, a segment leaving a goal at exactly 45°) and the
+        // LENGTH to 3-inch stops, so the two sides of an anchor can be matched
+        // by eye instead of landing on 21.4 vs 21.9. Alt bypasses both, matching
+        // the grid snap above; Shift forces 15° even with the toolbar snap off.
+        const a = pursuit.anchors[drag.i];
+        let ang = Math.atan2(f.x - a.x, f.y - a.y);
+        let len = Math.hypot(f.x - a.x, f.y - a.y);
+
+        const angStep = e.shiftKey ? 15 : e.altKey ? 0 : viewOpts.angleSnap;
+        if (angStep > 0) ang = Math.round(ang / D2R / angStep) * angStep * D2R;
+        if (!e.altKey) len = Math.max(HANDLE_SNAP, Math.round(len / HANDLE_SNAP) * HANDLE_SNAP);
+
+        moveHandle(drag.i, drag.side, a.x + Math.sin(ang) * len, a.y + Math.cos(ang) * len);
       }
       return;
     }
@@ -293,18 +296,72 @@
   // --- playback: watch the robot follow the baked path ------------------------
   const R2D = 180 / Math.PI;
 
-  // time-parameterize the baked points: dt = ds / average speed (floored so the
-  // near-zero speed at the very end can't blow the clock up to infinity).
+  // Clock for the DENSE samples (~0.5" vertices), so playback moves smoothly
+  // instead of hopping 2" a row and snapping its heading at each one.
+  //
+  // The times are NOT integrated here: each dense sample's arc length is looked
+  // up in the baked schedule, whose rows already carry the timestamps the
+  // follower will run on. Estimating dt = ds/v instead — which is what this did
+  // — drifts from the real profile wherever it ramps hardest, and disagreed with
+  // the export panel by ~0.6 s on a path with a stop in it. One schedule, one
+  // clock, so the playhead and the strip cannot tell different stories.
   const timed = $derived.by(() => {
+    const dense = plan.dense;
     const pts = plan.points;
-    const times = [0];
-    for (let i = 1; i < pts.length; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      const vAvg = Math.max(2, (pts[i].v + pts[i - 1].v) / 2);
-      times.push(times[i - 1] + ds / vAvg);
+    const traj = plan.traj;
+    const times = new Array<number>(dense.length).fill(0);
+    if (pts.length < 2) return { times, duration: 0 };
+
+    let row = 1;
+    for (let i = 0; i < dense.length; i++) {
+      const s = dense[i].s;
+      while (row < pts.length - 1 && pts[row].s < s) row++;
+      const s0 = pts[row - 1].s;
+      const s1 = pts[row].s;
+      const u = s1 > s0 ? (s - s0) / (s1 - s0) : 0;
+      times[i] = traj[row - 1].t + (traj[row].t - traj[row - 1].t) * u;
     }
-    return { times, duration: times[times.length - 1] ?? 0 };
+    return { times, duration: plan.duration };
   });
+
+  // Tangent heading at every dense sample (central difference). Taking the
+  // heading from the chord to the NEXT sample alone would hold it constant
+  // across each span and jump at the boundary; interpolating between these
+  // per-sample tangents turns instead.
+  const denseHeads = $derived.by(() => {
+    const d = plan.dense;
+    const out = new Array<number>(d.length);
+    for (let i = 0; i < d.length; i++) {
+      const a = d[Math.max(0, i - 1)];
+      const b = d[Math.min(d.length - 1, i + 1)];
+      out[i] = Math.atan2(b.x - a.x, b.y - a.y) * R2D;
+    }
+    return out;
+  });
+
+  /** Interpolate two headings the short way round, so ±180° doesn't spin. */
+  function lerpAngle(a: number, b: number, u: number): number {
+    return a + ((((b - a) % 360) + 540) % 360 - 180) * u;
+  }
+
+  /** Clock time at an arc length — the timeline gradient still draws its stops
+   *  on the coarse export points, so it looks them up in the dense clock. */
+  function timeAtS(s: number): number {
+    const d = plan.dense;
+    if (d.length < 2) return 0;
+    let lo = 0;
+    let hi = d.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (d[mid].s < s) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === 0) return timed.times[0];
+    const s0 = d[lo - 1].s;
+    const s1 = d[lo].s;
+    const u = s1 > s0 ? (s - s0) / (s1 - s0) : 0;
+    return timed.times[lo - 1] + (timed.times[lo] - timed.times[lo - 1]) * u;
+  }
 
   // keep the playhead valid when the path re-bakes under it
   $effect(() => {
@@ -314,12 +371,20 @@
   // full sample at the playhead: pose + arc length + planned speed + curvature,
   // interpolated along the baked points (κ pulled from the nearest dense sample)
   const atPlayhead = $derived.by(() => {
-    const pts = plan.points;
+    const pts = plan.dense;
     if (pts.length < 2) return null;
     const { times } = timed;
     const tt = Math.max(0, Math.min(playback.t, timed.duration));
-    let i = 1;
-    while (i < times.length - 1 && times[i] < tt) i++;
+    // binary-search the clock rather than walking it — at dense resolution the
+    // linear scan was thousands of steps per frame
+    let lo = 1;
+    let hi = times.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid] < tt) lo = mid + 1;
+      else hi = mid;
+    }
+    const i = lo;
     const t0 = times[i - 1];
     const t1 = times[i];
     const u = t1 > t0 ? Math.max(0, Math.min(1, (tt - t0) / (t1 - t0))) : 0;
@@ -329,20 +394,8 @@
     const y = p0.y + (p1.y - p0.y) * u;
     const s = p0.s + (p1.s - p0.s) * u;
     const v = p0.v + (p1.v - p0.v) * u;
-    const h = Math.atan2(p1.x - p0.x, p1.y - p0.y) * R2D;
-    // curvature at this arc length — binary-search the dense samples by .s
-    let k = 0;
-    const dense = plan.dense;
-    if (dense.length) {
-      let lo = 0;
-      let hi = dense.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (dense[mid].s < s) lo = mid + 1;
-        else hi = mid;
-      }
-      k = Math.abs(dense[lo].k);
-    }
+    const h = lerpAngle(denseHeads[i - 1], denseHeads[i], u);
+    const k = Math.abs(p0.k + (p1.k - p0.k) * u);
     return { x, y, h, s, v, k, t: tt };
   });
 
@@ -481,7 +534,7 @@
     const pts = plan.points;
     if (pts.length < 2 || timed.duration <= 0) return '';
     const { lo, hi } = speedRange(pts, pursuit.params.maxVel);
-    const stops = pts.map((p, i) => `${speedColor(p.v, lo, hi)} ${((timed.times[i] / timed.duration) * 100).toFixed(1)}%`);
+    const stops = pts.map((p) => `${speedColor(p.v, lo, hi)} ${((timeAtS(p.s) / timed.duration) * 100).toFixed(1)}%`);
     return `linear-gradient(to right, ${stops.join(', ')})`;
   });
 
@@ -696,8 +749,18 @@
           {#if offField.anchors.has(w.i)}
             <circle cx={w.sx} cy={w.sy} r={3 * hs} class="offring" vector-effect="non-scaling-stroke" />
           {/if}
-          {#if w.a.vCap !== undefined}
-            <circle cx={w.sx} cy={w.sy} r={2.4 * hs} class="capring" class:stop={w.a.vCap === 0} vector-effect="non-scaling-stroke" />
+<!-- Caps belong to segments now, so the ring marks the anchor the capped
+               segment LEAVES; a stop is drawn where the segment carrying it ENDS,
+               which is the next anchor along. -->
+          {#if w.a.segMaxVel !== undefined || (w.i > 0 && pursuit.anchors[w.i - 1]?.segStopEnd)}
+            <circle
+              cx={w.sx}
+              cy={w.sy}
+              r={2.4 * hs}
+              class="capring"
+              class:stop={w.i > 0 && pursuit.anchors[w.i - 1]?.segStopEnd}
+              vector-effect="non-scaling-stroke"
+            />
           {/if}
           {#if w.i === 0}
             {#if pursuit.selected === 0}
@@ -808,7 +871,7 @@
         aria-valuemax={Math.round(timed.duration * 100) / 100}
       >
         <div class="rail" style={trackGradient ? `background: ${trackGradient}` : ''}></div>
-        <div class="handle" style="left: {timed.duration > 0 ? (playback.t / timed.duration) * 100 : 0}%"></div>
+        <div class="scrub-handle" style="left: {timed.duration > 0 ? (playback.t / timed.duration) * 100 : 0}%"></div>
       </div>
       <div class="axis">
         {#each axisTicks as t}
@@ -1001,10 +1064,13 @@
     fill: rgba(251, 191, 36, 0.9);
   }
 
-  /* tangent bars: quiet stem, small solid dot with a big invisible grab area */
+  /* tangent bars: quiet stem, small solid dot with a big invisible grab area.
+     Semi-transparent (item 5) so they read as sitting behind the path rather
+     than competing with it — the anchors themselves stay solid. */
   .hbar .stem {
     stroke: rgba(255, 255, 255, 0.22);
     stroke-width: 1;
+    opacity: 0.5;
     pointer-events: none;
     transition: stroke 0.12s ease;
   }
@@ -1019,6 +1085,7 @@
   }
   .hbar .handle .dot {
     fill: rgba(240, 240, 240, 0.95);
+    opacity: 0.5;
     transition: fill 0.12s ease;
   }
   .hbar .handle:hover .dot {
@@ -1367,7 +1434,11 @@
     box-shadow: var(--ring);
     transform: translateY(-50%);
   }
-  .handle {
+  /* the scrubber knob — NOT the SVG tangent handles above. Kept under its own
+     name because a bare `.handle` rule also matches `<g class="handle">` in the
+     field svg, where translate(-50%,-50%) resolves against the view-box and
+     throws every tangent dot half a field off its stem. */
+  .scrub-handle {
     position: absolute;
     top: 50%;
     width: 8px;

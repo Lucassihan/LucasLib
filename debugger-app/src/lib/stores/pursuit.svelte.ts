@@ -1,8 +1,28 @@
-// Pure Pursuit planner state — a cubic bezier spline you shape directly
-// (anchors + tangent handles), the planning knobs, and the baked PathPoint
-// array they produce. The planner runs the whole pre-calculation here
-// (sample the spline → arc-length resample → curvature → speed passes) so the
-// robot's followPath() just chases a finished array. Persists to localStorage.
+// Trajectory Generator state — a cubic bezier spline you shape directly
+// (anchors + tangent handles), the bake knobs, and the schedule they produce.
+//
+// The profile is NOT modelled here: buildPath converts the anchors into the
+// library's own BezierSegment[] and calls sandbox/ramsete.ts's bakeTrajectory,
+// which is the line-for-line port of src/ramsete/profile.cpp. So the speed
+// curve on screen is the schedule the brain will bake from the same control
+// points, not a second opinion about it — which is the whole point of a motion
+// profile: the thing on screen is the reference the robot follows.
+//
+// The export is those control points (+ any non-default ProfileConfig), never
+// baked rows, so the library stays the only thing that owns the math.
+// Persists to localStorage.
+
+import {
+  bakeTrajectory,
+  bezierCurvature,
+  bezierAt,
+  bezierLength,
+  trajectoryDuration,
+  DEFAULT_PROFILE,
+  DEFAULT_RAMSETE,
+  type BezierSegment,
+  type TrajPoint
+} from '$lib/sandbox/ramsete';
 
 const STORAGE_KEY = 'lucaslib-debugger.pursuit';
 
@@ -16,25 +36,31 @@ export interface Anchor {
   ang: number; // OUTGOING travel direction through the anchor, deg
   out: number; // outgoing handle length, in (unused on the last anchor)
   in: number; // incoming handle length, in (unused on the first anchor)
-  lock?: boolean; // symmetry lock — the two handle lengths stay equal
-  vCap?: number; // cap planned speed here to N in/s (0 = full stop); undefined = no cap
+
+  // --- properties of the SEGMENT LEAVING this anchor (unused on the last one) ---
+  // These are BezierSegment's own fields, held on the anchor that starts the
+  // segment, so they survive the export unchanged. A speed cap applies to that
+  // whole segment: to slow a span INSIDE a curve, split it (insertAnchor keeps
+  // the shape exactly) and cap the piece.
+  segMaxVel?: number; // in/s ceiling for this segment · undefined = profile default
+  segStopEnd?: boolean; // force a full stop at this segment's end
 }
 
 export interface PursuitPlanParams {
-  grip: number; // traction cap: v ≤ sqrt(grip / |κ|) = sqrt(grip·r); higher = corner faster
-  maxVel: number; // top planned speed, in/s
-  maxAccel: number; // planning accel for the slow-down pass, in/s^2
+  maxVel: number; // route ceiling, in/s (ProfileConfig.maxVel)
+  maxAccel: number; // acceleration budget, in/s² (ProfileConfig.maxAccel)
+  velMargin: number; // fraction of maxVel the ceilings may ask for
+  endSpeed: number; // in/s in the last row — bake a hot exit
 }
 
+// The library's own defaults, so an untouched path exports as the bare
+// ramsete.trajectory(path) call with no ProfileConfig at all.
 export const DEFAULT_PARAMS: PursuitPlanParams = {
-  grip: 100,
-  maxVel: 60,
-  maxAccel: 60
+  maxVel: DEFAULT_RAMSETE.maxVel,
+  maxAccel: DEFAULT_RAMSETE.maxAccel,
+  velMargin: DEFAULT_PROFILE.velMargin,
+  endSpeed: DEFAULT_PROFILE.endSpeed
 };
-
-/** Fixed export point spacing (in). The profile is exact internally (~0.5"); the
- *  exported array is just resampled at this arc rhythm — no longer a user knob. */
-const SPACING = 2;
 
 const DEFAULT_ANCHORS: Anchor[] = [
   { x: -48, y: -60, ang: 0, out: 26, in: 26 },
@@ -43,10 +69,41 @@ const DEFAULT_ANCHORS: Anchor[] = [
   { x: 52, y: 44, ang: 52, out: 18, in: 18 }
 ];
 
-interface Persisted {
+/**
+ * One editor tab — its own path, its own "matches disk" signature, its own
+ * undo/redo. The same document model the sandbox uses (sandbox.svelte.ts's
+ * TabState), so the two workspaces save, open and close files identically:
+ * anchors/params are copied out of/into the live pursuit.anchors/params on
+ * switch (stashActiveTab / hydrateActiveTab), while cleanSig/undo/redo live
+ * ONLY on the tab.
+ */
+export interface PathTabState {
+  id: string; // stable {#each} key
+  name: string | null; // the saved file this tab is open as; null = untitled
   anchors: Anchor[];
   params: PursuitPlanParams;
-  name: string;
+  cleanSig: string; // this tab's own "matches disk" signature, see tabSignature()
+  undo: Snapshot[]; // this tab's own history
+  redo: Snapshot[];
+}
+
+interface PersistedTab {
+  name: string | null;
+  anchors: Anchor[];
+  params: PursuitPlanParams;
+  /** persisted VERBATIM, never recomputed from the anchors — recomputing
+   *  would launder every tab clean on reload and the unsaved dot would never
+   *  survive one (sandbox.svelte.ts's PersistedTab.cleanSig, same reason). */
+  cleanSig: string;
+}
+
+interface Persisted {
+  tabs: PersistedTab[];
+  activeTab: number;
+  /** pre-tabs era — one document per workspace, migrated on load */
+  anchors?: Anchor[];
+  params?: PursuitPlanParams;
+  name?: string;
   /** pre-bezier era — plain waypoints, migrated on load */
   waypoints?: { x: number; y: number }[];
 }
@@ -63,12 +120,39 @@ const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.
 const norm = (deg: number) => ((deg % 360) + 360) % 360;
 const round = (v: number) => Math.round(v * 10) / 10;
 
-/** Drop fields left behind by the removed mid-path-turn feature. */
+/** Drop fields left behind by the removed mid-path-turn and handle-lock features. */
 function migrateAnchor(a: Anchor): Anchor {
-  const rest = { ...a } as Anchor & { turn?: unknown; inAng?: unknown };
+  const rest = { ...a } as Anchor & { turn?: unknown; inAng?: unknown; lock?: unknown };
   delete rest.turn;
   delete rest.inAng;
+  delete rest.lock;
   return rest;
+}
+
+/**
+ * Carry the old per-ANCHOR speed cap onto the segment it now belongs to.
+ * `vCap` pinned the speed of whatever samples landed within 1.5" of the anchor
+ * — a point cap with no equivalent in BezierSegment, so it could never have
+ * survived an export. A cap of 0 was a full stop, which IS expressible: it is
+ * `.stopEnd` on the segment that ARRIVES there, i.e. anchor i-1's. Any other
+ * cap becomes the ceiling of the segment leaving the anchor.
+ *
+ * Needs the whole array for that i-1, which is why it is not in migrateAnchor.
+ */
+function migrateCaps(anchors: Anchor[]): Anchor[] {
+  const out = anchors.map((a) => ({ ...a }) as Anchor & { vCap?: number });
+  for (let i = 0; i < out.length; i++) {
+    const cap = out[i].vCap;
+    if (cap === undefined) continue;
+    if (cap <= 0) {
+      const arriving = i > 0 ? out[i - 1] : out[i];
+      arriving.segStopEnd = true;
+    } else if (i < out.length - 1) {
+      out[i].segMaxVel = cap;
+    }
+    delete out[i].vCap;
+  }
+  return out;
 }
 
 /** Auto-smooth anchors through plain points (tangent = neighbor chord). */
@@ -83,61 +167,143 @@ function anchorsThrough(pts: { x: number; y: number }[]): Anchor[] {
   });
 }
 
-function load(): { anchors: Anchor[]; params: PursuitPlanParams; name: string } {
+/** Anchors out of an untrusted blob (a persisted tab, or a file), or null when
+ *  there aren't two usable ones. Spread-preserves optional fields so the
+ *  segment properties survive; only the five core numbers must be finite. */
+function readAnchors(raw: unknown): Anchor[] | null {
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const kept = (raw as Anchor[]).filter(
+    (a) => a && [a.x, a.y, a.ang, a.out, a.in].every((n) => typeof n === 'number' && isFinite(n))
+  );
+  if (kept.length < 2) return null;
+  const anchors = migrateCaps(kept.map((a) => migrateAnchor({ ...a })));
+  dropStrandedSegProps(anchors); // clears one an older build could have stranded
+  return anchors;
+}
+
+function makeId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** A tab's "does this match what was last saved/opened" fingerprint — the same
+ *  role sandbox.svelte.ts's tabSignature plays, over the only two things a
+ *  path file carries. */
+function tabSignature(anchors: Anchor[], params: PursuitPlanParams): string {
+  return JSON.stringify(anchors) + '␟' + JSON.stringify(params);
+}
+
+/** A brand-new untitled tab on the starter path — clean the moment it's
+ *  created, empty undo/redo (nothing to undo into yet). */
+function makePathTab(): PathTabState {
+  const anchors = DEFAULT_ANCHORS.map((a) => ({ ...a }));
+  const params = { ...DEFAULT_PARAMS };
+  return {
+    id: makeId(),
+    name: null,
+    anchors,
+    params,
+    cleanSig: tabSignature(anchors, params),
+    undo: [],
+    redo: []
+  };
+}
+
+function tabFrom(name: string | null, anchors: Anchor[], params: PursuitPlanParams, cleanSig?: string): PathTabState {
+  return {
+    id: makeId(),
+    name,
+    anchors,
+    params,
+    cleanSig: cleanSig ?? tabSignature(anchors, params),
+    undo: [],
+    redo: []
+  };
+}
+
+function load(): { tabs: PathTabState[]; activeTab: number } {
   if (typeof localStorage !== 'undefined') {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const p = JSON.parse(raw) as Partial<Persisted>;
-        let anchors: Anchor[] | null = null;
-        if (Array.isArray(p.anchors) && p.anchors.length >= 2) {
-          // spread-preserve so optional fields (lock, and later structural ones)
-          // survive a reload; only require the five core numbers to be finite
-          const kept = p.anchors.filter(
-            (a) => a && [a.x, a.y, a.ang, a.out, a.in].every((n) => typeof n === 'number' && isFinite(n))
-          );
-          if (kept.length >= 2) anchors = kept.map((a) => migrateAnchor({ ...a }));
+        if (Array.isArray(p.tabs) && p.tabs.length) {
+          const tabs = p.tabs
+            .map((pt) => {
+              const anchors = readAnchors(pt?.anchors);
+              if (!anchors) return null;
+              return tabFrom(
+                typeof pt?.name === 'string' ? pt.name : null,
+                anchors,
+                { ...DEFAULT_PARAMS, ...(pt?.params ?? {}) },
+                // A blob written before this field existed has no signature,
+                // and the safe fallback is clean rather than a fabricated dot.
+                typeof pt?.cleanSig === 'string' ? pt.cleanSig : undefined
+              );
+            })
+            .filter((t): t is PathTabState => t !== null);
+          if (tabs.length) {
+            const activeTab = typeof p.activeTab === 'number' ? Math.min(Math.max(0, p.activeTab), tabs.length - 1) : 0;
+            return { tabs, activeTab };
+          }
         }
-        if (!anchors && Array.isArray(p.waypoints) && p.waypoints.length >= 2) {
-          anchors = anchorsThrough(p.waypoints); // migrate the pre-bezier format
-        }
+        // pre-tabs single document (or the pre-bezier waypoint format before
+        // that) — becomes the one open tab. Its old name was always a string
+        // defaulting to 'path', so that exact value reads as "never named".
+        const anchors = readAnchors(p.anchors) ?? (Array.isArray(p.waypoints) && p.waypoints.length >= 2 ? anchorsThrough(p.waypoints) : null);
         if (anchors) {
-          return {
-            anchors,
-            params: { ...DEFAULT_PARAMS, ...(p.params ?? {}) },
-            name: typeof p.name === 'string' ? p.name : 'path'
-          };
+          const name = typeof p.name === 'string' && p.name.trim() && p.name !== 'path' ? p.name : null;
+          return { tabs: [tabFrom(name, anchors, { ...DEFAULT_PARAMS, ...(p.params ?? {}) })], activeTab: 0 };
         }
       }
     } catch {
       // corrupt — reset
     }
   }
-  return { anchors: DEFAULT_ANCHORS.map((a) => ({ ...a })), params: { ...DEFAULT_PARAMS }, name: 'path' };
+  return { tabs: [makePathTab()], activeTab: 0 };
 }
 
 const initial = load();
 
 export const pursuit = $state<{
+  tabs: PathTabState[];
+  activeTab: number;
+  /** the ACTIVE tab's path, mirrored out of tabs[activeTab] — everything else
+   *  in the app reads and writes these, exactly as it did before tabs. */
   anchors: Anchor[];
   params: PursuitPlanParams;
-  name: string;
+  saved: SavedPath[];
   selected: number | null; // selected anchor index, or null
+  /** the ACTIVE tab's file name, or null for untitled — kept in sync with
+   *  tabs[activeTab].name by the effect below. */
+  openPath: string | null;
+  /** true once the active tab's path differs from its last save or open. */
+  dirty: boolean;
 }>({
-  anchors: initial.anchors,
-  params: initial.params,
-  name: initial.name,
-  selected: null
+  tabs: initial.tabs,
+  activeTab: initial.activeTab,
+  anchors: initial.tabs[initial.activeTab].anchors,
+  params: { ...initial.tabs[initial.activeTab].params },
+  saved: [], // populated from the "trajectory paths" folder via refreshSavedPaths()
+  selected: null,
+  openPath: initial.tabs[initial.activeTab].name,
+  dirty: false
 });
 
-// persist on any change
+// Persist the whole workspace: every tab's own path, plus which one is focused.
+// Saved paths live as files in the folder, not in localStorage — this is just
+// enough for a reload to restore the tab strip as it was. Only the ACTIVE slot
+// reads the live mirror; stashActiveTab does the write-through when it matters.
 $effect.root(() => {
   $effect(() => {
     if (typeof localStorage === 'undefined') return;
+    const activeTab = pursuit.activeTab;
     const data: Persisted = {
-      anchors: pursuit.anchors.map((a) => ({ ...a })),
-      params: { ...pursuit.params },
-      name: pursuit.name
+      tabs: pursuit.tabs.map((t, i) =>
+        i === activeTab
+          ? { name: t.name, anchors: pursuit.anchors.map((a) => ({ ...a })), params: { ...pursuit.params }, cleanSig: t.cleanSig }
+          : { name: t.name, anchors: t.anchors.map((a) => ({ ...a })), params: { ...t.params }, cleanSig: t.cleanSig }
+      ),
+      activeTab
     };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -147,11 +313,110 @@ $effect.root(() => {
   });
 });
 
+// --- dirty tracking (per-tab) --------------------------------------------------
+// "Dirty" = the ACTIVE tab's path differs from the signature taken at its last
+// save or open (PathTabState.cleanSig). Its own effect rather than folded into
+// the persist effect above: that one fires on every drag too, so setting dirty
+// there would flip it on merely by OPENING a file.
+
+/** Mark the active tab's path as matching what's on disk — called by the save
+ *  flows (a freshly created or opened tab is already clean). */
+function markClean() {
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (tab) tab.cleanSig = tabSignature(pursuit.anchors, pursuit.params);
+  pursuit.dirty = false;
+}
+
+$effect.root(() => {
+  $effect(() => {
+    const tab = pursuit.tabs[pursuit.activeTab];
+    pursuit.dirty = tab ? tabSignature(pursuit.anchors, pursuit.params) !== tab.cleanSig : false;
+  });
+  $effect(() => {
+    pursuit.openPath = pursuit.tabs[pursuit.activeTab]?.name ?? null;
+  });
+});
+
+/** Whether tab `i` differs from its own last-saved signature — drives each
+ *  tab's unsaved dot. The active tab reads the live mirror (its own stored
+ *  anchors are stale until the persist effect catches up); every other tab
+ *  reads its own fields, since nothing else keeps them live. */
+export function isTabDirty(i: number): boolean {
+  const t = pursuit.tabs[i];
+  if (!t) return false;
+  if (i === pursuit.activeTab) return pursuit.dirty;
+  return tabSignature(t.anchors, t.params) !== t.cleanSig;
+}
+
+// --- tab management ------------------------------------------------------------
+
+/** Copy the live mirror into its own tab record. The persist effect does this
+ *  too, but switching needs it synchronously and before activeTab moves. */
+function stashActiveTab(): void {
+  const t = pursuit.tabs[pursuit.activeTab];
+  if (!t) return;
+  t.anchors = pursuit.anchors.map((a) => ({ ...a }));
+  t.params = { ...pursuit.params };
+}
+
+/** Mirror tabs[activeTab] into the live buffer everything else reads. */
+function hydrateActiveTab(): void {
+  const t = pursuit.tabs[pursuit.activeTab];
+  if (!t) return;
+  pursuit.anchors = t.anchors.map((a) => ({ ...a }));
+  pursuit.params = { ...t.params };
+}
+
+/** Selection and playback mean nothing carried over from another path. */
+function resetTransientUiState(): void {
+  pursuit.selected = null;
+  playback.t = 0;
+  playback.playing = false;
+}
+
+/** Switch the focused tab: stash the outgoing path, move activeTab, hydrate
+ *  the incoming one. Undo/redo and cleanSig live on each tab already, which
+ *  is what makes history per-tab for free. */
+export function switchTab(index: number): void {
+  if (index < 0 || index >= pursuit.tabs.length || index === pursuit.activeTab) return;
+  stashActiveTab();
+  pursuit.activeTab = index;
+  hydrateActiveTab();
+  resetTransientUiState();
+}
+
+/** Close tab `i`. Does NOT confirm — the caller checks isTabDirty and arms
+ *  first. Closing the last tab leaves one fresh untitled tab. */
+export function closeTab(i: number): void {
+  if (!pursuit.tabs[i]) return;
+  const wasActive = i === pursuit.activeTab;
+  pursuit.tabs.splice(i, 1);
+  if (pursuit.tabs.length === 0) pursuit.tabs.push(makePathTab());
+  if (wasActive) {
+    pursuit.activeTab = Math.min(i, pursuit.tabs.length - 1);
+    hydrateActiveTab();
+    resetTransientUiState();
+  } else if (i < pursuit.activeTab) {
+    pursuit.activeTab--;
+  }
+}
+
+/** New — open a fresh untitled tab on the starter path and focus it. Tabs are
+ *  additive: New never touches any other tab's path. */
+export function newPath(): void {
+  stashActiveTab();
+  pursuit.tabs.push(makePathTab());
+  pursuit.activeTab = pursuit.tabs.length - 1;
+  hydrateActiveTab();
+  resetTransientUiState();
+}
+
 // --- view options (not part of the path — editor UI prefs, persisted apart) ----
 const VIEW_KEY = 'lucaslib-debugger.pursuit-view';
 
 export interface ViewOpts {
   snap: number; // grid snap size, inches: 0 = off · 24 tile · 12 half · 6 quarter
+  angleSnap: number; // tangent-handle angle snap, degrees: 0 = off · 15 · 45 · 90
   showDots: boolean; // draw the baked PathPoint dots on the field
   comb: boolean; // curvature comb along the path
   followCam: boolean; // camera eases toward the robot during playback
@@ -165,6 +430,7 @@ export interface ViewOpts {
 
 const DEFAULT_VIEW: ViewOpts = {
   snap: 0,
+  angleSnap: 0,
   showDots: false,
   comb: false,
   followCam: false,
@@ -205,18 +471,18 @@ $effect.root(() => {
 });
 
 // --- undo / redo ---------------------------------------------------------------
-// A snapshot is the whole editable path (anchors + params + name). Discrete edits
-// push before mutating; rapid same-key edits (a slider being dragged, arrow-key
-// nudges) coalesce into one entry so one gesture = one undo step.
+// A snapshot is the editable path (anchors + params); the file name is not in it,
+// so undo can't rename the document out from under the tab strip. The stacks live
+// ON the active tab (PathTabState.undo/redo), which is what makes history per-tab
+// — switching away and back leaves each path's history where it was. Discrete
+// edits push before mutating; rapid same-key edits (a slider being dragged,
+// arrow-key nudges) coalesce into one entry so one gesture = one undo step.
 
 interface Snapshot {
   anchors: Anchor[];
   params: PursuitPlanParams;
-  name: string;
 }
 
-let undoStack: Snapshot[] = [];
-let redoStack: Snapshot[] = [];
 let lastKey = '';
 let lastAt = 0;
 const HIST_CAP = 120;
@@ -224,18 +490,21 @@ const COALESCE_MS = 700;
 
 /** Reactive flags for the toolbar buttons. */
 export const history = $state({ canUndo: false, canRedo: false });
-function syncHist() {
-  history.canUndo = undoStack.length > 0;
-  history.canRedo = redoStack.length > 0;
-}
+
+$effect.root(() => {
+  $effect(() => {
+    const tab = pursuit.tabs[pursuit.activeTab];
+    history.canUndo = (tab?.undo.length ?? 0) > 0;
+    history.canRedo = (tab?.redo.length ?? 0) > 0;
+  });
+});
 
 function snap(): Snapshot {
-  return { anchors: pursuit.anchors.map((a) => ({ ...a })), params: { ...pursuit.params }, name: pursuit.name };
+  return { anchors: pursuit.anchors.map((a) => ({ ...a })), params: { ...pursuit.params } };
 }
 function apply(s: Snapshot) {
   pursuit.anchors = s.anchors.map((a) => ({ ...a }));
   pursuit.params = { ...s.params };
-  pursuit.name = s.name;
   if (pursuit.selected !== null && pursuit.selected >= pursuit.anchors.length) pursuit.selected = null;
 }
 
@@ -245,34 +514,34 @@ function apply(s: Snapshot) {
  * same-key pushes within {@link COALESCE_MS} collapses into a single step.
  */
 export function pushHistory(coalesceKey = '') {
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (!tab) return;
   const now = Date.now();
-  if (coalesceKey && coalesceKey === lastKey && now - lastAt < COALESCE_MS && undoStack.length) {
+  if (coalesceKey && coalesceKey === lastKey && now - lastAt < COALESCE_MS && tab.undo.length) {
     lastAt = now;
-    redoStack = [];
-    syncHist();
+    tab.redo = [];
     return;
   }
-  undoStack.push(snap());
-  if (undoStack.length > HIST_CAP) undoStack.shift();
-  redoStack = [];
+  tab.undo.push(snap());
+  if (tab.undo.length > HIST_CAP) tab.undo.shift();
+  tab.redo = [];
   lastKey = coalesceKey;
   lastAt = now;
-  syncHist();
 }
 
 export function undo() {
-  if (!undoStack.length) return;
-  redoStack.push(snap());
-  apply(undoStack.pop()!);
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (!tab?.undo.length) return;
+  tab.redo.push(snap());
+  apply(tab.undo.pop()!);
   lastKey = '';
-  syncHist();
 }
 export function redo() {
-  if (!redoStack.length) return;
-  undoStack.push(snap());
-  apply(redoStack.pop()!);
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (!tab?.redo.length) return;
+  tab.undo.push(snap());
+  apply(tab.redo.pop()!);
   lastKey = '';
-  syncHist();
 }
 
 /** Set a shaping/follow param, coalescing rapid changes to the same knob. */
@@ -282,40 +551,10 @@ export function setParam<K extends keyof PursuitPlanParams>(k: K, v: PursuitPlan
 }
 
 // --- speed → color -------------------------------------------------------------
-// Traffic-light ramp: red (slow) → yellow (mid) → green (fast). Colored across
-// the path's OWN speed span (see speedRange) so the whole gradient shows instead
-// of saturating green — shared by the field line and the velocity strip.
-const RAMP: [number, number, number][] = [
-  [0xef, 0x44, 0x44],
-  [0xfa, 0xcc, 0x15],
-  [0x3e, 0xc9, 0x7e]
-];
-
-/** Colour for speed `v` mapped onto the [lo, hi] window (red → yellow → green). */
-export function speedColor(v: number, lo: number, hi: number): string {
-  const span = Math.max(1e-6, hi - lo);
-  const t = Math.max(0, Math.min(1, (v - lo) / span));
-  const f = t < 0.5 ? t * 2 : (t - 0.5) * 2;
-  const [a, b] = t < 0.5 ? [RAMP[0], RAMP[1]] : [RAMP[1], RAMP[2]];
-  const c = a.map((x, i) => Math.round(x + (b[i] - x) * f));
-  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
-}
-
-/**
- * The colour window for a plan: the path's actual [min, max] speed, so the
- * slowest point reads red and the fastest green. Falls back to absolute
- * [0, maxVel] for a near-constant-speed path (nothing to spread across).
- */
-export function speedRange(points: { v: number }[], maxVel: number): { lo: number; hi: number } {
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const p of points) {
-    if (p.v < lo) lo = p.v;
-    if (p.v > hi) hi = p.v;
-  }
-  if (!isFinite(lo) || hi - lo < 3) return { lo: 0, hi: Math.max(1, maxVel) };
-  return { lo, hi };
-}
+// Lives in $lib/trace/speedRamp so the Replay's driven path can share the exact
+// ramp the generator draws with. Re-exported here because every call site in
+// this workspace already reaches for it through the store.
+export { speedColor, speedRange } from '$lib/trace/speedRamp';
 
 // --- the spline ---------------------------------------------------------------
 
@@ -336,45 +575,46 @@ export function segControls(a: Anchor, b: Anchor): [Pt, Pt, Pt, Pt] {
   ];
 }
 
-function bez(c: [Pt, Pt, Pt, Pt], t: number): Pt {
-  const u = 1 - t;
-  const w0 = u * u * u;
-  const w1 = 3 * u * u * t;
-  const w2 = 3 * u * t * t;
-  const w3 = t * t * t;
+/** The whole spline as the library's own type — what gets exported, and what
+ *  the bake below runs on. Segment i is authored on anchor i. */
+export function pathSegments(anchors: Anchor[]): BezierSegment[] {
+  const segs: BezierSegment[] = [];
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const [a, b, c, d] = segControls(anchors[i], anchors[i + 1]);
+    const seg: BezierSegment = { a, b, c, d };
+    if (anchors[i].segMaxVel !== undefined) seg.maxVel = anchors[i].segMaxVel;
+    if (anchors[i].segStopEnd) seg.stopEnd = true;
+    segs.push(seg);
+  }
+  return segs;
+}
+
+/** The ProfileConfig the bake runs with — the knobs, resolved the same way
+ *  resolveConfig() does on the brain. */
+function profileConfig(params: PursuitPlanParams) {
   return {
-    x: w0 * c[0].x + w1 * c[1].x + w2 * c[2].x + w3 * c[3].x,
-    y: w0 * c[0].y + w1 * c[1].y + w2 * c[2].y + w3 * c[3].y
+    maxVel: params.maxVel,
+    maxAccel: params.maxAccel,
+    velMargin: params.velMargin,
+    endSpeed: params.endSpeed
   };
 }
 
-/**
- * Exact signed curvature of cubic segment `c` at parameter t — Echo's form,
- * κ = (x'·y'' − y'·x'') / |p'|³ straight from the bezier derivatives, instead of
- * a Menger three-point estimate off the resampled points (no resampling noise,
- * and stable at any sampling density). Sign is unused here; the profile takes |κ|.
- */
-function curvature(c: [Pt, Pt, Pt, Pt], t: number): number {
-  const u = 1 - t;
-  const dx = 3 * u * u * (c[1].x - c[0].x) + 6 * u * t * (c[2].x - c[1].x) + 3 * t * t * (c[3].x - c[2].x);
-  const dy = 3 * u * u * (c[1].y - c[0].y) + 6 * u * t * (c[2].y - c[1].y) + 3 * t * t * (c[3].y - c[2].y);
-  const ddx = 6 * u * (c[2].x - 2 * c[1].x + c[0].x) + 6 * t * (c[3].x - 2 * c[2].x + c[1].x);
-  const ddy = 6 * u * (c[2].y - 2 * c[1].y + c[0].y) + 6 * t * (c[3].y - 2 * c[2].y + c[1].y);
-  const sp = dx * dx + dy * dy;
-  return sp < 1e-9 ? 0 : (dx * ddy - dy * ddx) / Math.pow(sp, 1.5);
-}
-
 // --- the planning pipeline ------------------------------------------------------
-// dense-sample the spline (~0.5" vertices) with EXACT curvature → cap speed by
-// v = min(vmax, kF/κ) at every dense sample → backward decel pass to 0 at the end
-// → then resample the finished profile at the export `spacing` (Echo's 2" rhythm).
-// The profile lives at dense resolution so slow-downs are sharp; the exported
-// PathPoint array is the coarse resample and the follower interpolates it.
+// There isn't one any more, and that is the point. buildPath hands the control
+// points to the library port's bakeTrajectory and then only REPACKAGES what
+// comes back: `points` is the schedule's own rows, `dense` is a fine geometric
+// sampling for drawing whose speeds are read back out of those rows. Nothing
+// here decides a speed.
+//
+// The library's ceilings (profile.cpp) are wheel saturation, the per-segment
+// authored .maxVel, and the two acceleration sweeps. There is no traction /
+// no-slip term in either place any more.
 
 export interface BakedPoint {
   x: number;
   y: number;
-  v: number; // planned speed, in/s
+  v: number; // planned speed magnitude, in/s (the row's |v|)
   s: number; // cumulative arc length, inches
 }
 
@@ -393,101 +633,71 @@ export interface Plan {
   points: BakedPoint[];
   dense: DenseSample[];
   total: number; // path length, inches
+  traj: TrajPoint[]; // the schedule itself — real timestamps, headings and ω
+  duration: number; // seconds, straight off the last row
 }
+
+const EMPTY_PLAN: Plan = { points: [], dense: [], total: 0, traj: [], duration: 0 };
 
 export function buildPath(anchors: Anchor[], params: PursuitPlanParams): Plan {
-  if (anchors.length < 2) return { points: [], dense: [], total: 0 };
-  const { grip, maxVel, maxAccel } = params;
+  if (anchors.length < 2) return EMPTY_PLAN;
 
-  // 1. dense-sample every segment (~0.5" vertices) with exact curvature per sample
+  const segs = pathSegments(anchors);
+
+  // THE bake — the same function the sandbox runs and the same math the brain
+  // runs. Everything below is presentation.
+  const traj = bakeTrajectory(segs, profileConfig(params), DEFAULT_RAMSETE);
+  if (traj.length < 2) return EMPTY_PLAN;
+
+  // Rows carry time, not arc, so walk them once for the cumulative distance the
+  // strip and the field colouring index by. Joints emit two rows at the same
+  // place (see profile.cpp), which simply contribute a zero-length step.
+  const points: BakedPoint[] = [{ x: traj[0].x, y: traj[0].y, v: Math.abs(traj[0].v), s: 0 }];
+  for (let i = 1; i < traj.length; i++) {
+    const s = points[i - 1].s + Math.hypot(traj[i].x - traj[i - 1].x, traj[i].y - traj[i - 1].y);
+    points.push({ x: traj[i].x, y: traj[i].y, v: Math.abs(traj[i].v), s });
+  }
+  const total = points[points.length - 1].s;
+
+  // A finer geometric sampling for the drawn line and the curvature comb. The
+  // positions and curvature come from the spline; the SPEED is read back out of
+  // the schedule above, so the smooth line and the coarse rows never disagree.
   const dense: DenseSample[] = [];
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const c = segControls(anchors[i], anchors[i + 1]);
-    const polyLen = dist(c[0], c[1]) + dist(c[1], c[2]) + dist(c[2], c[3]);
-    const n = Math.min(400, Math.max(16, Math.ceil(polyLen / 0.5)));
+  for (let i = 0; i < segs.length; i++) {
+    const n = Math.min(400, Math.max(16, Math.ceil(bezierLength(segs[i], 50) / 0.5)));
     for (let k = i === 0 ? 0 : 1; k <= n; k++) {
       const t = k / n;
-      dense.push({ ...bez(c, t), seg: i, t, s: 0, k: curvature(c, t), v: maxVel });
+      const p = bezierAt(segs[i], t);
+      dense.push({ x: p.x, y: p.y, seg: i, t, s: 0, k: bezierCurvature(segs[i], t), v: 0 });
     }
   }
-
-  // 2. arc length along the dense samples
-  const N = dense.length;
-  for (let i = 1; i < N; i++) dense[i].s = dense[i - 1].s + dist(dense[i - 1], dense[i]);
-  const total = N ? dense[N - 1].s : 0;
-
-  // 3. speed profile AT DENSE RESOLUTION: traction cap v ≤ sqrt(grip/|κ|) =
-  //    sqrt(grip·r) (the no-slip cap, same shape as the boomerang's), then
-  //    per-anchor speed caps, then accel/decel passes.
-  for (let i = 0; i < N; i++) {
-    const kk = Math.abs(dense[i].k);
-    dense[i].v = kk > 1e-6 ? Math.min(maxVel, Math.sqrt(grip / kk)) : maxVel;
+  for (let i = 1; i < dense.length; i++) {
+    dense[i].s = dense[i - 1].s + dist(dense[i - 1], dense[i]);
   }
-  // per-anchor caps (0 = full stop)
-  const hasCaps = anchors.some((a) => a.vCap !== undefined);
-  if (hasCaps) {
-    for (const a of anchors) {
-      const cap = a.vCap;
-      if (cap === undefined) continue;
-      for (let i = 0; i < N; i++) if (Math.hypot(dense[i].x - a.x, dense[i].y - a.y) < 1.5) dense[i].v = Math.min(dense[i].v, cap);
-    }
-  }
-  if (N) dense[N - 1].v = 0;
-  // forward accel pass (only when caps exist — ramps back up out of a stop/cap;
-  // a no-op for uncapped paths, so their profile is unchanged)
-  if (hasCaps) {
-    for (let i = 1; i < N; i++) {
-      const d = dense[i].s - dense[i - 1].s;
-      dense[i].v = Math.min(dense[i].v, Math.sqrt(dense[i - 1].v * dense[i - 1].v + 2 * maxAccel * d));
-    }
-  }
-  // backward decel pass so the robot can always brake to the next cap / the end
-  for (let i = N - 2; i >= 0; i--) {
-    const d = dense[i + 1].s - dense[i].s;
-    dense[i].v = Math.min(dense[i].v, Math.sqrt(dense[i + 1].v * dense[i + 1].v + 2 * maxAccel * d));
+  let row = 1;
+  for (const d of dense) {
+    while (row < points.length - 1 && points[row].s < d.s) row++;
+    const span = points[row].s - points[row - 1].s;
+    const u = span > 1e-9 ? (d.s - points[row - 1].s) / span : 0;
+    d.v = points[row - 1].v + (points[row].v - points[row - 1].v) * u;
   }
 
-  // 4. export array: resample the finished dense profile at the fixed arc SPACING
-  //    (Echo's ceil(len / 2") rhythm). The follower interpolates it.
-  const step = SPACING;
-  const points: BakedPoint[] = [];
-  let di = 0;
-  for (let target = 0; target < total; target += step) {
-    while (di < N - 1 && dense[di + 1].s < target) di++;
-    const span = dense[di + 1].s - dense[di].s;
-    const u = span > 1e-9 ? (target - dense[di].s) / span : 0;
-    points.push({
-      x: dense[di].x + (dense[di + 1].x - dense[di].x) * u,
-      y: dense[di].y + (dense[di + 1].y - dense[di].y) * u,
-      v: dense[di].v + (dense[di + 1].v - dense[di].v) * u,
-      s: target
-    });
-  }
-  if (N) points.push({ x: dense[N - 1].x, y: dense[N - 1].y, v: dense[N - 1].v, s: total });
-  return { points, dense, total };
+  return { points, dense, total, traj, duration: trajectoryDuration(traj) };
 }
 
-/** Total traversal time of a baked plan (seconds) — matches the field clock:
- *  dt = ds / avg-speed, with the same 2 in/s floor so the near-zero end speed
- *  can't blow the clock up. */
-export function planDuration(points: BakedPoint[]): number {
-  let t = 0;
-  for (let i = 1; i < points.length; i++) {
-    const ds = points[i].s - points[i - 1].s;
-    const vAvg = Math.max(2, (points[i].v + points[i - 1].v) / 2);
-    t += ds / vAvg;
-  }
-  return t;
+/** Total traversal time of a baked plan (seconds) — the schedule's own last
+ *  timestamp, not an estimate reconstructed from speeds. */
+export function planDuration(plan: Plan): number {
+  return plan.duration;
 }
 
-// memoized plan — recomputed only when anchors or shaping params change
+// memoized plan — recomputed only when anchors or bake params change
 let cacheKey = '';
-let cacheVal: Plan = { points: [], dense: [], total: 0 };
+let cacheVal: Plan = EMPTY_PLAN;
 
 /** The baked path for the current spline + params (memoized, reactive). */
 export function getPlan(): Plan {
-  const p = pursuit.params;
-  const key = JSON.stringify(pursuit.anchors) + '|' + [p.grip, p.maxVel, p.maxAccel].join(',');
+  const key = JSON.stringify(pursuit.anchors) + '|' + JSON.stringify(pursuit.params);
   if (key !== cacheKey) {
     cacheVal = buildPath(pursuit.anchors, pursuit.params);
     cacheKey = key;
@@ -517,7 +727,6 @@ export function moveHandle(i: number, side: 'out' | 'in', x: number, y: number) 
   if (side === 'in') ang += 180; // the in-handle points backward along the path
   a.ang = round(norm(ang));
   a[side] = round(len);
-  if (a.lock) a.in = a.out = round(len); // symmetry lock keeps both lengths equal
 }
 
 /** Set exact anchor fields from typed input (coordinate / heading / handle boxes). */
@@ -528,14 +737,8 @@ export function editAnchor(i: number, patch: Partial<Anchor>) {
   if (patch.x !== undefined) a.x = round(patch.x);
   if (patch.y !== undefined) a.y = round(patch.y);
   if (patch.ang !== undefined) a.ang = round(norm(patch.ang));
-  if (patch.out !== undefined) {
-    a.out = round(Math.max(3, patch.out));
-    if (a.lock) a.in = a.out;
-  }
-  if (patch.in !== undefined) {
-    a.in = round(Math.max(3, patch.in));
-    if (a.lock) a.out = a.in;
-  }
+  if (patch.out !== undefined) a.out = round(Math.max(3, patch.out));
+  if (patch.in !== undefined) a.in = round(Math.max(3, patch.in));
 }
 
 /** Snap a coordinate to the nearest multiple of `grid` (0 = no snap). */
@@ -554,40 +757,28 @@ export function nudgeSelected(dx: number, dy: number) {
   a.y = round(a.y + dy);
 }
 
-/** Reset an anchor's tangent handle lengths to the chord-based default. */
-export function autoHandles(i: number) {
+/**
+ * Set (or clear, with null) the speed ceiling of the segment LEAVING anchor i —
+ * BezierSegment.maxVel, exported verbatim. The last anchor starts no segment,
+ * so it has none. To slow a span inside one curve, insertAnchor() at both ends
+ * of the span first: the split reproduces the curve exactly and an ordinary
+ * joint costs nothing, so the middle piece can be capped on its own.
+ */
+export function setSegmentCap(i: number, cap: number | null) {
   const a = pursuit.anchors[i];
-  if (!a) return;
-  pushHistory('auto:' + i);
-  const prev = pursuit.anchors[i - 1];
-  const next = pursuit.anchors[i + 1];
-  if (next) a.out = round(Math.max(3, dist(a, next) * 0.35));
-  if (prev) a.in = round(Math.max(3, dist(prev, a) * 0.35));
-  if (a.lock) a.in = a.out = round(Math.max(a.in, a.out));
-}
-
-/** Set (or clear, with null) the per-anchor speed cap. 0 = full stop. */
-export function setAnchorCap(i: number, cap: number | null) {
-  const a = pursuit.anchors[i];
-  if (!a) return;
+  if (!a || i >= pursuit.anchors.length - 1) return;
   pushHistory('cap:' + i);
-  if (cap === null) delete a.vCap;
-  else a.vCap = Math.max(0, round(cap));
+  if (cap === null) delete a.segMaxVel;
+  else a.segMaxVel = Math.max(0, round(cap));
 }
 
-/** Toggle the symmetry lock; turning it on averages the two handle lengths. */
-export function toggleLock(i: number) {
+/** Force a full stop at the end of the segment leaving anchor i. */
+export function setSegmentStop(i: number, stop: boolean) {
   const a = pursuit.anchors[i];
-  if (!a) return;
-  pushHistory('lock:' + i);
-  if (a.lock) {
-    delete a.lock;
-  } else {
-    a.lock = true;
-    const m = round(Math.max(3, (a.in + a.out) / 2));
-    a.in = m;
-    a.out = m;
-  }
+  if (!a || i >= pursuit.anchors.length - 1) return;
+  pushHistory('stop:' + i);
+  if (stop) a.segStopEnd = true;
+  else delete a.segStopEnd;
 }
 
 /** Append an anchor at the end of the spline, tangents along the closing chord. */
@@ -649,10 +840,24 @@ export function insertAnchor(seg: number, t: number) {
   pursuit.selected = seg + 1;
 }
 
+/**
+ * Clear segment properties left on the LAST anchor. It starts no segment, so a
+ * cap or stop sitting there exports nothing and setSegmentCap/setSegmentStop
+ * refuse to touch it — the field would draw a cap ring with no way to clear it.
+ * Deleting or reversing can strand one there, so both call this afterwards.
+ */
+function dropStrandedSegProps(anchors: Anchor[]) {
+  const last = anchors[anchors.length - 1];
+  if (!last) return;
+  delete last.segMaxVel;
+  delete last.segStopEnd;
+}
+
 export function deleteAnchor(i: number) {
   if (pursuit.anchors.length <= 2) return; // keep a valid path
   pushHistory();
   pursuit.anchors.splice(i, 1);
+  dropStrandedSegProps(pursuit.anchors);
   pursuit.selected = null;
 }
 
@@ -700,13 +905,33 @@ export function mirrorPath(axis: MirrorAxis) {
   });
 }
 
-/** Reverse travel direction: flip anchor order, spin each 180°, swap handles. */
+/**
+ * Reverse travel direction: flip anchor order, spin each 180°, swap handles.
+ *
+ * Caps and stops ride on the anchor that STARTS their segment, so they cannot
+ * come along with it: geometric segment j is segment n-2-j once reversed, and a
+ * stopEnd moves back one further still, onto whatever segment now ARRIVES at the
+ * anchor the stop belongs to. A stop at the old finish has nowhere to land —
+ * the reversed path starts there, already at rest.
+ */
 export function reversePath() {
   pushHistory();
-  pursuit.anchors = pursuit.anchors
+  const old = pursuit.anchors;
+  const n = old.length;
+  const flipped = old
     .slice()
     .reverse()
-    .map((a) => ({ ...a, ang: round(norm(a.ang + 180)), in: a.out, out: a.in }));
+    .map((a) => {
+      const b: Anchor = { ...a, ang: round(norm(a.ang + 180)), in: a.out, out: a.in };
+      delete b.segMaxVel;
+      delete b.segStopEnd;
+      return b;
+    });
+  for (let j = 0; j < n - 1; j++) {
+    if (old[j].segMaxVel !== undefined) flipped[n - 2 - j].segMaxVel = old[j].segMaxVel;
+    if (old[j].segStopEnd && n - 3 - j >= 0) flipped[n - 3 - j].segStopEnd = true;
+  }
+  pursuit.anchors = flipped;
   pursuit.selected = null;
 }
 
@@ -851,7 +1076,14 @@ export function pathSelfIntersects(pts: Pt[]): boolean {
   return false;
 }
 
-// --- saved paths (file-backed, dev-server /api/paths) -------------------------
+// --- saved paths (folder-backed) ----------------------------------------------
+// Saved paths are real .json files in the "trajectory paths" folder, served by
+// the /api/paths dev endpoint — the same arrangement the sandbox has with
+// "sandbox autons" (sandbox.svelte.ts), down to the flows below: the picker
+// drawer is the folder listing, saving writes a file, and opening a file
+// focuses its tab if one is already open rather than opening a second copy.
+
+const PATHS_API = '/api/paths';
 
 export interface SavedPath {
   name: string;
@@ -859,70 +1091,99 @@ export interface SavedPath {
   content: string; // JSON of { anchors, params }
 }
 
-export const savedPaths = $state<SavedPath[]>([]);
+/** Serialize the current path — the file's whole contents. */
+function serializePath(): string {
+  return JSON.stringify({ anchors: pursuit.anchors, params: pursuit.params });
+}
 
+/** Build a tab from a saved path's file text. Clean the moment it's created
+ *  (it matches disk by definition) and with empty undo/redo: a freshly opened
+ *  document has no prior state in THIS tab to undo into. Null when the file is
+ *  corrupt or holds fewer than two usable anchors. */
+function tabFromPathText(text: string, name: string): PathTabState | null {
+  try {
+    const d = JSON.parse(text) as { anchors?: unknown; params?: Partial<PursuitPlanParams> };
+    const anchors = readAnchors(d.anchors);
+    if (!anchors) return null;
+    return tabFrom(name, anchors, { ...DEFAULT_PARAMS, ...(d.params ?? {}) });
+  } catch {
+    return null;
+  }
+}
+
+/** Reload the saved-path menu from the folder. */
 export async function refreshSavedPaths() {
   try {
-    const r = await fetch('/api/paths');
-    if (r.ok) {
-      const list = (await r.json()) as SavedPath[];
-      savedPaths.splice(0, savedPaths.length, ...list);
-    }
+    const res = await fetch(PATHS_API);
+    if (res.ok) pursuit.saved = (await res.json()) as SavedPath[];
   } catch {
-    // dev server / offline — leave the list as-is
+    // dev endpoint unavailable (e.g. static build) — leave the list as-is
   }
 }
 
-function uniquePathName(base: string): string {
-  let name = base;
-  let n = 2;
-  const taken = new Set(savedPaths.map((p) => p.name.toLowerCase()));
-  while (taken.has(name.toLowerCase())) name = `${base} ${n++}`;
-  return name;
-}
-
-/** Write the current path to disk under `name` (defaults to the path name). */
-export async function savePath(name?: string) {
-  const nm = (name ?? pursuit.name).trim() || 'path';
-  pursuit.name = nm;
-  const content = JSON.stringify({ anchors: pursuit.anchors, params: pursuit.params });
+/** Write the current path to a file in the folder (name = file name). The
+ *  low-level primitive both save flows write through — neither one prompts,
+ *  so this is the only place that talks to the API. */
+export async function savePath(name: string): Promise<void> {
+  const trimmed = name.trim() || 'untitled';
   try {
-    await fetch('/api/paths', {
+    await fetch(PATHS_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: nm, content })
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: trimmed, content: serializePath() })
     });
   } catch {
-    // ignore
+    // ignore write failure
   }
   await refreshSavedPaths();
 }
 
-/** Save a copy under a fresh "… copy" name without touching the original file. */
-export async function duplicatePath() {
-  await refreshSavedPaths();
-  pursuit.name = uniquePathName(pursuit.name + ' copy');
-  await savePath();
+/** Save — writes back to the open document, no name prompt. A no-op when
+ *  untitled; the Save button falls through to Save as in that case. */
+export async function saveCurrentPath(): Promise<void> {
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (!tab?.name) return;
+  await savePath(tab.name);
+  markClean();
 }
 
-/** Load a saved path into the editor (undoable). */
-export function loadPath(p: SavedPath) {
-  try {
-    const d = JSON.parse(p.content) as { anchors: Anchor[]; params: Partial<PursuitPlanParams> };
-    if (!Array.isArray(d.anchors) || d.anchors.length < 2) return;
-    pushHistory();
-    pursuit.anchors = d.anchors.map((a) => migrateAnchor({ ...a }));
-    pursuit.params = { ...DEFAULT_PARAMS, ...(d.params ?? {}) };
-    pursuit.name = p.name;
-    pursuit.selected = null;
-  } catch {
-    // corrupt file — ignore
+/** Save as — the only place a name is typed. Always renames the ACTIVE TAB to
+ *  the new name, so "Save as" reliably means "this tab is now that file." */
+export async function savePathAs(name: string): Promise<void> {
+  const trimmed = name.trim() || 'untitled';
+  await savePath(trimmed);
+  const tab = pursuit.tabs[pursuit.activeTab];
+  if (tab) tab.name = trimmed;
+  markClean();
+}
+
+/** Open a saved path. Already open in a tab → focus it instead of opening a
+ *  second copy; otherwise stash the current path, append a fresh tab loaded
+ *  from the file, and focus that. Opening never loses anything, so unlike a
+ *  close it needs no confirmation. */
+export function loadPath(name: string): void {
+  const existing = pursuit.tabs.findIndex((t) => t.name === name);
+  if (existing !== -1) {
+    switchTab(existing);
+    return;
   }
+  const file = pursuit.saved.find((s) => s.name === name);
+  if (!file) return;
+  const tab = tabFromPathText(file.content, name);
+  if (!tab) return; // corrupt file — leave the workspace alone
+  stashActiveTab();
+  pursuit.tabs.push(tab);
+  pursuit.activeTab = pursuit.tabs.length - 1;
+  hydrateActiveTab();
+  resetTransientUiState();
 }
 
-export async function deletePath(name: string) {
+/** Delete a saved path's file. Any tab still open under that name keeps
+ *  editing an in-memory copy — Save would recreate the file, same as any text
+ *  editor after its file disappears out from under it. */
+export async function deletePath(name: string): Promise<void> {
   try {
-    await fetch('/api/paths?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    await fetch(`${PATHS_API}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
   } catch {
     // ignore
   }
@@ -931,26 +1192,57 @@ export async function deletePath(name: string) {
 
 // --- C++ export ---------------------------------------------------------------
 
-/** Generate the paste-ready LucasLib snippet: a PathPoint[] array + the call. */
+/**
+ * The paste-ready LucasLib snippet: the control points, and the call that
+ * follows them.
+ *
+ * Deliberately NOT the baked rows. The brain bakes these same segments with
+ * src/ramsete/profile.cpp \u2014 which is what the preview above just ran through
+ * its port \u2014 so shipping geometry keeps one implementation of the profile
+ * instead of two, and a path stays a few lines instead of a few hundred.
+ *
+ * Route-level knobs only appear when they differ from ProfileConfig's own
+ * defaults, in which case the bake has to be spelled out; an untouched path is
+ * the bare one-liner.
+ */
 export function exportCpp(): string {
   const plan = getPlan();
-  const name = sanitize(pursuit.name);
-  const rows = plan.points.map((pt) => `    {${fmt(pt.x)}, ${fmt(pt.y)}, ${fmt(pt.v)}},`).join('\n');
-  const dur = planDuration(plan.points).toFixed(1);
+  const name = sanitize(pursuit.openPath ?? 'path'); // an untitled tab still needs a C++ identifier
+  const segs = pathSegments(pursuit.anchors);
+  if (!segs.length) return '// add a second anchor to make a path';
 
-  // followPath()/PathPoint went away with pure pursuit, and RAMSETE's
-  // followTrajectory() isn't in the library yet \u2014 so emit the baked data with a
-  // local struct (compiles as-is) instead of a call to something that no longer
-  // exists. Point this at followTrajectory once that lands.
-  return `// ${plan.points.length} points \u00b7 ${plan.total.toFixed(1)}" \u00b7 ~${dur}s \u00b7 baked by the Trajectory Generator
-//
-// NOTE: pure pursuit was removed from LucasLib, so followPath() and PathPoint are
-// gone, and followTrajectory() does not exist yet. This is the baked data only \u2014
-// wire it into a consumer once RAMSETE lands.
-struct TrajPoint { double x, y, v; };
-static const std::vector<TrajPoint> ${name} = {
-${rows}
-};`;
+  const body = segs
+    .map((s) => {
+      const pt = (p: { x: number; y: number }) => `{${fmt(p.x)}, ${fmt(p.y)}}`;
+      let line = `  {.a = ${pt(s.a)}, .b = ${pt(s.b)}, .c = ${pt(s.c)}, .d = ${pt(s.d)}`;
+      if (s.maxVel !== undefined) line += `, .maxVel = ${fmt(s.maxVel)}`;
+      if (s.stopEnd) line += `, .stopEnd = true`;
+      return line + '}';
+    })
+    .join(',\n');
+
+  // Only the fields that are no longer at their in-struct default.
+  const p = pursuit.params;
+  const cfg: string[] = [];
+  if (p.maxVel !== DEFAULT_PARAMS.maxVel) cfg.push(`.maxVel = ${fmt(p.maxVel)}`);
+  if (p.maxAccel !== DEFAULT_PARAMS.maxAccel) cfg.push(`.maxAccel = ${fmt(p.maxAccel)}`);
+  if (p.velMargin !== DEFAULT_PARAMS.velMargin) cfg.push(`.velMargin = ${fmt(p.velMargin, 2)}`);
+  if (p.endSpeed !== DEFAULT_PARAMS.endSpeed) cfg.push(`.endSpeed = ${fmt(p.endSpeed)}`);
+
+  const call = cfg.length
+    ? `ramsete.trajectory(bakeTrajectory(${name}, {${cfg.join(', ')}}));`
+    : `ramsete.trajectory(${name});`;
+
+  const caps = segs.filter((s) => s.maxVel !== undefined).length;
+  const capNote = caps ? ` \u00b7 ${caps} capped segment${caps > 1 ? 's' : ''}` : '';
+
+  return `// ${segs.length} segment${segs.length > 1 ? 's' : ''} \u00b7 ${plan.total.toFixed(1)}" \u00b7 ~${plan.duration.toFixed(1)}s${capNote}
+// Baked on the brain from these control points \u2014 the speed plan above is what
+// bakeTrajectory() will produce from them.
+std::vector<BezierSegment> ${name} = {
+${body}
+};
+${call}`;
 }
 
 function sanitize(name: string): string {

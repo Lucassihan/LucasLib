@@ -10,7 +10,7 @@
 
   // A commanded target marker (dot) whose halo encodes the movement's spatial
   // exit conditions (matches checkLateralExit in the lib):
-  //   - settleR (ec.settleGate) -> the SETTLE activation circle: exit once inside
+  //   - settleR (ec.settleWithin) -> the SETTLE activation circle: exit once inside
   //                it, slowing down, and under ec.v.
   //   - crossD (ec.d) -> the CROSS trip line: an INFINITE line ⊥ the heading, slid
   //                that many inches back toward the robot from the target. Exit the

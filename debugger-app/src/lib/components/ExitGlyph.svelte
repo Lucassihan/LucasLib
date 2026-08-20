@@ -1,6 +1,6 @@
 <script lang="ts">
   // Exit-condition glyphs. Colorless (currentColor) so they never clash with
-  // the movement colors. Category: settle | timeout | early | perp.
+  // the movement colors. Category: settle | timeout | early | perp | schedule.
   let { category, size = 16 }: { category: string; size?: number } = $props();
 </script>
 
@@ -32,5 +32,13 @@
     <line x1="14" y1="3.5" x2="14" y2="20.5" />
     <path d="M3.5 12 H20.5" />
     <path d="M17.5 9 L20.5 12 L17.5 15" />
+  </svg>
+{:else if category === 'schedule'}
+  <!-- schedule: trajectory's reference clock ran out — a finish flag,
+       distinct from settle's crosshairs (this is a clock reaching its end,
+       not a controller deciding it's close enough) -->
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="6" y1="3" x2="6" y2="21" />
+    <path d="M6 4.5 H17 L14 8.5 L17 12.5 H6" />
   </svg>
 {/if}

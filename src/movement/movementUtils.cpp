@@ -24,9 +24,7 @@ double leftOut;
 double rightOut;
 double headingError;
 double lateralError;
-double targetX;
-double targetY;
-double targetH;
+Pose   target;
 double targetStraightDistance;
 bool close;
 bool exitConditionFulfilled;
@@ -57,9 +55,7 @@ void clearAllValues() {
     headingError = 0;
     lateralError = 0;
     initialHeading = 0;
-    targetX = 0;
-    targetY = 0;
-    targetH = 0;
+    target = {};
     targetStraightDistance = 0;
     lastV = 0;
     lastω = 0;
@@ -88,7 +84,7 @@ void blendOutputs(BlendSettings bs) {
     //-if heading error is large, drive output will be small.
     //-if heading error is past 90 degs, cosine = negative, and the drive will start by driving backward while resolving heading error
     if (bs.cosineScaling) {
-        driveOut *= cos(headingError * M_PI / 180.0);
+        driveOut *= cos(TO_RAD(headingError));
     }
 
     //step 2. Partial turn-priority subtraction — drive absorbs (turnPriority * overturn) of the cut.
@@ -160,11 +156,11 @@ double resolveTurnDirection(double wrapped, double positive, double negative, in
     return wrapped;
 }
 
-//Resolves the directional heading error for a target heading. Flips the target by 180° if backward.
-double resolveHeadingTarget(double heading, bool backward, int& direction) {
-    return resolveTurnDirection(chassis.wrappedHeadingError(heading, backward),
-                                chassis.positiveHeadingError(heading, backward),
-                                chassis.negativeHeadingError(heading, backward),
+//Resolves the directional heading error for a target heading.
+double resolveHeadingTarget(double heading, int& direction) {
+    return resolveTurnDirection(chassis.wrappedHeadingError(heading),
+                                chassis.positiveHeadingError(heading),
+                                chassis.negativeHeadingError(heading),
                                 direction);
 }
 

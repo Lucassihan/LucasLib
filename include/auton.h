@@ -2,6 +2,8 @@
 
 #include "tuner.h"
 
-void exampleAuton();
+void exampleAuto();
 void redAuto();
 void blueAuto();
+
+void trajectoryTest();

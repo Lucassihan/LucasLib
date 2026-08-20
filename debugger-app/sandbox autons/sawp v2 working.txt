@@ -1,0 +1,90 @@
+//!params {"name":"sawp v2 working","knobs":{"wheelRpm":450,"wheelDiameter":2.75,"robotWeight":6.5,"driveKp":0.865,"turnKp":0.205,"swingKp":0.5,"headingKp":0.19,"lateralMomentum":0.56,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"trackwidth":9.5,"ecLatT":5000,"ecLatV":8,"ecLatD":-1,"ecLatWithin":4,"ecTurnT":5000,"ecTurnV":0.35,"ecTurnD":-1,"ecTurnWithin":20,"rsMaxVel":72,"rsMaxAccel":300,"rsVelMargin":0.9,"rsMaxLateralAccel":0,"rsSpacing":2},"efforts":{},"knobsVersion":7}
+chassis.setPos(-62.5,6.2,-90);
+
+//toggle
+driveForward(5);
+driveBackward(5);
+driveForward(5);
+
+
+//Score preload at goal
+backward = true;
+drivePID.targetOffset = -6;
+moveTo(-48,24);
+delay(300);
+
+//Move off goal
+backward = false;
+moveTo(-55.5,11.3);
+
+//Get wall cup
+backward = true;
+face(140);
+drivePID.targetOffset = -9;
+moveTo(-70,24, {.v = 0.5});
+drivePID.maxOutput = 3;
+driveForward(12,chassis.h,{.d = 5});
+drivePID.maxOutput = 12;
+driveForward(5);
+driveBackward(5);
+
+//Score wall cup
+backward = true;
+drivePID.targetOffset = -6;
+facePoint(-48,24);
+moveTo(-48,24);
+delay(300);
+
+
+//Take pin off top of cup using blake claw
+backward = false;
+moveTo(-60,12,{.d = 5});
+backward = true;
+facePoint(-24,0);
+std::vector<BezierSegment> path1 = {
+  {.a = {-53.1, 12.6}, .b = {-46.6, 7.6}, .c = {-42, 4.6}, .d = {-32, 2.2}}
+};
+trajectory(path1);
+delay(100);
+
+//Score pin on alliance goal
+driveForward(5);
+face(180);
+std::vector<BezierSegment> path2 = {
+  {.a = {-35.4, -2.2}, .b = {-36.4, 15.8}, .c = {-36.7, 29.1}, .d = {-29.2, 40.6}}
+};
+trajectory(path2);
+delay(300);
+backward = false;
+moveTo(-36,36);
+face(135);
+
+//Grab standing cup
+backward = true;
+std::vector<BezierSegment> path3 = {
+  {.a = {-37.1, 37.6}, .b = {-42, 41.5}, .c = {-39.7, 39.5}, .d = {-43.1, 42.4}}
+};
+trajectory(path3);
+delay(100);
+
+//Score standing cup
+drivePID.targetOffset = -6;
+facePoint(-24,48);
+moveTo(-24,48);
+delay(300);
+
+//Grab standing cup
+backward = false;
+moveTo(-36,40);
+backward = true;
+facePoint(-24,24);
+std::vector<BezierSegment> path4 = {
+  {.a = {-34.8, 40.8}, .b = {-33.4, 38.6}, .c = {-30.4, 32.7}, .d = {-27.9, 29.7}}
+};
+trajectory(path4);
+
+//Score standing cup
+drivePID.targetOffset = -6;
+moveTo(24,48);
+delay(300);
+

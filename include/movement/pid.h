@@ -6,9 +6,7 @@
 #define MAX_PROFILES 10
 #define MAX_STEPS 10
 
-// Built-in profile slot. Add your own values here (e.g. fast, precise, etc.)
-// — they're just ints used to index the steps array, so the enum is purely
-// for readability at call sites like turnPID.setProfile(normal).
+// Profile slots. Just ints indexing the steps array — add your own (fast, precise) for readability at call sites like turnPID.setProfile(normal).
 enum PIDProfile {
     normal = 0
 };
@@ -21,7 +19,7 @@ struct PIDStep {
 };
 
 class PID {
-    public: // stuff that you can use inside auton.cpp and movement.cpp, such as doing something like drivePID.maxAccelRate = 0.5 in the middle of an auton
+    public: // usable from auton.cpp and movement.cpp, e.g. drivePID.maxAccelRate = 0.5 mid-auton
     PID();
 
     void   setProfile(int profile);
@@ -40,10 +38,7 @@ class PID {
     double minOutput;
     double maxOutput;
 
-    // Movement offset applied by the movement functions (e.g. drivePID.targetOffset,
-    // turnPID.targetOffset). Set it before a movement to bias that movement; the
-    // movement zeroes it again on exit. NOT touched by clearAllValues(), so a
-    // value set right before a call survives the movement's start-of-run reset.
+    // Set before a movement to bias it; the movement zeroes it on exit. NOT touched by clearAllValues(), so it survives the start-of-run reset.
     double targetOffset;
 
     // accel/decel limits
@@ -59,7 +54,7 @@ class PID {
     double output;
     double derivative;
 
-    private: // stuff that is used by the PID class internally for calculations, and will not be accessible outside
+    private: // internal to the calculation
     void determineConstants(double inputError);
 
     PIDStep steps[MAX_PROFILES][MAX_STEPS];
@@ -83,9 +78,7 @@ class PID {
     double   raw;
 };
 
-// =========================================================================
-// Shared PID instances (defined in pid.cpp)
-// =========================================================================
+// ---- Shared PID instances (defined in pid.cpp) ----
 
 extern PID drivePID;
 extern PID turnPID;

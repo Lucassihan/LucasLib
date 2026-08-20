@@ -8,19 +8,36 @@
 // Anything the sandbox has to invent about real-world behavior (top speed,
 // weight, heading-correction effort) comes from SimKnobs — the left panel.
 
-import type { ParseResult, CallStmt, ArgValue, StructInit } from './parse';
+import type { ParseResult, CallStmt, ArgValue, StructInit, PathDeclStmt } from './parse';
 import { STRUCT_FIELDS } from './spec';
-import { bakeTrajectory, defaultTrajectory, type TrajectoryMap } from '$lib/trajectory/spline';
+import {
+  bakeTrajectory,
+  resolveProfile,
+  sampleTrajectory,
+  trajectoryDuration,
+  ramseteError,
+  ramseteGain,
+  ramseteClockRate,
+  ramseteTargetV,
+  ramseteTargetOmega,
+  moveToError,
+  moveToTurn,
+  DEFAULT_RAMSETE,
+  type BezierSegment,
+  type ProfileConfig,
+  type RamseteConfig,
+  type TrajPoint
+} from './ramsete';
 
 export interface SimKnobs {
   // Drivetrain spec — the robot's motion limits are DERIVED from these via
   // deriveMotion(): 6 × 11 W V5 motors, wheel rpm + diameter set top speed and
-  // force, weight (2–10 lb, base 2) sets accel, trackwidth sets the angular numbers.
+  // force, weight (1–20 kg, base 1) sets accel, trackwidth sets the angular numbers.
   /** output rpm at the wheels (cartridge × external gearing) */
   wheelRpm: number;
   /** wheel diameter, inches */
   wheelDiameter: number;
-  /** robot weight, lb — 2 to 10, base (floor) 2 lb */
+  /** robot weight, kg — 1 to 20, base (floor) 1 kg */
   robotWeight: number;
   // PID proportional gains — how AGGRESSIVE each channel is. Same shape as the
   // real controllers; the sim scales output volts from these.
@@ -42,7 +59,7 @@ export interface SimKnobs {
   omniWheels: boolean;
   /** default heading-correction effort for moveTo (per-movement overrides exist) */
   moveToHeadingEffort: number;
-  /** default heading-correction effort for drive() */
+  /** default heading-correction effort for driveForward()/driveBackward() */
   driveHeadingEffort: number;
   /** library global: within this dist moveTo stops correcting heading */
   headingDisableDist: number;
@@ -55,18 +72,53 @@ export interface SimKnobs {
   ecLatT: number;
   ecLatV: number;
   ecLatD: number;
-  ecLatGate: number;
+  ecLatWithin: number;
   ecTurnT: number;
   ecTurnV: number;
   ecTurnD: number;
-  ecTurnGate: number;
+  ecTurnWithin: number;
+
+  // trajectory — bakeTrajectory's own chassis limits (config.cpp
+  // setRamseteSettings). runTrajectory runs the RAMSETE law itself
+  // (a perfect actuator obeys it exactly — see the function's own doc
+  // comment), but the law's constants (b/zeta/vMinGain/clockCoupling) come
+  // straight off DEFAULT_RAMSETE rather than a knob — they're config.cpp's
+  // measured values, not something to retune from the sandbox. The
+  // velocity-controller gains that used to live below are still gone:
+  // nothing reads them (the actuator is perfect, so there is no velocity
+  // loop to tune).
+  rsMaxVel: number;
+  rsMaxAccel: number;
+  // trajectory — profile.h's ProfileConfig knobs that used to be
+  // reachable through the movement's own (now-removed) `pc` argument. The
+  // C++ still has ProfileConfig — bakeTrajectory(path, cfg) still takes one —
+  // but ramsete.trajectory(path, ec) no longer forwards a route-authored one,
+  // so these three sit here at the struct's own in-struct defaults instead.
+  /** fraction of maxVel the ceilings may ask for (ProfileConfig.velMargin) */
+  rsVelMargin: number;
+  /** inches of arc between baked samples (ProfileConfig.spacing) */
+  rsSpacing: number;
+  /** ProfileConfig.endSpeed — in/s left in the LAST baked row, for a hot handoff */
+  rsEndSpeed: number;
+
+  // ramsete.moveTo — the lyapunov point movement. Unlike trajectory above,
+  // this one runs on drivePID / headingPID in VOLTS and never touches the velocity
+  // layer, so its two constants are the only thing it adds.
+  /** cross-track coupling, 1/in. NOT comparable to the law's b — that one multiplies in/s, this one volts. */
+  rsKLat: number;
 }
 
 export const DEFAULT_KNOBS: SimKnobs = {
   wheelRpm: 450,
   wheelDiameter: 3.25,
-  robotWeight: 6,
-  driveKp: 0.45,
+  // kg — 6 lb was the old default; 6 × 0.4536 = 2.7216 kg, rounded to 2.75 kg
+  // so the number the panel now shows preserves today's derived motion.
+  robotWeight: 2.75,
+  // 2 V/in is where the brake envelope in lateralPowMag() takes over from the P
+  // term: below it the approach is P-limited and the movement crawls in (0.45
+  // spent half its time under a quarter of peak speed), above it nothing changes
+  // because the no-overshoot curve is already the binding constraint.
+  driveKp: 2,
   turnKp: 0.5,
   swingKp: 0.5,
   headingKp: 1,
@@ -77,15 +129,24 @@ export const DEFAULT_KNOBS: SimKnobs = {
   driveHeadingEffort: 0.8,
   headingDisableDist: 6,
   trackwidth: 13,
-  // mirror exitConditions.h defaults
+  // mirror exitConditions.h defaults. v = 2 in/s / 0.35 rad/s — the old 10/10
+  // values were nowhere near a real stop (see exitConditions.h for the math).
   ecLatT: 5000,
-  ecLatV: 10,
+  ecLatV: 2,
   ecLatD: -1,
-  ecLatGate: 12,
+  ecLatWithin: 12,
   ecTurnT: 5000,
-  ecTurnV: 10,
+  ecTurnV: 0.35,
   ecTurnD: -1,
-  ecTurnGate: 20
+  ecTurnWithin: 20,
+  // mirror config.cpp's setRamseteSettings()
+  rsMaxVel: 55,
+  rsMaxAccel: 90,
+  // ProfileConfig's own in-struct defaults (profile.h)
+  rsVelMargin: 0.9,
+  rsSpacing: 2,
+  rsEndSpeed: 0,
+  rsKLat: 0.02,
 };
 
 /** Per-movement heading-correction-effort overrides, keyed by statement index. */
@@ -109,7 +170,7 @@ export function deriveMotion(knobs: SimKnobs): {
 } {
   const rpm = Math.max(50, knobs.wheelRpm);
   const dia = Math.max(1.5, knobs.wheelDiameter);
-  const massKg = Math.max(2, knobs.robotWeight) * 0.4536; // base weight 2 lb
+  const massKg = Math.max(1, knobs.robotWeight); // base weight 1 kg, already in kg
   const track = Math.max(6, knobs.trackwidth);
   const trackM = track * 0.0254;
   const mu = knobs.omniWheels ? 0.95 : 1.1; // wheel↔foam friction
@@ -189,6 +250,8 @@ export interface SimSegment {
   boom?: BoomOverlay;
   /** governor configs in effect when this movement started (for the PID view) */
   pids?: PidSnapshot;
+  /** trajectory only — the baked schedule, for the field's speed-coloured spline */
+  traj?: { rows: TrajPoint[]; pathName: string; profileMaxVel: number };
 }
 
 export interface PidSnapshot {
@@ -244,19 +307,45 @@ function boomVals(init: StructInit): Record<string, number | boolean> {
   return out;
 }
 
+/** BezierSegment's own scalar defaults (reversed/stopEnd/maxVel/maxAccel) — the
+ * control points have no scalar default, they're read straight from the parse. */
+const SEG_SCALAR_DEFAULTS: Record<string, number | boolean> = Object.fromEntries(
+  (STRUCT_FIELDS.bezierSeg ?? []).filter((f) => f.kind !== 'point').map((f) => [f.name, f.def])
+);
+
+/** A parsed path decl → the BezierSegment[] bakeTrajectory wants. */
+function pathFromDecl(decl: PathDeclStmt): BezierSegment[] {
+  return decl.segs.map((seg) => {
+    const pt = (k: 'a' | 'b' | 'c' | 'd') => ({
+      x: seg.points[k]?.x.value ?? 0,
+      y: seg.points[k]?.y.value ?? 0
+    });
+    return {
+      a: pt('a'),
+      b: pt('b'),
+      c: pt('c'),
+      d: pt('d'),
+      reversed: (seg.fields.reversed?.value as boolean | undefined) ?? (SEG_SCALAR_DEFAULTS.reversed as boolean),
+      stopEnd: (seg.fields.stopEnd?.value as boolean | undefined) ?? (SEG_SCALAR_DEFAULTS.stopEnd as boolean),
+      maxVel: (seg.fields.maxVel?.value as number | undefined) ?? (SEG_SCALAR_DEFAULTS.maxVel as number),
+      maxAccel: (seg.fields.maxAccel?.value as number | undefined) ?? (SEG_SCALAR_DEFAULTS.maxAccel as number)
+    };
+  });
+}
+
 // --- exit-condition + PID-config shapes ---------------------------------------
 
 interface LatEc {
   t: number;
   v: number;
   d: number;
-  settleGate: number;
+  settleWithin: number;
 }
 interface TurnEc {
   t: number;
   v: number;
   d: number;
-  settleGate: number;
+  settleWithin: number;
 }
 
 /** Assignable PID channel config (mirrors the LucasLib PID public fields). */
@@ -288,12 +377,7 @@ const HARD_CAP_MS = 15000; // sim safety net per movement
 
 // ---------------------------------------------------------------------------
 
-export function simulate(
-  parsed: ParseResult,
-  knobs: SimKnobs,
-  efforts: EffortOverrides = {},
-  trajectories: TrajectoryMap = {}
-): SimResult {
+export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOverrides = {}): SimResult {
   const segments: SimSegment[] = [];
   let t = 0;
 
@@ -311,13 +395,14 @@ export function simulate(
 
   // Global drive direction — REAL LucasLib global: initializes FALSE and nothing
   // ever resets it. Point/pose movements honor it; face/swings-to-heading and
-  // drive() don't — drive() takes its direction from the sign of distance.
+  // driveForward()/driveBackward() don't — those two take their direction from
+  // which function was called, never from this global.
   let gBack = false;
 
   // Assignable PID channel configs. drivePID governs forward output; turnPID
   // governs actual turns (face/swing); headingPID governs the heading-correction
-  // output of LATERAL movements (moveTo / drive / boomerang). Persist
-  // across movements except targetOffset, which each movement consumes then zeroes.
+  // output of LATERAL movements (moveTo / driveForward / driveBackward / boomerang).
+  // Persist across movements except targetOffset, which each movement consumes then zeroes.
   const pid = { drive: defaultPid(), turn: defaultPid(), heading: defaultPid() };
   // Stage-2 governor (LucasLib TotalOutput): slew + ratio-preserving cap + floor
   // on the PER-SIDE (left/right) voltages, applied after the channel PIDs blend.
@@ -452,8 +537,22 @@ export function simulate(
    * lateral movement is heading correction — governed by headingPID (default),
    * NOT turnPID — then the blended sides pass the totalOutput stage. Velocity
    * approaches the commanded value at the derived accel limits.
+   *
+   * `raw` skips the per-channel govern() call: executeTrajectory.cpp writes
+   * drivePow/headingPow straight from the velocity controllers into
+   * blendOutputs()/governOutputs(), with none of the drivePID/headingPID
+   * cap-floor-slew machinery in between — that governor only exists on the
+   * channels a PID object owns. governTotal() (governOutputs' mirror) still
+   * runs either way; it is stage 2, not stage 1.
    */
-  function step(ticks: SimTick[], drivePow: number, turnPow: number, turnChan: Chan = 'heading', err?: { de: number; he: number }) {
+  function step(
+    ticks: SimTick[],
+    drivePow: number,
+    turnPow: number,
+    turnChan: Chan = 'heading',
+    err?: { de: number; he: number },
+    opts?: { raw?: boolean }
+  ) {
     // fresh movement → fresh I accumulator + D history
     if (ticks.length === 0) {
       dSynth = makeSynth(knobs.driveKp, false);
@@ -461,7 +560,7 @@ export function simulate(
     }
     const dpid = err ? dSynth(err.de) : undefined;
     const tpid = err ? tSynth(err.he) : undefined;
-    const g = governTotal(govern('drive', drivePow), govern(turnChan, turnPow));
+    const g = opts?.raw ? governTotal(drivePow, turnPow) : governTotal(govern('drive', drivePow), govern(turnChan, turnPow));
     const vCmd = (g.dp / 12) * maxSpeedEff;
     const wCmd = (g.tp / 12) * maxWEff;
     vel.v += clamp(vCmd - vel.v, latAccel * DT);
@@ -507,7 +606,7 @@ export function simulate(
    * Lateral exit — mirrors checkLateralExit() in exitConditions.cpp. -1 is the OFF
    * sentinel on every field.
    *  - SETTLE (v = -1 → off): the chassis is SLOWING (|v| < |lastV|) AND the error is
-   *    inside settleGate AND |v| is under ec.v. This is a speed test now, not the PID
+   *    inside settleWithin AND |v| is under ec.v. This is a speed test now, not the PID
    *    D-term test it used to be.
    *  - CROSS (d = -1 → off, or no point target): which SIDE of the target's ⊥ line
    *    we're on, not how close to it. The line is INFINITE (no lateral span to miss)
@@ -515,8 +614,9 @@ export function simulate(
    *    with the line ahead and goes negative once past, so a fast pass can't skip it
    *    the way a proximity band can. d slides the line that many inches TOWARD us to
    *    fire early (0 = line sits on the target).
-   * `hasPointTarget` = false for drive(), which is relative and has no target point —
-   * the lib skips cross there rather than testing a line through the field origin.
+   * `hasPointTarget` = false for driveForward()/driveBackward(), which are relative and
+   * have no target point — the lib skips cross there rather than testing a line
+   * through the field origin.
    * `err` is the movement's SIGNED lateralError, incl. drivePID.targetOffset.
    */
   function latExit(
@@ -534,7 +634,7 @@ export function simulate(
     if (
       ec.v !== -1 &&
       Math.abs(vNow) < Math.abs(st.lastV) &&
-      Math.abs(err) < ec.settleGate &&
+      Math.abs(err) < ec.settleWithin &&
       Math.abs(vNow) < ec.v
     )
       return 'settle';
@@ -557,9 +657,9 @@ export function simulate(
   /**
    * Turn exit — mirrors checkTurnExit() in exitConditions.cpp. Same shape as the
    * lateral channel on the angular axis.
-   *  - SETTLE (v = -1 → off): |ω| is falling AND the error is inside settleGate AND
+   *  - SETTLE (v = -1 → off): |ω| is falling AND the error is inside settleWithin AND
    *    |ω| is under ec.v. NOTE ec.v is in RAD/s here, because the lib compares against
-   *    chassis.ω, which updateVelocity() computes in radians — while settleGate is in
+   *    chassis.ω, which updateVelocity() computes in radians — while settleWithin is in
    *    degrees. vel.w is degrees/s in this sim, hence the D2R.
    *  - ANGLE (d = -1 → off): ungated — fires mid-rotation the moment |error| <= d,
    *    without waiting for the robot to slow.
@@ -571,7 +671,7 @@ export function simulate(
     if (
       ec.v !== -1 &&
       Math.abs(wNow) < Math.abs(st.lastV) &&
-      Math.abs(turnError) < ec.settleGate &&
+      Math.abs(turnError) < ec.settleWithin &&
       Math.abs(wNow) < ec.v
     )
       return 'settle';
@@ -581,10 +681,27 @@ export function simulate(
   }
 
   // Configurable EC defaults (left panel) applied to omitted initializer fields.
-  const latDefaults = { t: knobs.ecLatT, v: knobs.ecLatV, d: knobs.ecLatD, settleGate: knobs.ecLatGate };
-  const turnDefaults = { t: knobs.ecTurnT, v: knobs.ecTurnV, d: knobs.ecTurnD, settleGate: knobs.ecTurnGate };
+  const latDefaults = { t: knobs.ecLatT, v: knobs.ecLatV, d: knobs.ecLatD, settleWithin: knobs.ecLatWithin };
+  const turnDefaults = { t: knobs.ecTurnT, v: knobs.ecTurnV, d: knobs.ecTurnD, settleWithin: knobs.ecTurnWithin };
   const latEc = (a: ArgValue | undefined) => structVals('lateralEc', a, latDefaults) as unknown as LatEc;
   const turnEc = (a: ArgValue | undefined) => structVals('turnEc', a, turnDefaults) as unknown as TurnEc;
+
+  /**
+   * trajectory's `ec` argument is a real C++ default ARGUMENT
+   * (ramseteController.h: `LateralExitConditions ec = {.t = 10000, .v = -1}`),
+   * not a designated initializer the sandbox fills in — so an ABSENT argument
+   * builds that struct with C++'s own rules: .t and .v are overridden, and the
+   * unmentioned .d/.settleWithin fall back to LateralExitConditions' OWN
+   * in-struct defaults (-1 / 12 in exitConditions.h), never the left-panel
+   * knobs. Filling ecLatD/ecLatWithin in here was a sandbox-only bug: with the
+   * ecLatD knob at >= 0 it armed the cross-line exit even though no ec was
+   * written, and on a curved path the finish line often sits BEHIND the robot
+   * at t = 0 — the movement exited on its first tick, a one-tick sliver on the
+   * timeline and a robot that never moved. Only a WRITTEN initializer goes
+   * through latEc()'s normal knob-fallback convention for ITS omitted fields.
+   */
+  const trajEc = (a: ArgValue | undefined): LatEc =>
+    a === undefined ? { t: 10000, v: -1, d: -1, settleWithin: 12 } : latEc(a);
 
   // --- movement primitives (each returns exit reason) ---
 
@@ -703,14 +820,49 @@ export function simulate(
     }
   }
 
-  function runDrive(distance: number, ec: LatEc, heading: number, cosineScaling: boolean, effort: number, ticks: SimTick[]): string {
+  /**
+   * Drive voltage magnitude for a lateral movement, shaped like a real trapezoid.
+   *
+   * The command is the SLOWER of two things: the P-approach kP·error, and the
+   * fastest speed the robot could still brake to a stop from at the target,
+   * sqrt(2·a·remaining). Turns have run exactly this law since Lucas asked for a
+   * turn that never overshoots whatever the knobs say (see runFace); laterals had
+   * only the P term, which makes deceleration an exponential decay rather than a
+   * ramp. Measured before this: driveForward(24) spent 0.74 s of its 1.39 s below
+   * a quarter of its own peak speed and took 2.6x the time an ideal trapezoid
+   * needs. The brake curve turns that tail into a straight ramp.
+   *
+   * Because the envelope caps the command, a high kP can no longer overshoot —
+   * it only decides how hard the robot pushes underneath the curve. That is what
+   * lets driveKp default far higher than the old 0.45 without the movement
+   * blowing through its target.
+   */
+  function lateralPowMag(err: number): number {
+    // anticipate one tick of travel so the speed stays UNDER the braking curve
+    const brake = Math.sqrt(2 * latAccel * Math.max(0, Math.abs(err) - Math.abs(vel.v) * DT));
+    const p = (clamp(Math.abs(err) * knobs.driveKp, 12) / 12) * maxSpeedEff;
+    return (Math.min(p, brake) / maxSpeedEff) * 12; // volts, unsigned
+  }
+
+  function runDrive(
+    distance: number,
+    ec: LatEc,
+    heading: number,
+    backward: boolean,
+    cosineScaling: boolean,
+    effort: number,
+    ticks: SimTick[]
+  ): string {
     vel.w *= angMom; // motion chaining: leftover spin swings through the first split second
-    // drive() is signed: negative distance backs up, and it never reads the global
-    // backward. targetOffset is applied ALONG the direction of travel, which makes
-    // its sign direction-independent — positive overshoots, negative stops short,
-    // whether distance is +20 or -20.
+    // driveForward/driveBackward: distance is a POSITIVE magnitude in both, and
+    // neither ever reads the global backward — direction comes from which one was
+    // called. Mirrors movement.cpp exactly: forward's target is distance + offset;
+    // backward's is -(distance + offset) (the error is negative while backing up,
+    // and the lib SUBTRACTS the offset there, which grows that negative magnitude —
+    // same net effect as adding it on the forward side). Either way, targetOffset
+    // still means "positive overshoots past the target, negative stops short of it."
     const off = takeOffset('drive');
-    const target = distance + off * Math.sign(distance);
+    const target = backward ? -(distance + off) : distance + off;
     const hux = Math.sin(heading * D2R);
     const huy = Math.cos(heading * D2R);
     const x0 = pose.x;
@@ -725,7 +877,7 @@ export function simulate(
       const exit = latExit(ec, est, le, 0, 0, false, false) ?? (Math.abs(le) < ec.d ? 'dist' : null);
       if (exit) return exit;
       const he = wrap(heading - pose.h);
-      const dp = clamp(le * knobs.driveKp, 12) * (cosineScaling ? Math.max(0.2, Math.cos(he * D2R)) : 1);
+      const dp = (Math.sign(le) || 1) * lateralPowMag(le) * (cosineScaling ? Math.max(0.2, Math.cos(he * D2R)) : 1);
       const tp = clamp(he * knobs.headingKp * effort, 12);
       step(ticks, dp, tp, 'heading', { de: le, he });
     }
@@ -736,23 +888,138 @@ export function simulate(
     const backward = gBack;
     const off = takeOffset('drive');
     const est = newExitState();
+
+    // moveTo runs in two stages, exactly as movement.cpp does.
+    //
+    // FAR: aim at the point and drive the distance to it. chassis.distanceTo()
+    // is SIGNED — negative on a backward move — so the drive error carries the
+    // direction and the PID's own sign does the rest.
+    //
+    // CLOSE (inside turnDisableLength): point-aiming stops, and the movement
+    // becomes a relative straight drive. The lib freezes target.h at the
+    // heading it had on entry, snapshots the remaining distance into
+    // targetStraightDistance, and calls clearTrackedInches(), after which
+    // `lateralError = targetStraightDistance - chassis.yInchesTracked`.
+    //
+    // That signed remaining distance is the part this port used to get wrong.
+    // It kept using the unsigned hypot and simply zeroed the heading error, so
+    // once the robot passed the target the error GREW instead of going negative
+    // — nothing pulled it back, and the movement drove in a straight line until
+    // its timeout. A generous ec.d hid it by exiting first; a tight settleWithin
+    // could never fire, because the error it needs to see never comes back down.
     let close = false;
+    let heldHeading = 0; // target.h — frozen on entry to CLOSE
+    let straightDist = 0; // targetStraightDistance
+    let trackX = 0; // pose at clearTrackedInches(), for yInchesTracked
+    let trackY = 0;
+
     for (;;) {
-      const dx = tx - pose.x;
-      const dy = ty - pose.y;
-      // driveError = distanceTo(target) + targetOffset (dist already carries off)
-      const dist = Math.hypot(dx, dy) + off;
-      const exit = latExit(ec, est, dist, tx, ty, backward);
+      // Zeroed each tick like the lib's lateralError / headingError globals,
+      // which clearAllValues() resets; exactly one of the two stages below
+      // always writes them, and CLOSE writes over FAR on the latching tick.
+      let le = 0;
+      let he = 0;
+
+      if (!close) {
+        const dx = tx - pose.x;
+        const dy = ty - pose.y;
+        let pointHeading = (Math.atan2(dx, dy) * 180) / Math.PI;
+        if (backward) pointHeading += 180;
+        he = wrap(pointHeading - pose.h);
+        // distanceTo() is NEGATIVE on a backward move, so the offset is subtracted
+        // there to grow that magnitude — targetOffset means the same thing in both
+        // directions (positive overshoots past, negative stops short), exactly as
+        // driveBackward already handled it. Mirrors movement.cpp.
+        const rawDist = Math.hypot(dx, dy) * (backward ? -1 : 1);
+        le = rawDist + (backward ? -off : off);
+        // the latch is measured on the RAW distance, so the offset never moves it
+        if (Math.abs(rawDist) < knobs.headingDisableDist) {
+          close = true;
+          heldHeading = pose.h;
+          straightDist = le;
+          trackX = pose.x;
+          trackY = pose.y;
+        }
+      }
+
+      if (close) {
+        he = wrap(heldHeading - pose.h);
+        const hr = heldHeading * D2R;
+        const traveled = (pose.x - trackX) * Math.sin(hr) + (pose.y - trackY) * Math.cos(hr);
+        le = straightDist - traveled;
+      }
+
+      const exit = latExit(ec, est, le, tx, ty, backward);
       if (exit) return exit;
-      let pointHeading = (Math.atan2(dx, dy) * 180) / Math.PI;
-      if (backward) pointHeading += 180;
-      let he = wrap(pointHeading - pose.h);
-      if (dist < knobs.headingDisableDist) close = true;
-      if (close) he = 0;
-      const mag = clamp(dist * knobs.driveKp, 12) * (cosineScaling ? Math.max(0, Math.cos(he * D2R)) : 1);
-      const dp = backward ? -mag : mag;
+
+      const mag = lateralPowMag(le) * (cosineScaling ? Math.max(0, Math.cos(he * D2R)) : 1);
+      const dp = (Math.sign(le) || 1) * mag;
       const tp = clamp(he * knobs.headingKp * effort, 12);
-      step(ticks, dp, tp, 'heading', { de: dist, he });
+      step(ticks, dp, tp, 'heading', { de: le, he });
+    }
+  }
+
+  /**
+   * ramsete.moveTo — the lyapunov point movement (src/ramsete/moveTo.cpp).
+   *
+   * The same two stages as runMoveTo above, and the same volts plumbing. What
+   * differs is FAR: a lyapunov term is added to the steering that bends the path
+   * toward the target in proportion to the travel left to spend.
+   *
+   * blendOutputs is not in this path — the C++ mixes its own left/right — so the
+   * cosine is applied here, to the governed drive output, and the coupling term
+   * lands after headingPID's governor. Hence the by-hand govern + `raw` step.
+   */
+  function runRamseteMoveTo(tx: number, ty: number, ec: LatEc, effort: number, ticks: SimTick[]): string {
+    vel.w *= angMom; // motion chaining: leftover spin swings through
+    const backward = gBack;
+    const off = takeOffset('drive');
+    const est = newExitState();
+
+    let close = false;
+    let heldHeading = 0;
+    let straightDist = 0;
+    let trackX = 0;
+    let trackY = 0;
+
+    for (;;) {
+      const e = moveToError(tx, ty, pose, backward);
+
+      let le = 0;
+      let he = 0;
+
+      if (!close) {
+        he = e.heading;
+        le = e.distance + (backward ? -off : off);
+        // latched on the RAW distance, so the offset never moves the boundary
+        if (Math.abs(e.distance) < knobs.headingDisableDist) {
+          close = true;
+          heldHeading = pose.h;
+          straightDist = le;
+          trackX = pose.x;
+          trackY = pose.y;
+        }
+      }
+
+      if (close) {
+        he = wrap(heldHeading - pose.h);
+        const hr = heldHeading * D2R;
+        const traveled = (pose.x - trackX) * Math.sin(hr) + (pose.y - trackY) * Math.cos(hr);
+        le = straightDist - traveled;
+      }
+
+      const exit = latExit(ec, est, le, tx, ty, backward);
+      if (exit) return exit;
+
+      // signed, not |cos|: past 90° it reverses into a target that ended up behind us
+      const vGov = govern('drive', (Math.sign(le) || 1) * lateralPowMag(le));
+      const v = Math.cos(he * D2R) * vGov;
+
+      // lyapunov term is FAR-only, and lands after headingPID's governor
+      let tp = govern('heading', clamp(he * knobs.headingKp * effort, 12));
+      if (!close) tp += moveToTurn(e, v, knobs.rsKLat);
+
+      step(ticks, v, tp, 'heading', { de: le, he }, { raw: true });
     }
   }
 
@@ -852,14 +1119,14 @@ export function simulate(
       // SPEED tracks the true target distance (lib: the carrot only when it is
       // the farther waypoint and the end isn't latched)
       const speedDist = closeEnd || distEnd > distCarrot ? distEnd : distCarrot;
-      let mag = clamp(speedDist * knobs.driveKp, 12) * Math.max(0, Math.cos(he * D2R));
+      let mag = lateralPowMag(speedDist) * Math.max(0, Math.cos(he * D2R));
       if (closeEnd && distEnd < 0.7) {
         // settle overshoot brake (Daniel's settle cosine): steering holds the
         // absolute heading here, so re-introduce the bearing-to-target cosine —
         // it flips drive once the target falls behind, pulling the robot back
         let pointHe = (Math.atan2(targetX - pose.x, targetY - pose.y) * 180) / Math.PI;
         if (backward) pointHe += 180;
-        mag = clamp(speedDist * knobs.driveKp, 12) * Math.cos(wrap(pointHe - pose.h) * D2R);
+        mag = lateralPowMag(speedDist) * Math.cos(wrap(pointHe - pose.h) * D2R);
       }
       if (chaseLimit > 0 && !(closeEnd && distEnd < 0.7) && Math.abs(mag) > maxSlip) mag = Math.sign(mag) * maxSlip;
       const dp = backward ? -mag : mag;
@@ -884,6 +1151,126 @@ export function simulate(
         perpLine: ec.d
       }
     };
+  }
+
+  /**
+   * trajectory — bakes exactly as the lib does, then runs the actual
+   * RAMSETE law (sandbox/ramsete.ts's ramseteError/ramseteGain/ramseteClockRate/
+   * ramseteTargetV/ramseteTargetOmega, ported line-for-line from the library)
+   * against a PERFECT actuator: whatever (v, ω) the law commands, the
+   * drivetrain delivers exactly — no velocity controllers, no volts, no
+   * acceleration limit, no governTotal. That is deliberate, not a shortcut:
+   * with the law running and the plant perfect, a path whose first control
+   * point sits away from the robot no longer teleports it there — the robot
+   * converges onto the schedule the way the law converges the real robot in
+   * the field, and with zero initial error (the common case: the first
+   * anchor IS the robot's pose) the feedback terms are all zero and the
+   * robot rides the schedule exactly as it did before this change — the
+   * commanded (v, ω) collapse to (v_d, ω_d) and integrate to the same track.
+   *
+   * Returns null when the bake comes back with fewer than 2 rows, exactly
+   * like the lib's early `if (traj.size() < 2) return;` — the caller emits no
+   * segment for the statement in that case.
+   */
+  function runTrajectory(
+    path: BezierSegment[],
+    pathName: string,
+    ecArg: ArgValue | undefined,
+    ticks: SimTick[]
+  ): { exit: string; traj: { rows: TrajPoint[]; pathName: string; profileMaxVel: number } } | null {
+    // bakeTrajectory only reads trackwidth/maxVel/maxAccel off the
+    // RamseteConfig — the tracking-law fields (b/zeta/vMinGain/clockCoupling)
+    // are never consulted by the bake, so they're filled from the library's
+    // own measured constants rather than from a left-panel knob.
+    const rc: RamseteConfig = {
+      trackwidth: knobs.trackwidth,
+      maxVel: knobs.rsMaxVel,
+      maxAccel: knobs.rsMaxAccel,
+      b: DEFAULT_RAMSETE.b,
+      zeta: DEFAULT_RAMSETE.zeta,
+      vMinGain: DEFAULT_RAMSETE.vMinGain,
+      clockCoupling: DEFAULT_RAMSETE.clockCoupling
+    };
+    // trajectory no longer takes a ProfileConfig — the C++ bakes
+    // through bakeTrajectory(path) with every field at its own in-struct
+    // default. The three fields that used to be route data reachable through
+    // that argument (velMargin, spacing) now live as
+    // left-panel knobs instead, so the sandbox stays tunable without a `pc`
+    // argument to carry them.
+    const pcPartial: Partial<ProfileConfig> = {
+      velMargin: knobs.rsVelMargin,
+      spacing: knobs.rsSpacing,
+      endSpeed: knobs.rsEndSpeed
+    };
+    // The global drive direction applies to the whole path, exactly as
+    // executeTrajectory.cpp resolves it: `backward = true` runs every segment
+    // nose-last. It XORs with a segment's own .reversed rather than overwriting,
+    // so a path that already changes direction partway keeps its cusp. The bake
+    // then flips those rows' heading 180 and signs their v negative, so the
+    // robot's pose heading is ALREADY nose-last — nothing downstream needs to
+    // flip the drawing.
+    const resolved = gBack ? path.map((seg) => ({ ...seg, reversed: !seg.reversed })) : path;
+    const traj = bakeTrajectory(resolved, pcPartial, rc);
+    if (traj.length < 2) return null;
+
+    // For the field overlay's speed colouring — the RESOLVED ceiling.
+    const profileMaxVel = resolveProfile(pcPartial, rc).maxVel;
+
+    const finish = traj[traj.length - 1];
+    const duration = trajectoryDuration(traj);
+
+    // A reversed finish row means this schedule ends driving backward — used
+    // by latExit's cross-line test, same as every other movement here.
+    const backward = finish.v < 0;
+
+    const ec = trajEc(ecArg);
+    const est = newExitState();
+    let refClock = 0;
+
+    for (;;) {
+      // Sample the schedule at the REFERENCE clock (not real time — the clock
+      // itself is adaptive, see ramseteClockRate), then run the law exactly
+      // as executeTrajectory.cpp does: robot-frame error, the scheduled gain,
+      // the two feedback halves.
+      const ref = sampleTrajectory(traj, refClock);
+      const err = ramseteError(ref, pose);
+      const k = ramseteGain(ref, rc);
+      const rate = ramseteClockRate(err, ref, k, rc);
+      const targetV = ramseteTargetV(ref, err, k);
+      const targetOmega = ramseteTargetOmega(ref, err, k, rate, rc);
+
+      // Perfect actuator: the drivetrain delivers exactly what the law asked
+      // for, so there is no velocity controller / volts / accel-limit stage
+      // between the law and the plant.
+      vel.v = targetV;
+      vel.w = targetOmega;
+      pose.h += vel.w * DT;
+      const hr = pose.h * D2R;
+      pose.x += vel.v * Math.sin(hr) * DT;
+      pose.y += vel.v * Math.cos(hr) * DT;
+
+      // Report the law's commanded (v, ω), in the same volts-equivalent scale
+      // every other movement's dp/tp graph uses.
+      const dp = (targetV / maxSpeedEff) * 12;
+      const tp = (targetOmega / maxWEff) * 12;
+      ticks.push({ t, x: pose.x, y: pose.y, h: pose.h, de: 0, he: 0, dp, tp });
+      t += TICK;
+
+      // The settle exit measures against the schedule's last row — computed
+      // AFTER the step, from the just-updated pose, same as the lib's
+      // `lateralError = hypot(finish.x - chassis.x, finish.y - chassis.y);`.
+      const lateralError = Math.hypot(finish.x - pose.x, finish.y - pose.y);
+
+      refClock += DT * rate;
+
+      // The schedule is the finish line; checkLateralExit is the safety bound
+      // on top (and, via latExit's HARD_CAP_MS check, the sim's own net). The
+      // C++ default argument ({.t = 10000, .v = -1}) disables settle, which is
+      // what keeps a route from exiting early while the robot is still
+      // converging onto the schedule instead of already riding it.
+      const exit = refClock >= duration ? 'schedule' : latExit(ec, est, lateralError, finish.x, finish.y, backward, true);
+      if (exit) return { exit, traj: { rows: traj, pathName, profileMaxVel } };
+    }
   }
 
   // --- walk the statements ---
@@ -913,57 +1300,6 @@ export function simulate(
       continue;
     }
 
-    // [TRAJECTORY] marker — bake the stored spline (anchor 0 pinned to the live
-    // pose) and drive the robot along the planned path. v1 fidelity: the robot
-    // follows the plan (RAMSETE with ~zero initial error ≈ the planned path).
-    if (s.kind === 'trajectory') {
-      if (s.name !== 'TRAJECTORY') continue;
-      const td = trajectories[i];
-      const anchors = (td ? td.anchors : defaultTrajectory(pose)).map((a) => ({ ...a }));
-      anchors[0] = { ...anchors[0], x: pose.x, y: pose.y }; // pin start to the robot
-      const prm = td?.params ?? { maxVel: 60, exitVel: 0, maxAccel: 60, beta: 2, zeta: 0.7 };
-      const baked = bakeTrajectory(
-        anchors,
-        { maxVel: prm.maxVel, maxAccel: prm.maxAccel, startVel: Math.abs(vel.v), exitVel: prm.exitVel },
-        knobs.trackwidth
-      );
-      if (baked.points.length) {
-        const ticks: SimTick[] = [];
-        const start = { ...pose };
-        const pidsSnap: PidSnapshot = {
-          drive: { ...pid.drive },
-          turn: { ...pid.turn },
-          heading: { ...pid.heading },
-          total: { ...tout }
-        };
-        for (let k = 0; k < baked.points.length; k++) {
-          const bp = baked.points[k];
-          if (k > 0) {
-            const ds = bp.s - baked.points[k - 1].s;
-            const vAvg = Math.max(1, (bp.v + baked.points[k - 1].v) / 2);
-            t += (ds / vAvg) * 1000; // ms to cover this arc step at the planned speed
-          }
-          pose.x = bp.x;
-          pose.y = bp.y;
-          pose.h = bp.h;
-          vel.v = bp.v;
-          ticks.push({ t, x: pose.x, y: pose.y, h: pose.h, de: 0, he: 0, dp: (bp.v / maxSpeedEff) * 12, tp: 0 });
-        }
-        vel.w = 0;
-        segments.push({
-          stmtIndex: i,
-          fn: 'followTrajectory',
-          ticks,
-          start,
-          end: { ...pose },
-          exit: 'settle',
-          backward: false,
-          pids: pidsSnap
-        });
-      }
-      continue;
-    }
-
     if (s.kind !== 'call') continue;
 
     if (s.fn === 'chassis.setPos') {
@@ -977,11 +1313,16 @@ export function simulate(
 
     const ticks: SimTick[] = [];
     const start = { ...pose };
-    const ranBack = gBack;
+    // driveForward/driveBackward ignore the global entirely — their own
+    // direction is fixed by which one was called, so the segment's recorded
+    // direction should say that, not the (irrelevant) global flag. Every other
+    // movement still reports the global as its direction.
+    let ranBack = gBack;
     // governor configs in effect as this movement STARTS (targetOffset not yet consumed)
     const pidsSnap: PidSnapshot = { drive: { ...pid.drive }, turn: { ...pid.turn }, heading: { ...pid.heading }, total: { ...tout } };
     let exit = 'settle';
     let boom: BoomOverlay | undefined;
+    let traj: SimSegment['traj'];
 
     switch (s.fn) {
       case 'face': {
@@ -1038,7 +1379,10 @@ export function simulate(
         );
         break;
       }
-      case 'drive': {
+      case 'driveForward':
+      case 'driveBackward': {
+        const backward = s.fn === 'driveBackward';
+        ranBack = backward;
         const heading = s.args[1] && s.args[1].kind === 'num' ? s.args[1].lit.value : pose.h;
         const ec = latEc(s.args[2]);
         const bs = structVals('blend', s.args[3]);
@@ -1046,6 +1390,7 @@ export function simulate(
           argNum(s.args[0], 0),
           ec,
           heading,
+          backward,
           bs.cosineScaling as boolean,
           efforts[i] ?? knobs.driveHeadingEffort,
           ticks
@@ -1065,6 +1410,16 @@ export function simulate(
         );
         break;
       }
+      case 'ramsete.moveTo': {
+        exit = runRamseteMoveTo(
+          argNum(s.args[0], 0),
+          argNum(s.args[1], 0),
+          latEc(s.args[2]),
+          efforts[i] ?? knobs.moveToHeadingEffort,
+          ticks
+        );
+        break;
+      }
       case 'boomerangTo': {
         const a0 = s.args[0];
         let bv: Record<string, number | boolean> | null = null;
@@ -1076,6 +1431,18 @@ export function simulate(
           exit = r.exit;
           boom = r.boom;
         }
+        break;
+      }
+      case 'ramsete.trajectory': {
+        const a0 = s.args[0];
+        const decl = a0?.kind === 'ident' ? parsed.paths[a0.name] : undefined;
+        if (!decl) continue; // unresolved path name — already flagged by the parser
+        const r = runTrajectory(pathFromDecl(decl), decl.name, s.args[1], ticks);
+        // fewer than 2 baked rows: the lib's trajectory returns early
+        // before doing anything, so the sandbox emits no segment either.
+        if (!r) continue;
+        exit = r.exit;
+        traj = r.traj;
         break;
       }
       case 'voldrive': {
@@ -1138,7 +1505,8 @@ export function simulate(
       exit,
       backward: ranBack,
       boom,
-      pids: pidsSnap
+      pids: pidsSnap,
+      traj
     });
   }
 

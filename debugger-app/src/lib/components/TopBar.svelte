@@ -1,8 +1,9 @@
 <script lang="ts">
   import { settings } from '$lib/stores/settings.svelte';
 
-  // Two workspaces: Replay (trace playback) and Sandbox (route writing).
-  // The right slot shows the loaded trace's auton name in replay mode.
+  // Four workspaces: Replay (trace playback), Sandbox (route writing), the
+  // Trajectory Generator, and the Velocity Controller worksheet. The right slot
+  // shows the loaded trace's auton name in replay mode.
   let {
     status = 'No trace loaded',
     onOpenSettings,
@@ -38,6 +39,13 @@
       role="tab"
       aria-selected={settings.appMode === 'trajectory'}
       onclick={() => (settings.appMode = 'trajectory')}>Trajectory Generator</button
+    >
+    <button
+      class="mode-btn"
+      class:on={settings.appMode === 'velocity'}
+      role="tab"
+      aria-selected={settings.appMode === 'velocity'}
+      onclick={() => (settings.appMode = 'velocity')}>Velocity Controller</button
     >
   </div>
 

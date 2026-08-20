@@ -1,0 +1,73 @@
+//!params {"name":"sawp v1 unfinished","knobs":{"wheelRpm":450,"wheelDiameter":2.75,"robotWeight":6.5,"driveKp":0.865,"turnKp":0.5,"swingKp":0.5,"headingKp":1,"lateralMomentum":0.56,"angularMomentum":0.16,"omniWheels":true,"moveToHeadingEffort":0.9,"driveHeadingEffort":0.8,"headingDisableDist":6,"trackwidth":9.5,"ecLatT":5000,"ecLatV":8,"ecLatD":-1,"ecLatWithin":4,"ecTurnT":5000,"ecTurnV":0.35,"ecTurnD":-1,"ecTurnWithin":20,"rsMaxVel":82,"rsMaxAccel":240,"rsVelMargin":0.9,"rsMaxLateralAccel":0,"rsSpacing":2,"rsEndSpeed":0},"efforts":{"5":0.17},"field":"override-match","knobsVersion":7}
+chassis.setPos(-7.6,62,0);
+
+driveBackward(5,0,{.d=3, .v=-1});
+driveForward(5,0,{.d=3, .v=-1});
+driveBackward(5,0,{.d=3, .v=-1});
+driveForward(5,0,{.d=3, .v=-1});
+
+drivePID.targetOffset = -5;
+backward = true;
+moveTo(-24,48, {.d=6});
+delay(300);
+
+backward = false; // EDIT-V1
+moveTo(15.6,53.3); 
+backward = true;
+facePoint(24.2,69);
+backward = false;
+driveBackward(9, chassis.h, {.v = 1});
+
+backward = false;
+moveTo(11.3,47.6);
+backward = true;
+facePoint(24,48);
+
+backward = true;
+drivePID.targetOffset = -5;
+moveTo(24,48, {.d=6});
+delay(300);
+
+backward = false;
+std::vector<BezierSegment> path = {
+  {.a = {17.9, 48.7}, .b = {4.4, 50.7}, .c = {9, 32.3}, .d = {13.4, 27.2}}
+};
+
+trajectory(path);
+
+driveBackward(5);
+backward = true;
+facePoint(24,24, {.v=1});
+
+drivePID.targetOffset = -6;
+moveTo(24,24);
+
+driveForward(7);
+backward = true;
+facePoint(24,48);
+
+drivePID.targetOffset = -6;
+moveTo(24,48, {.d=6});
+delay(300);
+
+backward = false;
+moveTo(9.5,31.4);
+backward = true;
+facePoint(0,24);
+
+drivePID.targetOffset = -6;
+moveTo(0,24);
+
+backward = true;
+driveForward(10);
+
+
+drivePID.targetOffset = -6;
+moveTo(-24,48, {.d=6});
+delay(300);
+
+backward = false;
+
+
+
+

@@ -13,9 +13,8 @@
     setParam,
     undo,
     redo,
-    autoHandles,
-    toggleLock,
-    setAnchorCap,
+    setSegmentCap,
+    setSegmentStop,
     addAnchorEnd,
     insertMidpoint,
     mirrorPath,
@@ -44,6 +43,15 @@
     { v: 12, l: '12″' },
     { v: 6, l: '6″' }
   ];
+
+  // Tangent-handle direction snap. Same shape as the grid snap: 0 is off, the
+  // rest are the angles a route is actually authored against.
+  const ANGLE_SNAPS = [
+    { v: 0, l: 'Off' },
+    { v: 15, l: '15°' },
+    { v: 45, l: '45°' },
+    { v: 90, l: '90°' }
+  ];
 </script>
 
 <div class="col">
@@ -56,6 +64,12 @@
       <span class="snlbl">Snap</span>
       {#each SNAPS as s}
         <button class="sn" class:on={viewOpts.snap === s.v} onclick={() => (viewOpts.snap = s.v)}>{s.l}</button>
+      {/each}
+    </div>
+    <div class="snap" role="group" aria-label="Handle angle snap">
+      <span class="snlbl">Angle</span>
+      {#each ANGLE_SNAPS as s}
+        <button class="sn" class:on={viewOpts.angleSnap === s.v} onclick={() => (viewOpts.angleSnap = s.v)}>{s.l}</button>
       {/each}
     </div>
   </div>
@@ -95,11 +109,11 @@
   </section>
 
   <section class="panel group">
-    <div class="gtitle">Speed plan <span class="gsub">baked into every point</span></div>
+    <div class="gtitle">Bake <span class="gsub">ProfileConfig — profile.h</span></div>
     <SliderRow label="Max speed" value={pursuit.params.maxVel} min={10} max={90} step={1} unit="in/s" onchange={(v) => set('maxVel', v)} />
-    <SliderRow label="Grip" value={pursuit.params.grip} min={20} max={400} step={5} onchange={(v) => set('grip', v)} />
     <SliderRow label="Plan accel" value={pursuit.params.maxAccel} min={10} max={200} step={5} unit="in/s²" onchange={(v) => set('maxAccel', v)} />
-    <div class="note">Curves are capped at the traction/no-slip speed v = √(grip · r) — the same cap the boomerang uses (higher grip = corner faster). The accel/decel passes then brake into every stop and the end.</div>
+    <SliderRow label="velMargin" value={pursuit.params.velMargin} min={0.1} max={1} step={0.01} decimals={2} onchange={(v) => set('velMargin', v)} />
+    <SliderRow label="Exit speed" value={pursuit.params.endSpeed} min={0} max={90} step={1} unit="in/s" onchange={(v) => set('endSpeed', v)} />
   </section>
 
   {#if sel && pursuit.selected !== null}
@@ -117,22 +131,30 @@
       {#if i < pursuit.anchors.length - 1}
         <SliderRow label="Handle out" value={sel.out} min={3} max={60} step={1} unit="in" onchange={(v) => editAnchor(i, { out: v })} />
       {/if}
-      <div class="btnrow">
-        <button class="act" onclick={() => autoHandles(i)} title="Reset tangent lengths from the neighbour chords">Auto length</button>
-        <button class="act" class:tgl-on={sel.lock} onclick={() => toggleLock(i)} title="Keep both handle lengths equal">
-          {sel.lock ? '🔒 Symmetric' : 'Lock symmetric'}
+      {#if i < pursuit.anchors.length - 1}
+        <button
+          class="act"
+          class:tgl-on={sel.segMaxVel !== undefined}
+          onclick={() => setSegmentCap(i, sel.segMaxVel === undefined ? Math.round(pursuit.params.maxVel / 2) : null)}
+          title="Cap BezierSegment.maxVel for the segment leaving this anchor"
+        >
+          {sel.segMaxVel === undefined ? `Cap segment ${i + 1}` : `Segment ${i + 1} ≤ ${sel.segMaxVel} in/s`}
         </button>
-      </div>
-      <button
-        class="act"
-        class:tgl-on={sel.vCap !== undefined}
-        onclick={() => setAnchorCap(i, sel.vCap === undefined ? Math.round(pursuit.params.maxVel / 2) : null)}
-        title="Cap the planned speed at this anchor (0 = full stop)"
-      >
-        {sel.vCap === undefined ? 'Limit speed here' : sel.vCap === 0 ? '⏹ Full stop here' : `Speed cap ${sel.vCap} in/s`}
-      </button>
-      {#if sel.vCap !== undefined}
-        <SliderRow label="Speed cap" value={sel.vCap} min={0} max={pursuit.params.maxVel} step={1} unit="in/s" onchange={(v) => setAnchorCap(i, v)} />
+        {#if sel.segMaxVel !== undefined}
+          <SliderRow label=".maxVel" value={sel.segMaxVel} min={0} max={pursuit.params.maxVel} step={1} unit="in/s" onchange={(v) => setSegmentCap(i, v)} />
+        {/if}
+        <button
+          class="act"
+          class:tgl-on={!!sel.segStopEnd}
+          onclick={() => setSegmentStop(i, !sel.segStopEnd)}
+          title="BezierSegment.stopEnd — force a full stop where this segment ends"
+        >
+          {sel.segStopEnd ? '⏹ Stops at segment end' : 'Stop at segment end'}
+        </button>
+        <div class="note">
+          A cap covers the whole segment. To slow only part of a curve, insert an anchor at each end of the
+          stretch — the split reproduces the curve exactly and a joint costs no speed — then cap the middle piece.
+        </div>
       {/if}
       <button class="act danger" disabled={pursuit.anchors.length <= 2} onclick={() => deleteAnchor(i)}>
         Delete anchor

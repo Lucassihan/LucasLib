@@ -9,10 +9,7 @@ enum DriveEncoderPosition {
   back = 2
 };
 
-// Physical mount of a wall-reset distance sensor, given as axis distances from the
-// robot's tracking center in the robot's LOCAL frame (not a calibration reading).
-//   y = distance along the robot's forward axis (robot +Y)
-//   x = distance along the robot's right axis   (robot +X)
+// Where a wall-reset distance sensor is mounted, as axis distances from the tracking center in the robot's LOCAL frame.
 struct DistanceSensorOffset {
   double y = 0;   // + = sensor face sits in front of the tracking center
   double x = 0;   // + = sensor face sits to the right of the tracking center
@@ -34,50 +31,35 @@ struct OdometryConfig {
   double    driveGearRatio     = 1.0;      // wheel rotations per motor rotation
   DriveEncoderPosition driveEncoder = front;  // which motor pair to use for motor-encoder Y tracking
 
-  DistanceSensorOffset sensor1Offset;      // 2D mount of each wall-reset distance sensor,
-  DistanceSensorOffset sensor2Offset;      // as axis distances from the tracking center
-  DistanceSensorOffset sensor3Offset;      // in the robot's local frame (see DistanceSensorOffset)
+  DistanceSensorOffset sensor1Offset;
+  DistanceSensorOffset sensor2Offset;
+  DistanceSensorOffset sensor3Offset;
   DistanceSensorOffset sensor4Offset;
 };
 
 class Odometry {
 public:
-  double x = 0;   // desired tracking point (what movements / MCL read), derived by applyPoseOffsets
+  double x = 0;   // desired tracking point (what movements read), derived by applyPoseOffsets
   double y = 0;
   double h = 0;
 
-  // Raw integrated pose = the intersection of the two tracker axes, before mount offsets.
-  // trackY/trackX accumulate into these; applyPoseOffsets derives (x, y) from them + heading.
+  // Raw integrated pose: the intersection of the two tracker axes, before mount offsets.
   double trueX = 0;
   double trueY = 0;
 
-  // Forward velocity in inches/sec, refreshed on each Y accumulation from encoder deltas.
-  double velocity = 0;
+  double velocity = 0;   // in/s forward, refreshed on each Y accumulation
 
-  //Cumulative wheel-rolled distance in robot's local frame, since last clearTrackedInches() call.
-  //Useful for movements that want "drive N inches forward" rather than "drive to point (x, y)".
+  // Wheel-rolled distance in the robot's local frame since the last clearTrackedInches().
   double yInchesTracked = 0;
   double xInchesTracked = 0;
 
-  // Per-axis noise floors in RAW sensor degrees (compared before scaling to inches): a raw
-  // delta smaller than this is below the sensor's resolution and treated as noise. Set once
-  // in the constructor from the sensor type (rotation sensor vs drive-motor cartridge).
+  // Per-axis noise floor in RAW sensor degrees; a smaller delta is below the sensor's resolution. Set in the constructor from the sensor type.
   double yNoiseThreshold = 0;
   double xNoiseThreshold = 0;
 
-  // Tracker mount offsets, copied from config so odometryTask can hand them to applyPoseOffsets.
-  // xTrackerOffset = X tracker's forward (+Y) distance from the desired tracking point;
-  // yTrackerOffset = Y tracker's lateral (+X) distance. Both 0 = track the axis intersection.
-  double xTrackerOffset = 0;
-  double yTrackerOffset = 0;
-
-  // --- MCL integration ---
-  // trackHeading/trackY/trackX accumulate their per-tick GLOBAL displacement here; the MCL
-  // task consumes it (as the predict increment) and blends a correction back into x/y.
-  // Guarded by mclMutex.
-  mutex  mclMutex;
-  double mclAccumDX = 0;
-  double mclAccumDY = 0;
+  // Tracker mount offsets, copied from config so odometryTask can hand them to applyPoseOffsets. Both 0 = track the axis intersection.
+  double xTrackerOffset = 0;   // X tracker's forward (+Y) distance from the desired tracking point
+  double yTrackerOffset = 0;   // Y tracker's lateral (+X) distance
 
   Odometry(OdometryConfig config);
 
@@ -86,19 +68,12 @@ public:
   void setPos(double newX, double newY, double newH);
 
   // --- per-tick tracking, driven by odometryTask (HongKou straight-line model) ---
-  // trackHeading: fuse the IMU(s) and advance heading. Runs every tick (never noise-gated).
-  // yRawDeltaDeg / xRawDeltaDeg: raw rotation since the last accumulation, in sensor
-  //   degrees, BEFORE any scaling -- this is what odometryTask gates against the noise floor.
-  // trackY / trackX: scale that raw delta to inches and integrate it into the pose. The point
-  //   they track is the intersection of the two tracker axes (no offsets here).
-  // applyPoseOffsets: translate that intersection point to the desired tracking point using the
-  //   mount offsets + heading. Call after trackY/trackX have accumulated.
-  void   trackHeading();
-  double yRawDeltaDeg();
+  void   trackHeading();               // fuse the IMU(s) and advance heading; runs every tick, never noise-gated
+  double yRawDeltaDeg();               // raw rotation since the last accumulation, BEFORE scaling — what odometryTask gates
   double xRawDeltaDeg();
-  void   trackY(double rawDeltaDeg);
+  void   trackY(double rawDeltaDeg);   // scale to inches and integrate into the axis-intersection point
   void   trackX(double rawDeltaDeg);
-  void   applyPoseOffsets(double offsetX, double offsetY);
+  void   applyPoseOffsets(double offsetX, double offsetY);  // intersection point → desired tracking point; call after trackY/trackX
   void updateVelocity();
 
   void clearTrackedInches();
@@ -107,14 +82,13 @@ public:
   double wrapAngle(double angle);
   double distanceTo(double targetX, double targetY, bool backward = false);
 
-  //Signed radius (inches) of the arc the robot traced over the last Y accumulation: r = ds/dtheta.
-  //Sign follows heading change (CW+). Near-straight motion returns a large sentinel (~1e9).
-  //Used by boomerang slip-limiting (centripetal: v_max = sqrt(grip * |r|)).
+  // Signed radius (in) of the arc traced over the last Y accumulation, r = ds/dtheta. Sign follows heading change (CW+); near-straight returns ~1e9.
   double travelArcRadius();
   double forwardProgress(double startX, double startY, double headingDeg);
-  double wrappedHeadingError(double targetH, bool backward = false);
-  double positiveHeadingError(double targetH, bool backward = false);
-  double negativeHeadingError(double targetH, bool backward = false);
+  // No `backward` on the heading errors: a heading is always where the NOSE points. The 180 a tail-first approach needs belongs to angleToPoint.
+  double wrappedHeadingError(double targetH);
+  double positiveHeadingError(double targetH);
+  double negativeHeadingError(double targetH);
   double angleToPoint(double targetX, double targetY, bool backward = false);
   double wrappedPointHeadingError(double targetX, double targetY, bool backward = false);
   double positivePointHeadingError(double targetX, double targetY, bool backward = false);
@@ -150,18 +124,13 @@ private:
   double lastVRefY = 0;
   double lastVRefH = 0;
 
-  // Heading change (deg) banked since the last Y accumulation. Half of it re-centers the Y step
-  // on its window midpoint (second-order placement); the full swing feeds velocity and arc
-  // radius over that same span as the forward distance they are paired with.
+  // Heading change (deg) banked since the last Y accumulation. Half re-centers the Y step on its window midpoint; the full swing feeds velocity and arc radius.
   double dhAccumDeg = 0;
-  // Same idea for the X window (zeroed by trackX, not trackY), so each axis places its step at
-  // its own midpoint heading rather than sharing Y's accumulator.
-  double dhAccumDegX = 0;
+  double dhAccumDegX = 0;   // same for the X window, zeroed by trackX, so each axis places its step at its own midpoint heading
 
   uint64_t lastTrackTime = 0;
 
-  //Cached arc radius (inches) from the most recent Y accumulation. See travelArcRadius().
-  double lastArcRadius = 1e9;
+  double lastArcRadius = 1e9;   // cached from the most recent Y accumulation
 
   double resolveHeading(double dIMU1, double dIMU2, double dLDeg, double dRDeg);
   double motorDegsToInches(double deg);

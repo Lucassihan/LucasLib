@@ -1,6 +1,6 @@
 <script lang="ts">
   import { traceState, movementAt, poseAt, tickAt } from '$lib/stores/trace.svelte';
-  import { prettyMovement, movementColor, isTurn, isVolDrive } from '$lib/trace/labels';
+  import { prettyMovement, movementColor, isTurn, isVolDrive, isTrajectory } from '$lib/trace/labels';
   import ExitGlyph from './ExitGlyph.svelte';
   import HeadingDial from './HeadingDial.svelte';
   import GovernorsCard from './GovernorsCard.svelte';
@@ -25,6 +25,12 @@
     if (m.type === 'moveTo') {
       return [
         { t: 'FAR', sub: 'point heading' },
+        { t: 'CLOSE', sub: 'lock heading' }
+      ];
+    }
+    if (m.type === 'ramsete.moveTo') {
+      return [
+        { t: 'FAR', sub: 'point + lyapunov' },
         { t: 'CLOSE', sub: 'lock heading' }
       ];
     }
@@ -84,6 +90,7 @@
   const POINT = new Set([
     'facePoint',
     'moveTo',
+    'ramsete.moveTo',
     'boomerangTo',
     'swingOnLeftToPoint',
     'swingOnRightToPoint'
@@ -106,6 +113,9 @@
         r.push({ k: 'Chase limit', v: `${m.leadChasePowerLimit}` });
       }
     }
+    if (t === 'ramsete.moveTo' && traceState.trace.header.kLat >= 0) {
+      r.push({ k: 'kLat', v: `${traceState.trace.header.kLat}` });
+    }
     if (t === 'voldrive') {
       r.push({ k: 'Left', v: `${m.leftVolts} V` });
       r.push({ k: 'Right', v: `${m.rightVolts} V` });
@@ -119,18 +129,40 @@
 
   const unit = (m: Movement) => (isTurn(m.type) ? '°' : 'in');
 
-  // exitDist carries the settle activation zone on BOTH channels — ec.settleGate.
+  // exitDist carries the settle activation zone on BOTH channels — ec.settleWithin.
   // Only the unit differs: degrees on a turn, inches on a lateral.
   function settleZone(m: Movement): { value: number; u: string } {
     return { value: m.exitDist, u: unit(m) };
   }
 
   function triggeredLabel(reason: string): string {
-    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line', angle: 'Angle', dist: 'Distance' }[reason] ?? reason;
+    return { settle: 'Settle', timeout: 'Timeout', perpLine: 'Perp line', angle: 'Angle', dist: 'Distance', schedule: 'Schedule' }[reason] ?? reason;
+  }
+
+  // Traces recorded before the library reported its real ending label every
+  // trajectory "timeout", because the timeout was the only armed condition there
+  // was to guess from. A movement that ended well before its timeout could fire
+  // demonstrably didn't exit on it, so read it as the schedule finishing.
+  function effectiveExit(m: Movement): string {
+    if (
+      isTrajectory(m.type) &&
+      m.exitReason === 'timeout' &&
+      m.exitTimeout > 0 &&
+      m.endTime - m.startTime < m.exitTimeout - 50
+    ) {
+      return 'schedule';
+    }
+    return m.exitReason;
+  }
+
+  /** Baked length of a trajectory's schedule, in seconds. 0 if the trace has no [SCHEDULE]. */
+  function scheduleSeconds(m: Movement): number {
+    const rows = traceState.trace.schedules[m.index];
+    return rows?.length ? rows[rows.length - 1].t / 1000 : 0;
   }
 
   function triggeredDetail(m: Movement): string {
-    switch (m.exitReason) {
+    switch (effectiveExit(m)) {
       case 'settle': {
         const z = settleZone(m);
         const zone = z.value > 0 ? `within ${z.value} ${z.u}` : 'in zone';
@@ -148,6 +180,15 @@
         return `within ${m.exitAng}° of target, no settle gate`;
       case 'dist':
         return `within ${m.exitPerpLine} in of the commanded distance`;
+      // The trajectory's normal ending, and not an exit condition at all: the
+      // reference clock ran past the schedule's last row. The gap between the
+      // schedule's length and the movement's is how much the clock was braked.
+      case 'schedule': {
+        const plan = scheduleSeconds(m);
+        const real = (m.endTime - m.startTime) / 1000;
+        if (!plan) return 'reference clock reached the last row';
+        return `reference clock reached the last row · ${plan.toFixed(2)} s of schedule in ${real.toFixed(2)} s`;
+      }
       default:
         return '';
     }
@@ -157,24 +198,25 @@
     if (reason === 'timeout') return 'timeout';
     if (reason === 'perpLine') return 'perp';
     if (reason === 'angle' || reason === 'dist') return 'early';
+    if (reason === 'schedule') return 'schedule';
     return 'settle';
   }
 
   function armed(m: Movement): { k: string; v: string }[] {
     const out: { k: string; v: string }[] = [];
-    if (m.exitTimeout !== -1 && m.exitReason !== 'timeout') {
+    if (m.exitTimeout !== -1 && effectiveExit(m) !== 'timeout') {
       out.push({ k: 'Timeout', v: `${m.exitTimeout} ms` });
     }
-    if (m.exitReason !== 'settle') {
+    if (effectiveExit(m) !== 'settle') {
       const z = settleZone(m);
       const sp = isTurn(m.type) ? `${m.settleD} rad/s` : `${m.settleD} in/s`;
       if (z.value > 0 && m.settleD !== -1) out.push({ k: 'Settle', v: `${z.value} ${z.u} · slowing, under ${sp}` });
     }
     // d = 0 is armed and meaningful (line on the target); only -1 is off
-    if (!isTurn(m.type) && m.exitPerpLine !== -1 && m.exitReason !== 'perpLine') {
+    if (!isTurn(m.type) && m.exitPerpLine !== -1 && effectiveExit(m) !== 'perpLine') {
       out.push({ k: 'Perp line', v: m.exitPerpLine > 0 ? `${m.exitPerpLine} in early` : 'on target' });
     }
-    if (isTurn(m.type) && m.exitAng !== -1 && m.exitReason !== 'angle') {
+    if (isTurn(m.type) && m.exitAng !== -1 && effectiveExit(m) !== 'angle') {
       out.push({ k: 'Angle', v: `${m.exitAng}° · no settle gate` });
     }
     return out;
@@ -270,12 +312,12 @@
     <div class="card">
       <div class="group-label">Exit condition</div>
       <div class="exit-reason">
-        <ExitGlyph category={glyphCategory(m.exitReason)} size={17} />
-        <span>{triggeredLabel(m.exitReason)}</span>
+        <ExitGlyph category={glyphCategory(effectiveExit(m))} size={17} />
+        <span>{triggeredLabel(effectiveExit(m))}</span>
       </div>
       <div class="exit-detail">{triggeredDetail(m)}</div>
 
-      {#if m.exitReason === 'settle'}
+      {#if effectiveExit(m) === 'settle'}
         <div class="row exit-stat">
           <span class="k">Exit error</span>
           <span class="v">{exitError(m).toFixed(isTurn(m.type) ? 1 : 2)} {unit(m)}</span>

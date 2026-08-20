@@ -9,7 +9,7 @@
   import { sandbox, getRoute, segmentAt } from '$lib/stores/sandbox.svelte';
   import { settings } from '$lib/stores/settings.svelte';
   import { prettyMovement, movementColor, isTurn, COLORS, PID_TERM } from '$lib/trace/labels';
-  import type { PidCfg, TotalCfg } from '$lib/sandbox/sim';
+  import { deriveMotion, type PidCfg, type TotalCfg } from '$lib/sandbox/sim';
 
   const route = $derived(getRoute());
   const seg = $derived(segmentAt(sandbox.time));
@@ -30,6 +30,13 @@
 
   const turnish = $derived(!!seg && isTurn(seg.fn));
   const openLoop = $derived(!!seg && (seg.fn === 'wait' || seg.fn === 'delay' || seg.fn === 'voldrive'));
+  // trajectory has no drivePID/headingPID channel — its volts come
+  // straight from the velocity controllers (config.cpp), so the P/I/D term
+  // grid would just be showing synthesized numbers computed against the wrong
+  // error signal. Treated like open loop for the readout, with its own honest
+  // note instead of "no PID activity" (there IS closed-loop tracking, via the
+  // RAMSETE law — just not in a P/I/D shape this card can show).
+  const isTrajectory = $derived(!!seg && seg.fn === 'ramsete.trajectory');
   const turnChanLabel = $derived(turnish ? 'Turn PID' : 'Heading PID');
 
   // sandbox exit reasons → replay's ExitGlyph categories
@@ -37,11 +44,38 @@
     if (reason === 'timeout' || reason === 'timed') return 'timeout';
     if (reason === 'perpLine') return 'perp';
     if (reason === 'dist' || reason === 'angle') return 'early';
+    if (reason === 'schedule') return 'schedule';
     return 'settle';
+  }
+
+  // 'schedule' is the only sandbox exit reason that needs a friendlier label —
+  // the rest (timeout, settle, perpLine, angle, dist) already read fine raw.
+  function exitLabel(reason: string): string {
+    return reason === 'schedule' ? 'schedule end' : reason;
   }
 
   const tStart = $derived(seg?.ticks.length ? seg.ticks[0].t : 0);
   const tEnd = $derived(seg?.ticks.length ? seg.ticks[seg.ticks.length - 1].t : 1);
+
+  // trajectory's "Trajectory" readout: tracking error is corrected by
+  // the RAMSETE law directly (see runTrajectory in sim.ts), not a
+  // P/I/D channel object, so there's no P/I/D breakdown to show here — de/he
+  // stay unset on a trajectory tick. dp/tp are the law's COMMANDED speed/turn
+  // rate, scaled the same volts-equivalent way every other movement's output
+  // graph is; un-scale them back to physical units with this route's own
+  // derived motion limits for the readout.
+  const trajProgress = $derived.by(() => {
+    if (!isTrajectory || !tick) return null;
+    const motion = deriveMotion(sandbox.knobs);
+    const topLinear = Math.max(1, motion.topLinear);
+    const topAngular = Math.max(1, motion.topAngular);
+    const span = Math.max(1, tEnd - tStart);
+    return {
+      v: ((tick.dp ?? 0) / 12) * topLinear,
+      w: ((tick.tp ?? 0) / 12) * topAngular,
+      frac: Math.max(0, Math.min(1, (tick.t - tStart) / span))
+    };
+  });
 
   // --- channel cards (replay PidReadout shape, from the synthesized terms) ---
   type Chan = {
@@ -60,7 +94,7 @@
   };
 
   const channels = $derived.by<Chan[]>(() => {
-    if (!seg || !tick || openLoop) return [];
+    if (!seg || !tick || openLoop || isTrajectory) return [];
     const out: Chan[] = [];
     const k = sandbox.knobs;
     if (!turnish && tick.de !== undefined) {
@@ -187,12 +221,18 @@
         <span class="mv">{prettyMovement(seg.fn)}</span>
         <span class="exit">
           <ExitGlyph category={glyphCategory(seg.exit)} size={13} />
-          {seg.exit}
+          {exitLabel(seg.exit)}
         </span>
       </div>
 
       {#if openLoop}
         <div class="empty">Open loop — direct output, no PID activity during this call.</div>
+      {:else if isTrajectory && trajProgress}
+        <div class="empty">
+          A trajectory has no drive/turn PID channels — the RAMSETE law corrects tracking error directly, not a P/I/D controller, so there's
+          no breakdown to show here. At the playhead: commanded speed {fmt(trajProgress.v, 1)} in/s, commanded turn rate {fmt(trajProgress.w, 0)}°/s —
+          {fmt(trajProgress.frac * 100, 0)}% through the schedule.
+        </div>
       {:else}
         <div class="grid" style="grid-template-columns: repeat({cols}, minmax(0, 1fr));">
           {#each channels as c (c.label)}

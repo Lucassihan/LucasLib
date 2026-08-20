@@ -65,6 +65,16 @@ void Odometry::setPos(double newX, double newY, double newH) {
   trueX = newX + ( yTrackerOffset * cos(hr) + xTrackerOffset * sin(hr));
   trueY = newY + (-yTrackerOffset * sin(hr) + xTrackerOffset * cos(hr));
 
+  // The velocity reference jumps with the pose. justResetPos alone isn't enough:
+  // it is only consumed inside updateVelocity(), which is gated on both trackers
+  // having moved, so a robot standing still after a setPos can hold a stale
+  // reference indefinitely. Leaving it behind makes the teleport look like real
+  // displacement — setPos(48, -48) off a (0, 0) reference is 68 inches of travel
+  // in one interval, which is where the tens-of-thousands-of-in/s spike came from.
+  lastVRefX = x;
+  lastVRefY = y;
+  lastVRefH = h;
+
   justResetPos = true;
 }
 
@@ -167,10 +177,8 @@ void Odometry::applyPoseOffsets(double offsetX, double offsetY) {
   double gx =  offsetY * cos(hr) + offsetX * sin(hr);
   double gy = -offsetY * sin(hr) + offsetX * cos(hr);
 
-  mclMutex.lock();
   x = trueX - gx;
   y = trueY - gy;
-  mclMutex.unlock();
 }
 
 //Raw rotation (degrees) accumulated on each axis since the last accumulation. odometryTask
@@ -192,14 +200,10 @@ void Odometry::trackY(double rawDeltaDeg) {
   double gdx = dYInches * sin(headingRad);
   double gdy = dYInches * cos(headingRad);
 
-  mclMutex.lock();
   trueX += gdx;
   trueY += gdy;
-  mclAccumDX += gdx;
-  mclAccumDY += gdy;
-  mclMutex.unlock();
 
-  //Used for relative movements like drive()
+  //Used for relative movements like driveForward()/driveBackward()
   yInchesTracked += dYInches;
 
   double dhRad = TO_RAD(dhAccumDeg);
@@ -216,12 +220,8 @@ void Odometry::trackX(double rawDeltaDeg) {
   double gdx =  dXInches * cos(headingRad);
   double gdy = -dXInches * sin(headingRad);
 
-  mclMutex.lock();
   trueX += gdx;
   trueY += gdy;
-  mclAccumDX += gdx;
-  mclAccumDY += gdy;
-  mclMutex.unlock();
 
   xInchesTracked += dXInches;
 
@@ -235,6 +235,16 @@ void Odometry::updateVelocity() {
   uint64_t now = vex::timer::systemHighResolution();
 
   double timeSinceLastTracked = (now - lastTime) / 1000000.0;
+
+  // Two samples inside the same scheduler tick divide a real displacement by
+  // almost nothing, and the result is not a fast robot — it's millions of in/s.
+  // That lands in the velocity controller's error term as kP·(target − v) and
+  // pins the drive at 12 V. Hold the previous v and ω and let the displacement
+  // accumulate until a real interval has passed; returning early deliberately
+  // leaves lastVRef* alone so nothing is lost.
+  if (timeSinceLastTracked < 0.0005) {
+    return;
+  }
 
   // field displacement
   double dx = x - lastVRefX;
@@ -336,19 +346,18 @@ double Odometry::negativePointHeadingError(double targetX, double targetY, bool 
   return error;
 }
 
-double Odometry::wrappedHeadingError(double targetH, bool backward) {
-  if (backward) targetH += 180;
+double Odometry::wrappedHeadingError(double targetH) {
   return wrapAngle(targetH - h);
 }
 
-double Odometry::positiveHeadingError(double targetH, bool backward) {
-  double error = wrappedHeadingError(targetH, backward);
+double Odometry::positiveHeadingError(double targetH) {
+  double error = wrappedHeadingError(targetH);
   if (error < 0) error += 360.0;
   return error;
 }
 
-double Odometry::negativeHeadingError(double targetH, bool backward) {
-  double error = wrappedHeadingError(targetH, backward);
+double Odometry::negativeHeadingError(double targetH) {
+  double error = wrappedHeadingError(targetH);
   if (error > 0) error -= 360.0;
   return error;
 }
@@ -380,9 +389,9 @@ double Odometry::travelArcRadius() {
 //heading h is (sin h, cos h), matching the position update in trackY().
 //Positive = moved forward along the axis, negative = moved backward.
 //This is the pose-based replacement for the wheel-encoder yInchesTracked
-//odometer: it reads straight off (x, y), so movement error follows the fused
-//(MCL) pose rather than raw encoders, and a pose correction just changes the
-//current reading instead of being permanently accumulated.
+//odometer: it reads straight off (x, y), so movement error follows the pose
+//rather than raw encoders, and a pose correction just changes the current
+//reading instead of being permanently accumulated.
 double Odometry::forwardProgress(double startX, double startY, double headingDeg) {
   double axisRad = headingDeg * (M_PI / 180.0);
   return (x - startX) * sin(axisRad) + (y - startY) * cos(axisRad);

@@ -192,6 +192,29 @@
     oncaret?.(caret);
   }
 
+  /**
+   * Feature 3 (⌘Z over the route text): an undo/redo changes `value` from
+   * OUTSIDE this component's own controlled-edit path (SandboxCode.svelte
+   * calls sandbox.svelte.ts's undo()/redo() directly, then this), so there is
+   * no `applyEdit` call to set `pendingCaret` the normal way — without this,
+   * the DOM-rebuild effect below would fall back to the OLD `sel` offsets,
+   * which belonged to the pre-undo text and can land anywhere (or out of
+   * bounds) in the restored one. Exposed via bind:this for the caller to
+   * invoke right after mutating the store.
+   *
+   * Restoring the EXACT pre-edit caret would need every undo snapshot to
+   * carry its own caret offset alongside the text, which the store doesn't
+   * keep (mirroring pursuit's own snapshots, which have no caret concept
+   * either — an anchor position isn't a cursor position). End-of-text is a
+   * legible, deterministic landing spot instead; the brief calls this out as
+   * an acceptable simplification.
+   */
+  export function syncExternalChange(caret: number) {
+    pendingCaret = caret;
+    sel = { start: caret, end: caret };
+    oncaret?.(caret);
+  }
+
   function wordBack(v: string, i: number): number {
     let j = i;
     while (j > 0 && /\s/.test(v[j - 1])) j--;

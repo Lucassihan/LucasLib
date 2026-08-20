@@ -10,6 +10,12 @@ export interface GovernConfig {
   maxDecelRate: number;
 }
 
+// Which governor stage a view is looking at — the combined TotalOutput, or one
+// of the two PID limiters. (Mirrors the identical literal union in
+// $lib/stores/settings.svelte, which owns the UI's own selected-scope state;
+// this copy is what TraceHeader.govern and the trace-side helpers key on.)
+export type GovernScope = 'total' | 'drive' | 'turn';
+
 export interface TraceHeader {
   version: string;
   autonName: string;
@@ -18,6 +24,7 @@ export interface TraceHeader {
   batteryVolts: number; // battery volts at start; 0 = not in this trace
   trackwidth: number;
   headingDisableDist: number;
+  kLat: number; // ramsete.moveTo cross-track coupling, 1/in; -1 = not in this trace
   govern: {
     total: GovernConfig;
     drive: GovernConfig;
@@ -67,14 +74,14 @@ export interface Movement {
   // to be slowing down AND inside exitDist AND under this speed. in/s on a lateral,
   // rad/s on a turn. It is NOT the PID D term it used to be.
   settleD: number;
-  // exitDist: carries ec.settleGate — the SETTLE activation zone on BOTH channels,
+  // exitDist: carries ec.settleWithin — the SETTLE activation zone on BOTH channels,
   // inches on a lateral, DEGREES on a turn.
   exitDist: number;
   // exitPerpLine: carries ec.d on a lateral. The line is infinite, runs ⊥ to the
   // robot's heading through the target, and fires on which SIDE of it we're on — d
   // slides it that many inches back toward the robot to fire early. 0 = the line sits
-  // on the target. drive() has no point target, so cross is skipped there entirely
-  // and d acts as a plain remaining-distance tolerance instead.
+  // on the target. driveForward()/driveBackward() have no point target, so cross is
+  // skipped there entirely and d acts as a plain remaining-distance tolerance instead.
   exitPerpLine: number;
   // exitAng: turns only — carries ec.d, the ungated ANGLE exit in deg. Fires
   // mid-rotation as soon as |error| <= d, without waiting for the robot to slow.
@@ -120,14 +127,43 @@ export interface Tick {
   carrotY: number;
   ghostX: number; // ghost trailing behind the carrot
   ghostY: number;
+  refX: number;   // ramsete.trajectory: the pose the schedule wanted this tick
+  refY: number;
+  refH: number;
+  cmdV: number;   // what the law asked the velocity layer for, in/s
+  cmdW: number;   // …and deg/s
+  errFwd: number; // robot-frame gap to the reference: forward, right, heading
+  errCross: number;
+  errHead: number;
+  clockRate: number; // the adaptive clock's throttle on reference time
+  v: number;      // measured chassis speed, in/s
+  w: number;      // measured chassis turn rate, deg/s
   arcRadius: number; // travelArcRadius() — instantaneous turn radius (in)
   maxSlip: number; // slip cap √(leadChasePowerLimit·|r|); 0 = inactive
+  // ramsete.moveTo's MoveToError.crossTrack (in), sampled in the control loop.
+  // NaN on traces recorded before the column existed — see crossTrackAt().
+  crossTrack: number;
   driveI: number; // drive channel integral (∫ lateral error)
   driveD: number; // drive channel derivative
   turnI: number; // turn/heading channel integral
   turnD: number; // turn/heading channel derivative
   bat: number; // battery % this tick; -1 = not in this trace
   mtemp: number; // avg drive-motor temp (°C) this tick; -1 = not in this trace
+}
+
+// One baked row of a ramsete.trajectory's schedule — LucasLib's TrajPoint, as
+// emitted in the trace's [SCHEDULE] section.
+//
+// This is the PLAN, and it is not recoverable from the ticks: rows are spaced by
+// ARC (~2 in apart), they all exist before the first tick runs, and the per-tick
+// refX/refY only ever reach as far as the reference clock actually got.
+export interface ScheduleRow {
+  t: number; // ms into the schedule's OWN clock — not run time
+  x: number;
+  y: number;
+  h: number; // deg, the tangent (flipped 180° on a reversed row)
+  v: number; // in/s, signed: negative is driven backward
+  w: number; // deg/s
 }
 
 // Timeline annotation — a strategy/action callout pinned to a moment in the
@@ -158,6 +194,8 @@ export interface Trace {
   ticks: Tick[];
   readWalls: ReadWall[];
   notes: TraceNote[];
+  /** Baked schedules keyed by movement index; empty for traces without [SCHEDULE]. */
+  schedules: Record<number, ScheduleRow[]>;
   /** ms — end of the run (last tick timestamp). */
   duration: number;
 }

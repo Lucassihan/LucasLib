@@ -13,6 +13,7 @@ export type ArgKind =
   | 'turnEc' // TurnExitConditions {...}
   | 'blend' // BlendSettings {...}
   | 'boomParams' // BoomParams variable (or inline {...})
+  | 'bezierPath' // std::vector<BezierSegment> variable
   | 'headingDefault'; // double heading with `chassis.h` default sentinel
 
 export interface ParamSpec {
@@ -31,31 +32,50 @@ export interface FnSpec {
 
 export interface StructFieldSpec {
   name: string;
-  kind: 'number' | 'bool';
+  /** 'point' is a nested `{x, y}` pair — only BezierSegment's control points use it. */
+  kind: 'number' | 'bool' | 'point';
   def: number | boolean;
   doc: string;
 }
 
 // -1 is the OFF sentinel on every field of both structs. Settle is now speed-based:
-// it needs the chassis to be slowing down AND inside settleGate AND under the speed
+// it needs the chassis to be slowing down AND inside settleWithin AND under the speed
 // threshold `v` — it is no longer a PID-derivative test.
+// v = 2 in/s and 0.35 rad/s mirror exitConditions.h's LateralExitConditions /
+// TurnExitConditions defaults — the old 10/10 values were nowhere near a real
+// stop (10 in/s is ~18% of this drivetrain's 55 in/s top speed; 10 rad/s is
+// 573 deg/s, faster than a turn can ever spin), so the settle gate either
+// exited early (lateral) or never gated at all (turn). See exitConditions.h.
 export const LATERAL_EC: StructFieldSpec[] = [
   { name: 't', kind: 'number', def: 5000, doc: 'timeout ms · -1 = off' },
-  { name: 'v', kind: 'number', def: 10, doc: 'settle speed threshold, in/s — exit once the chassis is slowing AND |v| is under this, inside settleGate · -1 = off' },
-  { name: 'd', kind: 'number', def: -1, doc: 'cross: slide the ⊥ line this many in TOWARD us to fire early · 0 = line on the target · -1 = off. On drive() there is no point target, so this acts as a plain remaining-distance tolerance instead.' },
-  { name: 'settleGate', kind: 'number', def: 12, doc: 'settle activation radius, in — settle only counts inside this' }
+  { name: 'v', kind: 'number', def: 2, doc: 'settle speed threshold, in/s — exit once the chassis is slowing AND |v| is under this, inside settleWithin · -1 = off' },
+  { name: 'd', kind: 'number', def: -1, doc: 'cross: slide the ⊥ line this many in TOWARD us to fire early · 0 = line on the target · -1 = off. On driveForward()/driveBackward() there is no point target, so this acts as a plain remaining-distance tolerance instead.' },
+  { name: 'settleWithin', kind: 'number', def: 12, doc: 'settle activation radius, in — settle only counts inside this' }
 ];
 
 export const TURN_EC: StructFieldSpec[] = [
   { name: 't', kind: 'number', def: 5000, doc: 'timeout ms · -1 = off' },
-  { name: 'v', kind: 'number', def: 10, doc: 'settle angular-speed threshold, rad/s — exit once |ω| is falling AND under this, inside settleGate · -1 = off' },
+  { name: 'v', kind: 'number', def: 0.35, doc: 'settle angular-speed threshold, rad/s — exit once |ω| is falling AND under this, inside settleWithin · -1 = off' },
   { name: 'd', kind: 'number', def: -1, doc: 'ungated exit angle from target, deg — fires mid-turn, no settle gate · -1 = off' },
-  { name: 'settleGate', kind: 'number', def: 20, doc: 'settle activation angle, deg — settle only counts inside this' }
+  { name: 'settleWithin', kind: 'number', def: 20, doc: 'settle activation angle, deg — settle only counts inside this' }
 ];
 
 export const BLEND: StructFieldSpec[] = [
   { name: 'cosineScaling', kind: 'bool', def: true, doc: 'drive × cos(headingError) before blending' },
   { name: 'turnPriority', kind: 'number', def: 1, doc: '[0,1] · 1 = drive absorbs the whole cut' }
+];
+
+// BezierSegment (ramsete/bezierTools.h) — one cubic segment of a path. Only
+// the control points' x/y matter; a control point has no facing.
+export const BEZIER_SEG: StructFieldSpec[] = [
+  { name: 'a', kind: 'point', def: 0, doc: 'segment start, in' },
+  { name: 'b', kind: 'point', def: 0, doc: 'first handle, in' },
+  { name: 'c', kind: 'point', def: 0, doc: 'second handle, in' },
+  { name: 'd', kind: 'point', def: 0, doc: 'segment end, in' },
+  { name: 'reversed', kind: 'bool', def: false, doc: 'drive this piece backward (heading flips 180°, v goes negative)' },
+  { name: 'stopEnd', kind: 'bool', def: false, doc: 'force a full stop at this segment’s end' },
+  { name: 'maxVel', kind: 'number', def: -1, doc: 'in/s ceiling for this segment · -1 = profile default' },
+  { name: 'maxAccel', kind: 'number', def: -1, doc: 'in/s² budget for this segment · -1 = profile default' }
 ];
 
 export const BOOM_PARAMS: StructFieldSpec[] = [
@@ -91,21 +111,24 @@ export const TOTAL_FIELDS: StructFieldSpec[] = [
 
 // Docs for bare global assignments.
 export const GLOBAL_ASSIGNS: Record<string, string> = {
-  backward: 'Global drive direction: every point/pose movement (facePoint, swings-to-point, moveTo, boomerangTo) runs backward while true. Starts FALSE; nothing resets it — flip it yourself. Absolute-heading movements (face, swings-to-heading) and drive() ignore it — drive() takes its direction from the sign of distance.'
+  backward: 'Global drive direction: every point/pose movement (facePoint, swings-to-point, moveTo, boomerangTo) runs backward while true. Starts FALSE; nothing resets it — flip it yourself. Absolute-heading movements (face, swings-to-heading) and driveForward()/driveBackward() ignore it entirely — those two take their direction from which function you call, not from this global.'
 };
 
 export const STRUCT_FIELDS: Record<string, StructFieldSpec[]> = {
   lateralEc: LATERAL_EC,
   turnEc: TURN_EC,
   blend: BLEND,
-  boomParams: BOOM_PARAMS
+  boomParams: BOOM_PARAMS,
+  bezierSeg: BEZIER_SEG
 };
 
 export const STRUCT_NAMES: Record<string, string> = {
   lateralEc: 'LateralExitConditions',
   turnEc: 'TurnExitConditions',
   blend: 'BlendSettings',
-  boomParams: 'BoomParams'
+  boomParams: 'BoomParams',
+  bezierSeg: 'BezierSegment',
+  bezierPath: 'std::vector<BezierSegment>'
 };
 
 const ecL: ParamSpec = { name: 'ec', kind: 'lateralEc', def: '{}', doc: 'exit conditions' };
@@ -163,10 +186,20 @@ export const FUNCTIONS: FnSpec[] = [
     ]
   },
   {
-    name: 'drive',
-    doc: 'Relative straight drive along a held heading. distance is SIGNED — negative backs up. The one movement that ignores the global backward.',
+    name: 'driveForward',
+    doc: 'Relative straight drive along a held heading, forward. distance is a POSITIVE magnitude. Ignores the global backward entirely.',
     params: [
-      { name: 'distance', kind: 'number', doc: 'inches · negative = reverse' },
+      { name: 'distance', kind: 'number', doc: 'inches, positive magnitude' },
+      { name: 'heading', kind: 'headingDefault', def: 'chassis.h', doc: 'held heading (nose, either direction) · default = heading at call' },
+      ecL,
+      bs
+    ]
+  },
+  {
+    name: 'driveBackward',
+    doc: 'Relative straight drive along a held heading, in reverse. distance is a POSITIVE magnitude — driveBackward(12) reverses twelve inches. Ignores the global backward entirely.',
+    params: [
+      { name: 'distance', kind: 'number', doc: 'inches, positive magnitude' },
       { name: 'heading', kind: 'headingDefault', def: 'chassis.h', doc: 'held heading (nose, either direction) · default = heading at call' },
       ecL,
       bs
@@ -180,6 +213,15 @@ export const FUNCTIONS: FnSpec[] = [
       { name: 'y', kind: 'number', doc: 'target y, in' },
       ecL,
       bs
+    ]
+  },
+  {
+    name: 'ramsete.moveTo',
+    doc: 'Lyapunov point drive — RAMSETE\'s law with the schedule taken away. Chases the live bearing to the target and adds a cross-track term that bends the path in, scaled by how much travel is left. Backs up on its own once the target is behind it. Honors the global backward. No BlendSettings: the cosine scaling is part of the law.',
+    params: [
+      { name: 'x', kind: 'number', doc: 'target x, in' },
+      { name: 'y', kind: 'number', doc: 'target y, in' },
+      ecL
     ]
   },
   {
@@ -215,6 +257,14 @@ export const FUNCTIONS: FnSpec[] = [
       { name: 'x', kind: 'number', doc: 'inches' },
       { name: 'y', kind: 'number', doc: 'inches' },
       { name: 'h', kind: 'number', doc: 'heading, deg' }
+    ]
+  },
+  {
+    name: 'ramsete.trajectory',
+    doc: 'Bake a spline and follow it with the RAMSETE law; the schedule is the finish line.',
+    params: [
+      { name: 'path', kind: 'bezierPath', doc: 'a std::vector<BezierSegment> declared above' },
+      { name: 'ec', kind: 'lateralEc', def: '{.t = 10000, .v = -1}', doc: 'exit conditions — the safety bound on top of the schedule' }
     ]
   }
 ];
