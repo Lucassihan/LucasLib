@@ -216,6 +216,8 @@ function parseTicks(rows: Row[]): Tick[] {
     refX: num(r, 'refX'),
     refY: num(r, 'refY'),
     refH: num(r, 'refH'),
+    refV: num(r, 'refV'),
+    refW: num(r, 'refW'),
     cmdV: num(r, 'cmdV'),
     cmdW: num(r, 'cmdW'),
     errFwd: num(r, 'errFwd'),
@@ -291,6 +293,53 @@ function parseReadWalls(rows: Row[]): ReadWall[] {
   }));
 }
 
+/**
+ * Fill refV/refW on traces recorded before those columns existed.
+ *
+ * The reference VELOCITY isn't in an old trace, but the reference POSE is, and
+ * so is the schedule it was sampled from — and the reference walks that schedule
+ * forward, never back. So a cursor that only advances can find the row pair the
+ * pose sits between and read the plan's v/ω off them. Traces that carry the real
+ * columns are left alone; this only ever fills in zeros.
+ */
+function fillReferenceVelocity(ticks: Tick[], schedules: Record<number, ScheduleRow[]>): void {
+  if (ticks.some((t) => t.refV !== 0 || t.refW !== 0)) return;
+
+  let cursor = 0;
+  let mi = -1;
+  for (const tk of ticks) {
+    if (tk.mi !== mi) {
+      mi = tk.mi;
+      cursor = 0;
+    }
+    const rows = schedules[mi];
+    if (!rows || rows.length < 2) continue;
+    // A tick with no reference at all — the stop command after the loop — keeps
+    // the zeros, the same as its cmdV.
+    if (tk.refX === 0 && tk.refY === 0 && tk.cmdV === 0 && tk.cmdW === 0) continue;
+
+    // Walk to the nearest row, forward only.
+    const d2 = (i: number) => (rows[i].x - tk.refX) ** 2 + (rows[i].y - tk.refY) ** 2;
+    while (cursor + 1 < rows.length && d2(cursor + 1) <= d2(cursor)) cursor++;
+
+    // Then interpolate along the segment the pose actually sits on — the one
+    // leaving the nearest row, or the one arriving at it if the pose hasn't
+    // reached the row yet — so the line is as smooth as the plan instead of
+    // stepping once per row.
+    const proj = (i: number) => {
+      const dx = rows[i + 1].x - rows[i].x;
+      const dy = rows[i + 1].y - rows[i].y;
+      const len2 = dx * dx + dy * dy;
+      return len2 > 0 ? ((tk.refX - rows[i].x) * dx + (tk.refY - rows[i].y) * dy) / len2 : 0;
+    };
+    let i = Math.min(cursor, rows.length - 2);
+    if (i > 0 && proj(i) < 0) i--;
+    const f = Math.min(1, Math.max(0, proj(i)));
+    tk.refV = rows[i].v + (rows[i + 1].v - rows[i].v) * f;
+    tk.refW = rows[i].w + (rows[i + 1].w - rows[i].w) * f;
+  }
+}
+
 export function parseTrace(text: string): Trace {
   const { headerLines, sections } = splitSections(stripMarkers(text));
   const header = parseHeader(headerLines);
@@ -299,6 +348,8 @@ export function parseTrace(text: string): Trace {
   const readWalls = parseReadWalls(toRows(sections['READWALLS']));
   const notes = parseNotes(sections['NOTES']);
   const schedules = parseSchedules(toRows(sections['SCHEDULE']));
+
+  fillReferenceVelocity(ticks, schedules);
 
   const duration = ticks.length ? ticks[ticks.length - 1].t : 0;
 

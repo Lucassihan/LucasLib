@@ -8,32 +8,75 @@
 #include "pid.h"
 #include "main.h"
 #include "scheduler.h"
+#include "scoringControl/dispatchThread.h"
 
 #include <cmath>
 
 //Declare PID constants
 void initializePIDConstants() {
   //TurnPID
+  turnPID.maxOutput = 12;
   turnPID.setProfile(normal);
-  turnPID.addStep(45, 0.1, 0.001, 3.644);
-  turnPID.addStep(90, 0.12, 0.001, 3.744);
-  turnPID.addStep(180, 0.15, 0.001, 3.844);
+  turnPID.addStep(999999, 0.15, 0.01, 4);
   turnPID.setIntegralSettings(10, 3);
 
   //SwingPID
+  swingPID.maxOutput = 12;
   swingPID.setProfile(normal);
   swingPID.addStep(999999, 0.1, 0.001, 1.506);
   swingPID.setIntegralSettings(10, 3);
 
   //DrivePID
+  drivePID.maxOutput = 12;
   drivePID.setProfile(normal);
-  drivePID.addStep(99999, 0.5, 0., 9);
+  drivePID.addStep(99999, 0.6, 0.1, 6);
   drivePID.setIntegralSettings(2, 3);
 
   //HeadingPID
+  headingPID.maxOutput = 12;
   headingPID.setProfile(normal);
-  headingPID.addStep(999999, 0.1, 0, 1.506); //Do not give headingPID any ki
+  headingPID.addStep(999999, 0.15, 0, 4);
+  drivePID.setIntegralSettings(2, 3);
+}
 
+void initializeClawPIDConstants() {
+  //ClawPID
+  clawPID.maxOutput = 12;
+  clawPID.setProfile(normal);
+  clawPID.addStep(999999, 0.15, 0.01, 4);
+  clawPID.setIntegralSettings(10, 3);
+
+  clawPID.setProfile(holding);
+  clawPID.addStep(999999, 0.15, 0.01, 4);
+  clawPID.setIntegralSettings(10, 3);
+
+  //LiftPID
+  liftPID.maxOutput = 12;
+  liftPID.setProfile(normal);
+  liftPID.addStep(999999, 0.1, 0.001, 1.506);
+  liftPID.setIntegralSettings(10, 3);
+
+  liftPID.setProfile(holding);
+  liftPID.addStep(999999, 0.1, 0.001, 1.506);
+  liftPID.setIntegralSettings(10, 3);
+
+}
+
+Trajectory goTraj;
+Trajectory loadTraj;
+
+void createTrajectories() {
+  std::vector<BezierSegment> go = {
+    {.a = {60, -60}, .b = {60, -42}, .c = {38, -47.6}, .d = {31, -47.6}}
+  };
+  std::vector<BezierSegment> load = {
+    {.a = {31, -47.6}, .b = {38, -47.6}, .c = {60, -42}, .d = {60, -60}}
+  };
+
+  PathSettings pathSettings = {.maxVel = 60.0, .maxAccel = 100.0, .endSpeed = 0, .finalDistance = 4};
+
+  goTraj   = createTrajectory(go, pathSettings, true);
+  loadTraj = createTrajectory(load, pathSettings);
 }
 
 void autonSettings() {
@@ -41,9 +84,8 @@ void autonSettings() {
   setRamseteSettings();                    //the law's gains + the chassis limits
   initializeVelocityControllerConstants(); //what each channel measures, and its gains
 
-  totalOutput.maxOutput = 12;
-
-  //You can put your own stuff in here too
+  claw.asyncControl = true;
+  lift.asyncControl = true;
 }
 
 void exampleAuto() {
@@ -51,24 +93,40 @@ void exampleAuto() {
   autonSettings();
 
   chassis.setPos(0,0,0);
-  moveTo(0,24, {.d = 1});
-  BoomParams bp {.x = 24, .y = 48, .lead = 0.5};
-  facePoint(bp, {.d = 10});
-  drivePID.maxOutput = 6;
-  boomerangTo(bp, {.d = 3});
+  // driveForward(24);
+  // face(90, {.t = 50000});
+  facePoint(12,24, {.v = 1});
+  ramsete.moveTo(12,24,{.t = 5000});
   debugger::stop();
 
 }
 
+void once() {
+  ramsete.trajectory(goTraj, {.d = 0});
+  delay(250);
+  ramsete.trajectory(loadTraj, {.v = 2});
+  delay(250);
+  ramsete.trajectory(goTraj, {.d = 0});
+  delay(250);
+  ramsete.trajectory(loadTraj, {.v = 2});
+}
+
+void tuneClaw() {
+  claw.kFeedForward = 10;
+}
+
 void trajectoryTest() {
-  debugger::start("secondTrajTest");
+  debugger::start("scndmacroTest");
   autonSettings();
-  chassis.setPos(48,-48,0);
-  std::vector<BezierSegment> test = {
-    {.a = {48, -48}, .b = {48, -42.1}, .c = {-74.1, 0.1}, .d = {0, 0}},
-    {.a = {0, 0}, .b = {48, -0.1}, .c = {-30, 48}, .d = {0, 48}}
-  };
-  ramsete.trajectory(bakeTrajectory(test, {.maxVel = 75.0, .maxAccel = 100.0}));
+  chassis.setPos(60,-55,180);
+  backward = true;
+
+
+  once();
+  once();
+
+
+
   debugger::stop();
 }
 
@@ -83,50 +141,9 @@ bool cond1() {
 
 void exampleAuton() {
   debugger::start("example");
-  autonSettings();
   chassis.setPos(0,0,0);
 
   schedule(cond1, scoreFcn);
 
   debugger::stop();
-}
-
-void blueAuto() {
-  fourBar.spin(forward, -12, volt);
-  voldrive(2);
-  delay(500);
-  fourBar.spin(forward, 12, volt);
-  delay(500);
-  voldrive(-1);
-  fourBar.stop(coast);
-  delay(500);
-  fourBar.spin(forward, -12, volt);
-  delay(500);
-
-  voldrive(-2);
-  delay(1000);
-  voldrive(0);
-}
-
-void redAuto() {
-  fourBar.spin(forward, -12, volt);
-  voldrive(2);
-  delay(500);
-  fourBar.spin(forward, 12, volt);
-  delay(500);
-  voldrive(-1);
-  fourBar.stop(coast);
-  delay(500);
-  fourBar.spin(forward, -12, volt);
-  delay(500);
-
-  voldrive(3);
-  delay(500);
-  voldrive(0);
-  fourBar.spin(forward, 12, volt);
-  delay(500);
-  fourBar.stop(coast);
-  voldrive(-1);
-  delay(1000);
-  voldrive(0);
 }

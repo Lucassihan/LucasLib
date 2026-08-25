@@ -53,8 +53,9 @@
   // POINTS: the actual baked schedule's row count, from whichever
   // trajectory call on this path has been simulated — the exact same
   // rows the field's speed-coloured polyline draws. Falls back to an estimate
-  // off the spacing knob when the path isn't wired to a call yet (or that
-  // call baked fewer than 2 rows and produced no segment).
+  // off the dt knob when the path isn't wired to a call yet (or that call baked
+  // fewer than 2 rows and produced no segment). Rows land on a CLOCK now, so the
+  // estimate is the route's duration at its own ceiling, not a length over a stride.
   const pointCount = $derived.by(() => {
     if (!decl) return 0;
     for (let i = 0; i < route.parsed.stmts.length; i++) {
@@ -67,7 +68,8 @@
         }
       }
     }
-    return Math.max(1, Math.ceil(totalLength / Math.max(0.25, sandbox.knobs.rsSpacing)));
+    const cruise = Math.max(1, sandbox.knobs.rsMaxVel * sandbox.knobs.rsVelMargin);
+    return Math.max(1, Math.ceil((totalLength / cruise) * 1000 / Math.max(1, sandbox.knobs.rsDt)));
   });
 
   const fmt = (v: number, d = 1) => {
@@ -226,7 +228,7 @@
           />
           <div class="note">
             Sets <span class="mono2">.maxVel</span> on segment {Math.min(a.index, segs.length - 1) + 1} — the piece this anchor starts. There's no
-            per-anchor speed in the library, only this per-segment ceiling (bakeTrajectory's speedCeiling).
+            per-anchor speed in the library, only this per-segment ceiling (createTrajectory's speedCeiling).
           </div>
         {/if}
         <button
@@ -256,7 +258,7 @@
     </section>
 
     <section class="panel group">
-      <div class="gtitle">Speed plan <span class="gsub">baked by bakeTrajectory</span></div>
+      <div class="gtitle">Speed plan <span class="gsub">baked by createTrajectory</span></div>
       <SliderRow label="Max speed" min={5} max={150} step={1} unit="in/s" value={sandbox.knobs.rsMaxVel} onchange={(v) => (sandbox.knobs.rsMaxVel = v)} />
       <SliderRow label="Exit speed" min={0} max={90} step={1} unit="in/s" value={sandbox.knobs.rsEndSpeed} onchange={(v) => (sandbox.knobs.rsEndSpeed = v)} />
       <SliderRow label="Plan accel" min={10} max={300} step={5} unit="in/s²" value={sandbox.knobs.rsMaxAccel} onchange={(v) => (sandbox.knobs.rsMaxAccel = v)} />

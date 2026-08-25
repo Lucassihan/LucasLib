@@ -157,7 +157,7 @@
         return esc
           .replace(/\b(static|const)\b/g, '<span class="tk-k">$1</span>')
           .replace(/\b(std|vector|BezierSegment)\b/g, '<span class="tk-t">$1</span>')
-          .replace(/\b(ramsete\.trajectory|bakeTrajectory)\b/g, '<span class="tk-f">$1</span>')
+          .replace(/\b(ramsete\.trajectory|createTrajectory)\b/g, '<span class="tk-f">$1</span>')
           .replace(NUM_RE, '$1<span class="tk-n">$2</span>');
       })
       .join('\n');

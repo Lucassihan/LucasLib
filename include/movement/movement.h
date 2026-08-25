@@ -47,13 +47,13 @@ void swingOnRightToPoint(double x, double y,
 // distance is a POSITIVE magnitude in both — direction comes from which one you call, never from the global `backward`.
 // heading is held with the NOSE either way; drivePID.targetOffset runs along the direction of travel, so + always overshoots past the target.
 void driveForward(double distance,
-                  double heading = chassis.h,
                   LateralExitConditions ec = {},
+                  double heading = chassis.h,
                   BlendSettings bs = {});
 
 void driveBackward(double distance,
-                   double heading = chassis.h,
                    LateralExitConditions ec = {},
+                   double heading = chassis.h,
                    BlendSettings bs = {});
 
 void moveTo(double x, double y,

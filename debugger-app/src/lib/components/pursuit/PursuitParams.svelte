@@ -109,7 +109,7 @@
   </section>
 
   <section class="panel group">
-    <div class="gtitle">Bake <span class="gsub">ProfileConfig — profile.h</span></div>
+    <div class="gtitle">Bake <span class="gsub">PathSettings — profile.h</span></div>
     <SliderRow label="Max speed" value={pursuit.params.maxVel} min={10} max={90} step={1} unit="in/s" onchange={(v) => set('maxVel', v)} />
     <SliderRow label="Plan accel" value={pursuit.params.maxAccel} min={10} max={200} step={5} unit="in/s²" onchange={(v) => set('maxAccel', v)} />
     <SliderRow label="velMargin" value={pursuit.params.velMargin} min={0.1} max={1} step={0.01} decimals={2} onchange={(v) => set('velMargin', v)} />

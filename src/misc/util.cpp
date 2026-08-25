@@ -52,7 +52,13 @@ double sinc(double x) {
 // Flat weights, not a taper. Weighting the newest sample heavier keeps more of the noise for
 // the same delay: on the trajtest25 trace a 5:4:3:2:1 taper left 1.25 V of jitter against the
 // flat mean's 0.92 V, with no lag advantage to show for it.
-double smooth(double current, double last, double last2, double last3, double last4) {
+// Unrolled rather than looped — the window tops out at five and the caller holds its history in
+// named members, so there is nothing to walk.
+double smooth(int samples, double current, double last, double last2, double last3, double last4) {
+  if (samples <= 1) return current;
+  if (samples == 2) return (current + last) / 2.0;
+  if (samples == 3) return (current + last + last2) / 3.0;
+  if (samples == 4) return (current + last + last2 + last3) / 4.0;
   return (current + last + last2 + last3 + last4) / 5.0;
 }
 

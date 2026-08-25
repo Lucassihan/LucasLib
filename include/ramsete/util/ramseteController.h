@@ -1,7 +1,8 @@
 #pragma once
 
-#include "ramsete/bezierTools.h"
-#include "ramsete/trajectory.h"
+#include "ramsete/util/bezierUtils.h"
+#include "ramsete/util/trajectoryUtils.h"
+#include "ramsete/util/profile.h"
 #include "movement/exitConditions.h"
 
 #include <vector>
@@ -49,9 +50,20 @@ struct RamseteTelemetry {
 struct Ramsete {
     // --- what the chassis can do (measured, not tuned) ---
     double trackwidth;      // in — wheel to wheel; sets the curvature speed cap
-    double maxVel;          // in/s — the CHASSIS's free speed, never a route's; cap ProfileConfig instead or the clock thinks it has no headroom
+    double maxVel;          // in/s — the CHASSIS's free speed, never a route's; cap PathSettings instead or the clock thinks it has no headroom
     double maxAccel;        // in/s² — the profile's acceleration budget
-    double sampleRate;      // MS between baked rows, not a frequency; ProfileConfig.dt overrides it per route
+    double sampleRate;      // MS between baked rows, not a frequency; PathSettings.dt overrides it per route
+
+    // --- smoothing on the measurements the velocity layer reads back ---
+    // chassis.v and chassis.ω are each one interval of pose difference, and the pose arrives in
+    // bursts, so a single reading is noisy enough to move the drive a couple of volts once the
+    // velocity channel's kP is on top of it. Each channel is set on its own: v gains far more from
+    // averaging than ω does, and ω pays more for the delay, since it swings faster.
+    // Samples run 1..5; 1 is the same as off. Costs (samples-1)/2 cycles of delay.
+    bool   smoothV;
+    int    smoothedVSamples;
+    bool   smoothω;
+    int    smoothedωSamples;
 
     // --- the law ---
     double b;               // stiffness, 1/in²
@@ -60,6 +72,16 @@ struct Ramsete {
 
     // --- the clock ---
     double clockCoupling;   // how hard a speed shortfall brakes the clock
+
+    // --- output slew ---
+    // A rate cap on the COMMAND, applied after the law and ahead of the velocity layer. The
+    // profile's maxAccel shapes the schedule; these bound how fast the law's feedback terms are
+    // allowed to move on top of it, so a catch-up spike reaches the drivetrain as a ramp. Real
+    // units, not per-tick deltas. 0 leaves that half uncapped.
+    double vMaxAccelRate;   // in/s²  — commanded v, magnitude growing
+    double vMaxDecelRate;   // in/s²  — commanded v, magnitude shrinking
+    double ωMaxAccelRate;   // deg/s² — commanded ω, magnitude growing
+    double ωMaxDecelRate;   // deg/s² — commanded ω, magnitude shrinking
 
     // --- moveTo ---
     double kLat;            // 1/in — cross-track coupling. Not b's equal: this multiplies drivePID's volts, b multiplies in/s. Tuned separately.
@@ -98,13 +120,29 @@ struct Ramsete {
 
     // ------------------------------------------------------------ trajectory ---
 
-    // Steer toward a SCHEDULE rather than a point. Ends when the reference clock passes the last row, with the exit conditions as the safety bound, so a baked endSpeed leaves the motors running for the next movement to catch.
-    void trajectory(const std::vector<TrajPoint>& trajectory,
-                    LateralExitConditions ec = {.t = 10000, .v = -1});
+    // Steer toward a baked SCHEDULE rather than toward a point. Takes the rows themselves, so a
+    // route can be built once — createTrajectory(path) in initialize(), kept in a
+    // Trajectory — and then driven as often as you like for the cost of the drive alone.
+    // Ends when the reference clock passes the last row, with the exit conditions as the safety
+    // bound, so a baked endSpeed leaves the motors running for the next movement to catch — unless
+    // the schedule's own finalDistance hands the last inches to the point chase first, which is the
+    // only half of this that can settle. Direction is baked in too.
+    void trajectory(const Trajectory& trajectory,
+                    LateralExitConditions ec = {});
 
-    // Bake a spline on the brain (every ProfileConfig field at its default), then follow it. Costs a few ms up front.
-    void trajectory(const std::vector<BezierSegment>& path,
-                    LateralExitConditions ec = {.t = 10000, .v = -1});
+    // ------------------------------------------------------------ boomerangTo ---
+
+    // One curve from where the robot is standing to (x, y), then followed like a trajectory.
+    // The start anchor sits on the robot with its handle along the direction of TRAVEL; the end
+    // anchor sits on (x, y) with its handle along `heading`, which is a field heading in LucasLib's
+    // convention (0 = +Y, clockwise) and is NOT flipped by `backward`. The two handle lengths set
+    // how hard the curve commits to leaving and to arriving — longer is a wider, lazier arc.
+    // `padding` ends the curve that many inches short, on the approach line, and drives the rest
+    // dead straight: the robot is done turning before it arrives. 0 is the plain single curve.
+    void boomerangTo(double x, double y, double heading,
+                     double handleLength1, double handleLength2, double padding = 0,
+                     PathSettings pathSettings = {},
+                     LateralExitConditions ec = {});
 };
 
 extern Ramsete ramsete;

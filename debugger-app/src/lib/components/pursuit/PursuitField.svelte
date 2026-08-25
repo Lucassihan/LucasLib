@@ -662,7 +662,9 @@
 
       <!-- glow-core path: a blurred pass under a bright core, both speed-colored -->
       <defs>
-        <filter id="path-glow" x="-40%" y="-40%" width="180%" height="180%">
+        <!-- Region in field units, not %-of-bbox: a bbox-relative region is thin
+             wherever the path is, so the blur hits the edge and cuts off square. -->
+        <filter id="path-glow" filterUnits="userSpaceOnUse" x="-24" y="-24" width="192" height="192">
           <feGaussianBlur stdDeviation="1.5" />
         </filter>
       </defs>

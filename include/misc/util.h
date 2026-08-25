@@ -35,12 +35,40 @@ double sinc(double x);
 
 // ---- Filtering ----
 
-// Mean of the last five cycles, newest first. Deliberately unwired: it exists for the case where
-// chassis.v is too noisy for the velocity channel's kP to sit on, which is a real risk but not
-// what the drive is currently doing. To bring it back, keep five samples in VelocityController and
-// smooth the `current` it reads off the source — nothing else has to change.
-// Costs (N-1)/2 = 2 cycles of delay, so filter the measurement, never the command.
-double smooth(double current, double last, double last2, double last3, double last4);
+// Mean of the newest `samples` of the five readings given, newest first; `samples` clamps to 1..5,
+// and 1 returns the reading untouched. For a MEASUREMENT the caller feeds back into a gain — the
+// case it exists for is chassis.v under the velocity channel's kP, where one raw reading carries
+// enough noise to move the drive a couple of volts on its own.
+// Costs (samples-1)/2 cycles of delay, so point it at a measurement, never at a command.
+double smooth(int samples, double current, double last, double last2, double last3, double last4);
+
+// The last four readings of one channel, so smooth() has something to average. Four slots
+// regardless of the configured window, so changing it never has to resize anything.
+struct VelocityHistory {
+  double last1 = 0;
+  double last2 = 0;
+  double last3 = 0;
+  double last4 = 0;
+
+  // Smoothed value for this reading, oldest sample dropped.
+  double push(double reading, int samples) {
+    double out = smooth(samples, reading, last1, last2, last3, last4);
+
+    last4 = last3;
+    last3 = last2;
+    last2 = last1;
+    last1 = reading;
+
+    return out;
+  }
+
+  void clear() {
+    last1 = 0;
+    last2 = 0;
+    last3 = 0;
+    last4 = 0;
+  }
+};
 
 // ---- Slew rate limiter ----
 

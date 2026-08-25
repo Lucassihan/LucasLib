@@ -761,7 +761,7 @@ export function migrateCode(code: string): string {
   // nothing ambiguous about any of them — so rewrite rather than make the user
   // do it. The '.' in the lookbehind is what stops an already-migrated
   // ramsete.trajectory( from picking up a second prefix; the trailing '(' is
-  // what keeps bakeTrajectory/trajectoryDuration out of it.
+  // what keeps createTrajectory/trajectoryDuration out of it.
   return drives.replace(
     /(?<![A-Za-z0-9_.])(?:executeTrajectory|followTrajectory|trajectory)(?=\s*\()/g,
     'ramsete.trajectory'

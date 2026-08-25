@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/util.h"
+
 // velocityController — one channel of the velocity layer, turning a RAMSETE command into volts: u = kV·target + kS·sign(target) + kA·accel + kP·error + kI·∫error.
 // The gains are MEASURED, not tuned: a voltage sweep fits kV and kS, and one step response fits K, L, T → kA = (L+T)/K, kP = T/(K·λ), kI = kP/T, λ = T/2.
 
@@ -12,6 +14,7 @@ public:
 
     // Anti-windup: while the output is saturated the error can't shrink, so cap what the integral may contribute, in volts.
     void setIntegralSettings(double maxIntegralOutput);
+
 
     void clearAllValues();
 
@@ -43,4 +46,5 @@ private:
     double lastTarget;
     double lastTime;
     bool   firstCycle;
+
 };

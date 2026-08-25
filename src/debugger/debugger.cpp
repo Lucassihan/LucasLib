@@ -11,7 +11,7 @@
 #include "movement/pid.h"
 #include "movement/totalOutput.h"
 #include "movement/odometry.h"
-#include "ramsete/ramseteController.h"   // ramsete.kLat, for the header
+#include "ramsete/util/ramseteController.h"   // ramsete.kLat, for the header
 
 #include <cstdio>
 #include <cstdarg>
@@ -83,6 +83,7 @@ struct Tk {
     float    carrotX, carrotY, ghostX, ghostY, arcRadius, maxSlip, leadRet, perp;
     float    xt;          // ramsete.moveTo cross-track error (in)
     float    refX, refY, refH;  // where the trajectory said to be this tick
+    float    refV, refW;        // …and how fast the schedule wanted to be going
     float    cmdV, cmdW;        // what the law asked the velocity layer for
     float    errFwd, errCross, errHead;  // robot-frame gap to the reference
     float    clockRate;         // the adaptive clock's throttle on reference time
@@ -124,6 +125,7 @@ struct Pending {
     float leadRet = 0, maxSlip = 0;
     float crossTrack = 0;
     float refX = 0, refY = 0, refH = 0;   // trajectory reference pose
+    float refV = 0, refW = 0;             // …and the schedule's velocity there
     bool  refSet = false;
     float cmdV = 0, cmdW = 0;
     float errFwd = 0, errCross = 0, errHead = 0;
@@ -154,8 +156,22 @@ static uint32_t nowMs() {
     return (uint32_t) Brain.timer(msec);
 }
 
+// A pending nextMoveType(), waiting for the tag it renames.
+static const char* overrideType = nullptr;
+
+void nextMoveType(const char* type) {
+    overrideType = type;
+}
+
 // Start a movement record. Returns a reference to fill in the type-specific bits.
 static Mv& newMove(const char* type, Kind kind) {
+    // Cleared even when the record is dropped below, so a movement that ran uncaptured can't
+    // rename one that runs later.
+    if (overrideType) {
+        type = overrideType;
+        overrideType = nullptr;
+    }
+
     if (!capturing || moveCount >= MOVE_CAP) {
         static Mv sink;  // overflow sink — keeps callers safe past capacity
         return sink;
@@ -216,6 +232,7 @@ void start(const char* name) {
     batteryVolts = (float) Brain.Battery.voltage(vex::voltageUnits::volt);
     snprintf(autonName, sizeof(autonName), "%s", name ? name : "auton");
     pending = Pending{};
+    overrideType = nullptr;
     capturing = true;
 }
 
@@ -292,7 +309,7 @@ void movementExit(const char* reason) {
     moves[curMi].exReason = reason;
 }
 
-void trajectorySchedule(const std::vector<TrajPoint>& traj) {
+void trajectorySchedule(const Trajectory& traj) {
     if (!capturing || curMi < 0) return;
 
     // All or nothing: half a schedule would draw as a path that stops in the
@@ -366,6 +383,7 @@ void tick() {
     t.leadRet = pending.leadRet;  t.maxSlip = pending.maxSlip;
     t.xt = pending.crossTrack;
     t.refX = pending.refX;  t.refY = pending.refY;  t.refH = pending.refH;
+    t.refV = pending.refV;  t.refW = pending.refW;
     t.cmdV = pending.cmdV;  t.cmdW = pending.cmdW;
 
     // The stop command after the follow loop ticks too, and no probe ran behind
@@ -422,6 +440,8 @@ void probeTrajectory() {
     pending.refX      = (float) tm.refX;
     pending.refY      = (float) tm.refY;
     pending.refH      = (float) tm.refHeading;
+    pending.refV      = (float) tm.refV;
+    pending.refW      = (float) tm.refω;
     pending.cmdV      = (float) tm.cmdV;
     pending.cmdW      = (float) tm.cmdω;
     pending.errFwd    = (float) tm.errX;
@@ -549,7 +569,7 @@ static void dumpTrace() {
     }
 
     // The plan, per trajectory movement: every baked row, in order. Rows are
-    // ProfileConfig.dt apart on the CLOCK, so they crowd up in distance where the
+    // PathSettings.dt apart on the CLOCK, so they crowd up in distance where the
     // profile is slow — that cadence is the schedule's own, not a resampling of it.
     emit("");
     emit("[SCHEDULE]");
@@ -563,15 +583,15 @@ static void dumpTrace() {
     emit("[TICKS]");
     emit("t,mi,x,y,h,stage,le,he,dp,hp,tp,sp,do,to,lo,ro,yi,xi,leadX,leadY,leadRetraction,perpDist,"
          "driveI,driveD,turnI,turnD,carrotX,carrotY,ghostX,ghostY,arcRadius,maxSlip,xt,"
-         "refX,refY,refH,cmdV,cmdW,errFwd,errCross,errHead,clockRate,v,w,bat,mtemp");
+         "refX,refY,refH,refV,refW,cmdV,cmdW,errFwd,errCross,errHead,clockRate,v,w,bat,mtemp");
     for (int i = 0; i < tickCount; i++) {
         Tk& t = ticks[i];
-        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
+        emitf("%u,%u,%g,%g,%g,%u,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,0,0,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g",
             t.t, (unsigned) t.mi, t.x, t.y, t.h, (unsigned) t.stage, t.le, t.he, t.dp, t.hp, t.tp, t.sp,
             t.driveO, t.turnO, t.lo, t.ro, t.yi, t.xi, t.leadRet, t.perp,
             t.driveI, t.driveD, t.turnI, t.turnD,
             t.carrotX, t.carrotY, t.ghostX, t.ghostY, t.arcRadius, t.maxSlip, t.xt,
-            t.refX, t.refY, t.refH, t.cmdV, t.cmdW, t.errFwd, t.errCross, t.errHead,
+            t.refX, t.refY, t.refH, t.refV, t.refW, t.cmdV, t.cmdW, t.errFwd, t.errCross, t.errHead,
             t.clockRate, t.v, t.w, t.bat, t.mtemp);
     }
 

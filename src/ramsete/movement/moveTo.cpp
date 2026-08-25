@@ -6,7 +6,7 @@
 // What changed from lyPose is the frame: the heading to the target is recomputed
 // every tick rather than committed at the first loop.
 
-#include "ramsete/ramseteController.h"
+#include "ramsete/util/ramseteController.h"
 #include "movement/movementUtils.h"
 #include "movement/odometry.h"
 #include "movement/pid.h"
@@ -15,9 +15,6 @@
 #include "debugger/debugger.h"
 
 #include <cmath>
-
-// movement.cpp's stage boundary, shared so the two moveTos tune with one number.
-extern double turnDisableLength;
 
 void Ramsete::moveTo(double x, double y, LateralExitConditions ec) {
     double startTime = Brain.timer(msec);
@@ -42,7 +39,7 @@ void Ramsete::moveTo(double x, double y, LateralExitConditions ec) {
             headingError = ramseteError.heading;
             lateralError = ramseteError.distance + (backward ? -drivePID.targetOffset : drivePID.targetOffset);
 
-            if (fabs(ramseteError.distance) < turnDisableLength) {
+            if (fabs(ramseteError.distance) < 0.5) {
                 close = true;
                 target.h = chassis.h;
                 targetStraightDistance = lateralError;

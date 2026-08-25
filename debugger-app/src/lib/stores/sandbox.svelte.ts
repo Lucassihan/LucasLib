@@ -839,7 +839,7 @@ export function moveAnchor(pathName: string, i: number, x: number, y: number): v
 
 /** Rotate both of an anchor's handles to lie along `degrees`, keeping each
  *  one's own length — the collinearity a handle-based spline needs for C1
- *  continuity (bezierTools.h), the same invariant SandboxField's handle-drag
+ *  continuity (bezierUtils.h), the same invariant SandboxField's handle-drag
  *  mirroring keeps one drag at a time. A handle that doesn't exist (the
  *  first/last anchor) is simply left alone. Only ever called from the
  *  widget's Dir tile (a discrete commit-on-blur, not a drag), so it pushes
@@ -896,7 +896,7 @@ export function setAnchorHandle(pathName: string, i: number, side: 'in' | 'out',
 /**
  * Limit speed here — writes the real `.maxVel` field on the segment this
  * anchor STARTS (seg[i], or seg[n-1] for the final anchor): there is no
- * per-anchor speed in the library, only bakeTrajectory's per-segment ceiling
+ * per-anchor speed in the library, only createTrajectory's per-segment ceiling
  * (speedCeiling, ramsete.ts). `value === null` clears it back to -1, the
  * same "profile default" sentinel every other -1 field on BezierSegment
  * uses (spec.ts's BEZIER_SEG) — parse.ts has no field-removal helper, so

@@ -1,10 +1,10 @@
 // A line-for-line TypeScript port of LucasLib's `ramsete/` module, so the
 // sandbox follows a spline the same way the brain does.
 //
-//   include/ramsete/bezierTools.h   → the spline layer (exact heading + curvature)
-//   src/ramsete/profile.cpp         → bakeTrajectory: the 2D motion profile
-//   src/ramsete/trajectory.cpp      → the baked schedule + sampleTrajectory
-//   src/ramsete/ramseteController.cpp → the tracking law and the adaptive clock
+//   include/ramsete/util/bezierUtils.h   → the spline layer (exact heading + curvature)
+//   src/ramsete/util/profile.cpp         → createTrajectory: the 2D motion profile
+//   src/ramsete/util/trajectoryUtils.cpp      → the baked schedule + sampleTrajectory
+//   src/ramsete/util/ramseteController.cpp → the tracking law and the adaptive clock
 //   src/ramsete/velocityController.cpp → one channel of the velocity layer
 //
 // The library reads its constants off the global `ramsete` object and the robot
@@ -45,7 +45,7 @@ export function wrapDegrees(angle: number): number {
 }
 
 // =========================================================================
-// bezierTools — position, tangent and curvature from the SAME four points.
+// bezierUtils — position, tangent and curvature from the SAME four points.
 // Frame: field inches, headings in degrees, 0 = +Y, clockwise positive.
 // =========================================================================
 
@@ -133,6 +133,10 @@ export interface TrajPoint {
   omega: number; // deg/s, = |v| · curvature
 }
 
+/** The schedule itself: the rows in order. One TrajPoint is one INSTANT of it, so the trajectory
+ *  is the whole array, not any single element — this is the name to hold one in. */
+export type Trajectory = TrajPoint[];
+
 /** The reference state at one instant: a row interpolated to the current clock. */
 export interface TrajState {
   x: number;
@@ -142,7 +146,7 @@ export interface TrajState {
   omega: number;
 }
 
-export function trajectoryDuration(traj: TrajPoint[]): number {
+export function trajectoryDuration(traj: Trajectory): number {
   return traj.length ? traj[traj.length - 1].t : 0;
 }
 
@@ -151,7 +155,7 @@ export function trajectoryDuration(traj: TrajPoint[]): number {
  * Heading interpolates along the WRAPPED difference so a row pair straddling
  * ±180° doesn't spin the reference the long way around.
  */
-export function sampleTrajectory(traj: TrajPoint[], t: number): TrajState {
+export function sampleTrajectory(traj: Trajectory, t: number): TrajState {
   const empty: TrajState = { x: 0, y: 0, heading: 0, v: 0, omega: 0 };
   if (!traj.length) return empty;
   const asState = (p: TrajPoint): TrajState => ({ x: p.x, y: p.y, heading: p.heading, v: p.v, omega: p.omega });
@@ -182,8 +186,8 @@ export function sampleTrajectory(traj: TrajPoint[], t: number): TrajState {
 // profile — three velocity ceilings, two passes, one integration.
 // =========================================================================
 
-/** ProfileConfig (profile.h). -1 means "fall back to the chassis limit". */
-export interface ProfileConfig {
+/** PathSettings (util/profile.h). -1 means "fall back to the chassis limit". */
+export interface PathSettings {
   maxVel: number;
   maxAccel: number;
   maxDecel: number;
@@ -191,12 +195,15 @@ export interface ProfileConfig {
   velMargin: number;
   startSpeed: number;
   endSpeed: number;
-  spacing: number;
+  /** MILLISECONDS of schedule between output rows — a clock, not a distance. -1 = ramsete.sampleRate. */
+  dt: number;
   torqueSlope: number;
   torqueFloor: number;
+  /** in — inside this of the last row the follower parks on moveTo's law. 0 = never. */
+  finalDistance: number;
 }
 
-export const DEFAULT_PROFILE: ProfileConfig = {
+export const DEFAULT_SPEEDS: PathSettings = {
   maxVel: -1,
   maxAccel: -1,
   maxDecel: -1,
@@ -204,9 +211,10 @@ export const DEFAULT_PROFILE: ProfileConfig = {
   velMargin: 0.9,
   startSpeed: 0,
   endSpeed: 0,
-  spacing: 2,
+  dt: -1,
   torqueSlope: 0.8,
-  torqueFloor: 0.15
+  torqueFloor: 0.15,
+  finalDistance: 6
 };
 
 /** The `Ramsete` struct's constants (config.cpp fills these in setRamseteSettings). */
@@ -214,6 +222,8 @@ export interface RamseteConfig {
   trackwidth: number;
   maxVel: number;
   maxAccel: number;
+  /** ms between baked rows, not a frequency. PathSettings.dt overrides it per route. */
+  sampleRate: number;
   b: number;
   zeta: number;
   vMinGain: number;
@@ -224,6 +234,7 @@ export const DEFAULT_RAMSETE: RamseteConfig = {
   trackwidth: 13.5,
   maxVel: 55,
   maxAccel: 90,
+  sampleRate: 10,
   b: 0.03,
   zeta: 0.4,
   vMinGain: 4,
@@ -276,17 +287,18 @@ function arcSpacedParams(seg: BezierSegment, count: number): number[] {
 }
 
 /** Fraction of the motor's torque still available at this fraction of free speed. */
-function torqueFraction(speedFraction: number, cfg: ProfileConfig): number {
+function torqueFraction(speedFraction: number, cfg: PathSettings): number {
   return Math.max(1 - cfg.torqueSlope * Math.abs(speedFraction), cfg.torqueFloor);
 }
 
 /** -1 fields fall back to the chassis's own limits. */
-export function resolveProfile(cfg: Partial<ProfileConfig>, rc: RamseteConfig): ProfileConfig {
-  const out: ProfileConfig = { ...DEFAULT_PROFILE, ...cfg };
+export function resolveSpeeds(cfg: Partial<PathSettings>, rc: RamseteConfig): PathSettings {
+  const out: PathSettings = { ...DEFAULT_SPEEDS, ...cfg };
   if (out.maxVel < 0) out.maxVel = rc.maxVel;
   if (out.maxAccel < 0) out.maxAccel = rc.maxAccel;
   if (out.maxDecel < 0) out.maxDecel = out.maxAccel;
   if (out.trackwidth < 0) out.trackwidth = rc.trackwidth;
+  if (out.dt < 0) out.dt = rc.sampleRate;
   return out;
 }
 
@@ -294,8 +306,19 @@ function sampleCount(length: number, spacing: number): number {
   return Math.max(Math.ceil(length / Math.max(spacing, 0.25)), 5);
 }
 
+/**
+ * Arc between the samples the two passes run on — an internal working resolution,
+ * not the output one. It only has to stay finer than a single output row at top
+ * speed, or the resample would be inventing rows by interpolating a grid coarser
+ * than itself.
+ */
+function passArcStep(cfg: PathSettings): number {
+  const perRow = cfg.maxVel * (cfg.dt / 1000);
+  return Math.min(Math.max(perRow / 2, 0.25), 1);
+}
+
 /** Ceilings 1 and 2, evaluated at one sample. */
-function speedCeiling(curvature: number, seg: BezierSegment, cfg: ProfileConfig): number {
+function speedCeiling(curvature: number, seg: BezierSegment, cfg: PathSettings): number {
   let top = cfg.maxVel * cfg.velMargin;
 
   if ((seg.maxVel ?? -1) > 0) top = Math.min(top, seg.maxVel as number);
@@ -306,14 +329,14 @@ function speedCeiling(curvature: number, seg: BezierSegment, cfg: ProfileConfig)
   return top;
 }
 
-function sampleSpline(path: BezierSegment[], cfg: ProfileConfig): ProfileSample[] {
+function sampleSpline(path: BezierSegment[], cfg: PathSettings): ProfileSample[] {
   const samples: ProfileSample[] = [];
 
   for (let i = 0; i < path.length; i++) {
     const seg = path[i];
 
     const length = bezierLength(seg, 100);
-    const count = sampleCount(length, cfg.spacing);
+    const count = sampleCount(length, passArcStep(cfg));
     const stride = length / count;
     const params = arcSpacedParams(seg, count);
 
@@ -344,17 +367,91 @@ function sampleSpline(path: BezierSegment[], cfg: ProfileConfig): ProfileSample[
   return samples;
 }
 
-/** Bakes a spline into a schedule (profile.cpp bakeTrajectory). */
-export function bakeTrajectory(
+/**
+ * Position between two arc rows does NOT advance linearly in time. The passes put them a fixed
+ * DISTANCE apart, so wherever the robot is slow they sit far apart on the clock with the speed
+ * ramping hard across the gap — a straight time-lerp there freezes the step length while v climbs.
+ * Walking the same constant-acceleration integral the bake inverted puts the row where the robot
+ * actually is. Rates stay linear in time; only the distance along the pair is integrated.
+ */
+function blendArc(a: TrajPoint, b: TrajPoint, t: number): TrajPoint {
+  const span = b.t - a.t;
+  const tau = t - a.t;
+  const f = span > 1e-9 ? tau / span : 0;
+
+  const v0 = Math.abs(a.v);
+  const v1 = Math.abs(b.v);
+  const ds = ((v0 + v1) / 2) * span;
+  const acc = span > 1e-9 ? (v1 - v0) / span : 0;
+
+  let u = ds > 1e-9 ? (v0 * tau + 0.5 * acc * tau * tau) / ds : f;
+  u = Math.min(Math.max(u, 0), 1);
+
+  return {
+    t,
+    x: a.x + (b.x - a.x) * u,
+    y: a.y + (b.y - a.y) * u,
+    heading: wrapDegrees(a.heading + wrapDegrees(b.heading - a.heading) * u),
+    v: a.v + (b.v - a.v) * f,
+    omega: a.omega + (b.omega - a.omega) * f
+  };
+}
+
+/**
+ * The passes cannot run on a clock: v² = v₀² + 2a·Δs only closes over DISTANCE, and the time a row
+ * sits at is not known until both of them have finished. So the schedule is built on arc, then
+ * handed back on a clock — one row every cfg.dt.
+ *
+ * A joint's rows are never interpolated away, so the grid restarts at every one of them: the two
+ * rows there share a timestamp and carry the direction flip and the curvature step, and at a cusp
+ * that instant is the only place v is 0.
+ */
+function resampleByTime(arc: Trajectory, dtSeconds: number): Trajectory {
+  if (arc.length < 2 || dtSeconds < 1e-6) return arc;
+
+  const out: Trajectory = [];
+
+  let start = 0;
+  while (start + 1 < arc.length) {
+    let stop = start;
+    while (stop + 1 < arc.length && arc[stop + 1].t - arc[stop].t >= 1e-9) stop++;
+
+    out.push(arc[start]);
+
+    let seek = start;
+    const t0 = arc[start].t;
+    const t1 = arc[stop].t;
+    for (let k = 1; t1 - (t0 + k * dtSeconds) >= 1e-9; k++) {
+      const t = t0 + k * dtSeconds;
+      while (seek + 1 < stop && arc[seek + 1].t < t) seek++;
+      out.push(blendArc(arc[seek], arc[seek + 1], t));
+    }
+
+    if (stop > start) out.push(arc[stop]);
+    start = stop + 1;
+  }
+
+  // The trailing half of a joint pair that lands on the very last row has no span of its own.
+  if (start < arc.length) out.push(arc[start]);
+  return out;
+}
+
+/** Bakes a spline into a schedule (profile.cpp createTrajectory). */
+export function createTrajectory(
   path: BezierSegment[],
-  config: Partial<ProfileConfig>,
-  rc: RamseteConfig
-): TrajPoint[] {
-  const traj: TrajPoint[] = [];
+  pathSettings: Partial<PathSettings>,
+  rc: RamseteConfig,
+  backward = false
+): Trajectory {
+  const traj: Trajectory = [];
   if (!path.length) return traj;
 
-  const cfg = resolveProfile(config, rc);
-  const samples = sampleSpline(path, cfg);
+  // The global drive direction is read HERE, at bake time — a schedule pre-baked in initialize()
+  // carries whatever `backward` was then. It XORs with a segment's own .reversed, so a path that
+  // already changes direction partway keeps its cusp.
+  const resolved = backward ? path.map((seg) => ({ ...seg, reversed: !seg.reversed })) : path;
+  const cfg = resolveSpeeds(pathSettings, rc);
+  const samples = sampleSpline(resolved, cfg);
 
   const count = samples.length;
   if (count < 2) return traj;
@@ -400,7 +497,7 @@ export function bakeTrajectory(
       omega: speed[i] * samples[i].curvature * R2D
     });
   }
-  return traj;
+  return resampleByTime(traj, cfg.dt / 1000);
 }
 
 // =========================================================================
@@ -482,7 +579,7 @@ export function ramseteTargetOmega(
 
 // =========================================================================
 // moveTo — the same law aimed at a fixed point. Mirrors Ramsete::moveToError and
-// Ramsete::moveToTurn in src/ramsete/ramseteController.cpp.
+// Ramsete::moveToTurn in src/ramsete/util/ramseteController.cpp.
 // =========================================================================
 
 /**

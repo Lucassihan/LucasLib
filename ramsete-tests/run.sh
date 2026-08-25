@@ -21,9 +21,11 @@ clang++ -std=c++17 -O1 -Wall \
     -o "$OUT/test_ramsete" \
     ramsete-tests/test_ramsete.cpp \
     ramsete-tests/stubs/util.cpp \
-    src/ramsete/bezierTools.cpp \
-    src/ramsete/profile.cpp \
-    src/ramsete/trajectory.cpp \
-    src/ramsete/ramseteController.cpp
+    src/ramsete/util/bezierUtils.cpp \
+    src/ramsete/util/profile.cpp \
+    src/ramsete/util/trajectoryUtils.cpp \
+    src/ramsete/util/ramseteController.cpp \
+    src/ramsete/util/moveToUtils.cpp \
+    src/ramsete/util/boomerangToUtils.cpp
 
 "$OUT/test_ramsete"

@@ -14,8 +14,12 @@ const PRETTY: Record<string, string> = {
   boomerangTo: 'Boomerang',
   voldrive: 'Voltage Drive',
   'ramsete.trajectory': 'Trajectory',
+  'ramsete.boomerangTo': 'Ramsete Boomerang',
   'ramsete.moveTo': 'Ramsete Move To',
   lyPose: 'lyPose',
+  // retired — renamed to ramsete.boomerangTo(). Kept so traces recorded before the
+  // rename still render with a readable name instead of the raw type.
+  'ramsete.quadBezier': 'Quad Bezier',
   // retired — renamed twice: executeTrajectory() → trajectory() → ramsete.trajectory().
   // Kept so traces recorded before each rename still render with a readable name
   // instead of the raw type.
@@ -59,9 +63,13 @@ export function isVolDrive(type: string): boolean {
   return type === 'voldrive';
 }
 
-/** ramsete.trajectory — the scheduled follow, which carries a reference pose. */
+/** The scheduled follow, which carries a reference pose. boomerangTo bakes its one
+ *  curve and then runs the very same loop, so everything keyed off this applies.
+ *  quadBezier is its retired name, still in archived traces. */
 export function isTrajectory(type: string): boolean {
-  return type === 'ramsete.trajectory';
+  return type === 'ramsete.trajectory'
+      || type === 'ramsete.boomerangTo'
+      || type === 'ramsete.quadBezier';
 }
 
 /** ramsete.moveTo — the lyapunov point movement, steered by kLat·v·e_y·sinc. */
@@ -82,9 +90,12 @@ const MOVEMENT_COLORS: Record<string, string> = {
   boomerangTo: '#eab308',
   voldrive: '#a855f7',
   trajectory: '#06b6d4',
+  'ramsete.trajectory': '#06b6d4',
+  'ramsete.boomerangTo': '#22d3ee',
   'ramsete.moveTo': '#4ade80',
   lyPose: '#2dd4bf',
   // retired — pre-rename traces keep the same cyan
+  'ramsete.quadBezier': '#22d3ee',
   executeTrajectory: '#06b6d4',
   // retired — archived single-drive()-era traces keep the same blue
   drive: '#3b82f6'

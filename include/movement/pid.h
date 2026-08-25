@@ -8,7 +8,8 @@
 
 // Profile slots. Just ints indexing the steps array — add your own (fast, precise) for readability at call sites like turnPID.setProfile(normal).
 enum PIDProfile {
-    normal = 0
+    normal = 0,
+    holding = 0
 };
 
 struct PIDStep {

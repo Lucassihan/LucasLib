@@ -9,6 +9,8 @@
 #include "pid.h"
 #include "scheduler.h"
 #include "velocityTuning.h"
+#include "scoringControl/controlThread.h"
+#include "scoringControl/dispatchThread.h"
 
 #include <cmath>
 #include <cstdio>
@@ -18,7 +20,9 @@ std::string currentAuton;
 
 // Intake
 motor intakeMotor = motor(PORT9, ratio18_1, true);
-motor scoopMotor = motor(PORT17, ratio18_1, false);
+motor clawMotor = motor(PORT17, ratio18_1, false);
+motor clawRollers = motor(PORT17, ratio18_1, false);
+motor liftMotor = motor(PORT17, ratio18_1, false);
 
 //4Bar
 motor fourBarLeft = motor(PORT16, ratio36_1, false);
@@ -112,58 +116,6 @@ int autoClampTask() {
   return 0;
 }
 
-bool scoop;
-double lowSpeedGate = 200;
-double secondGate = 200;
-double limitAng = 600;
-
-double lastAng;
-double currentAng;
-int scoopTask() {
-  while (true) {
-    if (scoop) {
-      while (scoopMotor.position(degrees) < lowSpeedGate) {
-        scoopMotor.spin(forward,3, volt);
-        delay(10);
-      }
-
-      scoopMotor.stop(hold);
-      delay(1000);
-
-      while (scoopMotor.position(degrees) < secondGate) {
-        scoopMotor.spin(forward,3, volt);
-        delay(10);
-      }
-
-      while (scoopMotor.position(degrees) < limitAng) {
-        scoopMotor.spin(forward, 12, volt);
-        fourBar.spin(forward, 5, volt);
-        delay(10);
-
-      }
-
-      while (scoopMotor.position(degrees) > 0) {
-        currentAng = scoopMotor.position(degrees);
-        scoopMotor.spin(reverse, 12, volt);
-        delay(20);
-        if (fabs(lastAng-currentAng) < 0.1 and scoopMotor.position(degrees) < 20) {
-          break;
-        } 
-        lastAng = currentAng;
-      }
-
-      delay(100);
-      scoopMotor.spin(forward, 0, volt);
-      
-
-      scoop = false;
-    }
-    delay(10);
-  }
-  return 0;
-}
-
-
 
 
 int trackDisplayTask() {
@@ -218,12 +170,12 @@ int controllerScreenTask() {
     Controller.Screen.print("Chassis:%2.f", chassisTempAvg);
 
     Controller.Screen.setCursor(2, 10);
-    Controller.Screen.print("Rot: %2.f", fourBarRotation.position(degrees));
+    Controller.Screen.print("Claw: %3.f", claw.currentAngle);
 
     Controller.Screen.setCursor(3, 13);
-    Controller.Screen.print("H: %2.f", feedforwardTerm());
+    Controller.Screen.print("Lift: %3.f", lift.currentHeight);
 
-    vex::this_thread::sleep_for(100);
+    delay(50);
   }
   return 0;
 }
@@ -247,39 +199,28 @@ int brainScreenTaskFcn() {
 }
 
 void initialize() {
+  vexImuDataRateSet(IMU1.index(), 5);
+  vexImuDataRateSet(IMU2.index(), 5);
 
-  // Sensor data-rate setup for the 1 ms odometry loop (delay(1) in odometryTask).
-  //
-  // The V5 IMU and rotation sensors round any requested data rate to a multiple of 5 ms, so
-  // 5 ms is the hardware floor -- there is no way to request 1 ms. We ask every tracking
-  // sensor for that fastest rate. The 1 ms loop then just oversamples each sensor ~5x and
-  // sees a zero delta on the in-between ticks, which is harmless for integration.
-  //
-  // Ports come from the coreConfigs device objects via .index() (the same 0-based port value
-  // the device was constructed with, which is exactly what the vex*DataRateSet calls expect),
-  // so these can never drift out of sync with the port assignments in coreConfigs. Only the
-  // sensors you actually use need a line; setting one on an empty port is a harmless no-op.
-  int kSensorDataRateMs = 5;  // V5 IMU / rotation-sensor floor (requests round up to multiples of 5 ms)
-
-  vexImuDataRateSet(IMU1.index(), kSensorDataRateMs);
-  vexImuDataRateSet(IMU2.index(), kSensorDataRateMs);
-
-  vexAbsEncDataRateSet(TX.index(), kSensorDataRateMs);
-  vexAbsEncDataRateSet(TY.index(), kSensorDataRateMs);
+  vexAbsEncDataRateSet(TX.index(), 5);
+  vexAbsEncDataRateSet(TY.index(), 5);
 
   leftdrive.setStopping(brake);
   rightdrive.setStopping(brake);
 
   startTasks();
+
+  createTrajectories();
+  
+  claw.setPosition(claw.clawMin);
+  lift.setPosition(lTuck);
+
 }
 
 competition Competition;
 
 void pre_auton() {
   initialize();
-  fourBarPID.setProfile(normal);
-  fourBarPID.addStep(999999, 0.1, 0.001, 3.644);
-  fourBarPID.setIntegralSettings(10, 3);
 }
 
 bool didAuton = false;
@@ -305,73 +246,18 @@ void driver() {
 
   fourBar.setStopping(hold);
 
-  scoopMotor.setStopping(coast);
 
   Controller.rumble(".");
 
   while (true) {
+    
     // velocityTuner.angular.collectData(2, 1.0, 3.0, 0.3);
     controllerButtonMonitoringFcn();
 
     arcadeDriveFcn();
     // singleStickDriveFcn();
 
-    if (r1.pressedFirst) {
-      targetLevel = 0;
-      intake();
-      fourBarPIDEnabled = true;
-      targetHeight = 0;
-      if (r2.pressedSecond) {
-        scoop = true;
-      }
-    }
-
-    if (r2.pressedFirst) {
-      spit();
-    }
-
-    if (not r1.Pressing and not r2.Pressing and not scoop) {
-      stop();
-    }
-
-    if (scoop) {
-      intakeMotor.spin(forward, 3, volt);
-    }
-
-    if (l1.Pressing) {
-      autoClampEnabled = true;
-    }
-
-    if (l1.NewPress) {
-      clamped = false;
-    }
     
-    if (l1.JustReleased) {
-      clamp();
-      autoClampEnabled = false;
-    }
-
-    if (l2.NewPress) {
-      unclamp();
-    }
-
-    if (scoopMotor.position(degrees) < 0) {
-      scoopMotor.setPosition(0, degrees);
-    }
-
-    double powScale = 1.3;
-    if (Controller.Axis2.position(pct) > 0) {
-      // fourBar.spin(forward, (Controller.Axis2.position(pct)/100)*12 + feedforwardTerm(), volt);
-      fourBar.spin(forward, 12, volt);
-    }
-
-    if (Controller.Axis2.position(pct) < 0) {
-      fourBar.spin(forward, -2, volt);
-    }
-
-    if (Controller.Axis2.position(pct) == 0) {
-      fourBar.spin(forward, feedforwardTerm(), volt);
-    }
     delay(1);
   }
 }

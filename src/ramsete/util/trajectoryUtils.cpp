@@ -1,6 +1,6 @@
-// trajectory.cpp — reading the baked schedule. Pure math: no vex.h, no globals.
+// trajectoryUtils.cpp — reading the baked schedule. Pure math: no vex.h, no globals.
 
-#include "ramsete/trajectory.h"
+#include "ramsete/util/trajectoryUtils.h"
 
 #include <cmath>
 
@@ -10,7 +10,33 @@ double wrapDegrees(double angle) {
     return angle;
 }
 
-double trajectoryDuration(const std::vector<TrajPoint>& traj) {
+double trajectoryTailStart(const Trajectory& traj, double tail) {
+    if (tail <= 0 or traj.size() < 2) {
+        return -1;
+    }
+
+    std::size_t start = traj.size() - 1;
+    double arc = 0;
+    while (start > 0 and arc < tail) {
+        arc += hypot(traj[start].x - traj[start - 1].x, traj[start].y - traj[start - 1].y);
+        start--;
+    }
+
+    std::size_t peak = 0;
+    for (std::size_t i = 1; i < traj.size(); i++) {
+        if (fabs(traj[i].v) > fabs(traj[peak].v)) {
+            peak = i;
+        }
+    }
+    if (peak > start) {
+        start = peak;
+    }
+
+    // The last row is the finish, not a handoff — there would be nothing left to drive.
+    return start + 1 < traj.size() ? traj[start].t : -1;
+}
+
+double trajectoryDuration(const Trajectory& traj) {
     if (traj.empty()) {
         return 0;
     }
@@ -27,7 +53,7 @@ static TrajState blend(const TrajPoint& a, const TrajPoint& b, double u) {
     return s;
 }
 
-TrajState sampleTrajectory(const std::vector<TrajPoint>& traj, double t) {
+TrajState sampleTrajectory(const Trajectory& traj, double t) {
     if (traj.empty()) {
         return {};
     }

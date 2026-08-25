@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ramsete/ramseteController.h"
+#include "ramsete/util/ramseteController.h"
 #include "ramsete/velocityController.h"
 
 // config — where the module's numbers get set. Both functions are called from autonSettings() the way initializePIDConstants() is; until they run the constants are zero and the drivetrain will not move.

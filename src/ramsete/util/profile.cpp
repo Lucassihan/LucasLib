@@ -1,8 +1,8 @@
 // profile.cpp — the 2D motion profile: ceilings, two passes, time integration.
 // Reads its limits from the ramsete object; no vex.h, so it builds off the robot.
 
-#include "ramsete/profile.h"
-#include "ramsete/ramseteController.h"
+#include "ramsete/util/profile.h"
+#include "ramsete/util/ramseteController.h"
 #include "misc/util.h"
 
 #include <cmath>
@@ -60,17 +60,17 @@ static std::vector<double> arcSpacedParams(const BezierSegment& seg, int count) 
 
 // Fraction of the motor's torque — so of the acceleration budget — still
 // available at this fraction of free speed.
-static double torqueFraction(double speedFraction, const ProfileConfig& config) {
-    double left = 1.0 - config.torqueSlope * fabs(speedFraction);
-    return std::max(left, config.torqueFloor);
+static double torqueFraction(double speedFraction, const PathSettings& pathSettings) {
+    double left = 1.0 - pathSettings.torqueSlope * fabs(speedFraction);
+    return std::max(left, pathSettings.torqueFloor);
 }
 
-static void resolveConfig(ProfileConfig& config) {
-    if (config.maxVel     < 0) config.maxVel     = ramsete.maxVel;
-    if (config.maxAccel   < 0) config.maxAccel   = ramsete.maxAccel;
-    if (config.maxDecel   < 0) config.maxDecel   = config.maxAccel;
-    if (config.trackwidth < 0) config.trackwidth = ramsete.trackwidth;
-    if (config.dt         < 0) config.dt         = ramsete.sampleRate;
+static void resolveConfig(PathSettings& pathSettings) {
+    if (pathSettings.maxVel     < 0) pathSettings.maxVel     = ramsete.maxVel;
+    if (pathSettings.maxAccel   < 0) pathSettings.maxAccel   = ramsete.maxAccel;
+    if (pathSettings.maxDecel   < 0) pathSettings.maxDecel   = pathSettings.maxAccel;
+    if (pathSettings.trackwidth < 0) pathSettings.trackwidth = ramsete.trackwidth;
+    if (pathSettings.dt         < 0) pathSettings.dt         = ramsete.sampleRate;
 }
 
 static int sampleCount(double length, double spacing) {
@@ -80,34 +80,34 @@ static int sampleCount(double length, double spacing) {
 // Arc between the samples the two passes run on — an internal working resolution, not the output
 // one. It only has to stay finer than a single output row at top speed, or the resample would be
 // inventing rows by interpolating a grid coarser than itself.
-static double passArcStep(const ProfileConfig& config) {
-    double perRow = config.maxVel * (config.dt / 1000.0);
+static double passArcStep(const PathSettings& pathSettings) {
+    double perRow = pathSettings.maxVel * (pathSettings.dt / 1000.0);
     return std::min(std::max(perRow / 2.0, 0.25), 1.0);
 }
 
 // Ceilings 1 and 2, evaluated at one sample.
-static double speedCeiling(double curvature, const BezierSegment& seg, const ProfileConfig& config) {
-    double top = config.maxVel * config.velMargin;
+static double speedCeiling(double curvature, const BezierSegment& seg, const PathSettings& pathSettings) {
+    double top = pathSettings.maxVel * pathSettings.velMargin;
 
     if (seg.maxVel > 0) {
         top = std::min(top, seg.maxVel);
     }
 
     double bend = fabs(curvature);
-    top = std::min(top, config.maxVel * config.velMargin / (1.0 + bend * config.trackwidth / 2.0));
+    top = std::min(top, pathSettings.maxVel * pathSettings.velMargin / (1.0 + bend * pathSettings.trackwidth / 2.0));
 
     return top;
 }
 
 static std::vector<ProfileSample> sampleSpline(const std::vector<BezierSegment>& path,
-                                               const ProfileConfig& config) {
+                                               const PathSettings& pathSettings) {
     std::vector<ProfileSample> samples;
 
     for (size_t i = 0; i < path.size(); i++) {
         const BezierSegment& seg = path[i];
 
         double length = bezierLength(seg, 100);
-        int    count  = sampleCount(length, passArcStep(config));
+        int    count  = sampleCount(length, passArcStep(pathSettings));
         double stride = length / count;
 
         std::vector<double> params = arcSpacedParams(seg, count);
@@ -127,8 +127,8 @@ static std::vector<ProfileSample> sampleSpline(const std::vector<BezierSegment>&
             s.y         = p.y;
             s.heading   = bezierHeading(seg, t) + (seg.reversed ? 180.0 : 0.0);
             s.curvature = bezierCurvature(seg, t);
-            s.accel     = seg.maxAccel > 0 ? seg.maxAccel : config.maxAccel;
-            s.ceiling   = speedCeiling(s.curvature, seg, config);
+            s.accel     = seg.maxAccel > 0 ? seg.maxAccel : pathSettings.maxAccel;
+            s.ceiling   = speedCeiling(s.curvature, seg, pathSettings);
             s.reversed  = seg.reversed;
             s.step      = j == 0 ? 0 : stride;
             samples.push_back(s);
@@ -175,7 +175,7 @@ static TrajPoint blendArc(const TrajPoint& a, const TrajPoint& b, double t) {
 
 // The passes cannot run on a clock: v² = v₀² + 2a·Δs only closes over DISTANCE, and the time a row
 // sits at is not known until both of them have finished. So the schedule is built on arc, then
-// handed back on a clock — one row every config.dt.
+// handed back on a clock — one row every pathSettings.dt.
 //
 // A joint's rows are never interpolated away, so the grid restarts at every one of them: the two
 // rows there share a timestamp and carry the direction flip and the curvature step, and at a cusp
@@ -222,18 +222,31 @@ static std::vector<TrajPoint> resampleByTime(const std::vector<TrajPoint>& arc, 
     return out;
 }
 
-std::vector<TrajPoint> bakeTrajectory(const std::vector<BezierSegment>& path, ProfileConfig config) {
+Trajectory createTrajectory(const std::vector<BezierSegment>& path, PathSettings pathSettings,
+                            bool backward) {
+    Trajectory out;
+    out.finalDistance = pathSettings.finalDistance;
+
     std::vector<TrajPoint> traj;
     if (path.empty()) {
-        return traj;
+        return out;
     }
 
-    resolveConfig(config);
-    std::vector<ProfileSample> samples = sampleSpline(path, config);
+    // Drives the whole path nose-last. XORs with a segment's own .reversed rather than overwriting
+    // it, so a path that already changes direction partway keeps doing so, cusp and all.
+    std::vector<BezierSegment> resolved = path;
+    if (backward) {
+        for (size_t i = 0; i < resolved.size(); i++) {
+            resolved[i].reversed = not resolved[i].reversed;
+        }
+    }
+
+    resolveConfig(pathSettings);
+    std::vector<ProfileSample> samples = sampleSpline(resolved, pathSettings);
 
     int count = int(samples.size());
     if (count < 2) {
-        return traj;
+        return out;
     }
 
     // Step between consecutive samples, in inches of arc.
@@ -245,9 +258,9 @@ std::vector<TrajPoint> bakeTrajectory(const std::vector<BezierSegment>& path, Pr
     // Ceiling 3, forward: how fast can I be here given how fast I was there, and
     // given how much torque the motors still have at that speed.
     std::vector<double> speed(count, 0.0);
-    speed[0] = std::min(config.startSpeed, samples[0].ceiling);
+    speed[0] = std::min(pathSettings.startSpeed, samples[0].ceiling);
     for (int i = 1; i < count; i++) {
-        double accel = samples[i].accel * torqueFraction(speed[i - 1] / config.maxVel, config);
+        double accel = samples[i].accel * torqueFraction(speed[i - 1] / pathSettings.maxVel, pathSettings);
         double grown = sqrt(speed[i - 1] * speed[i - 1] + 2.0 * accel * step[i]);
         speed[i] = std::min(samples[i].ceiling, grown);
     }
@@ -255,10 +268,10 @@ std::vector<TrajPoint> bakeTrajectory(const std::vector<BezierSegment>& path, Pr
     // Ceiling 3, backward: the same sweep run end to beginning, which turns
     // "how fast can I accelerate away from the end" into "how early must I brake
     // toward it". Every decel ramp in the final profile comes from this pass.
-    double finalSpeed = std::min(config.endSpeed, samples[count - 1].ceiling);
+    double finalSpeed = std::min(pathSettings.endSpeed, samples[count - 1].ceiling);
     speed[count - 1]  = std::min(speed[count - 1], finalSpeed);
     for (int i = count - 2; i >= 0; i--) {
-        double braked = sqrt(speed[i + 1] * speed[i + 1] + 2.0 * config.maxDecel * step[i + 1]);
+        double braked = sqrt(speed[i + 1] * speed[i + 1] + 2.0 * pathSettings.maxDecel * step[i + 1]);
         speed[i] = std::min(speed[i], braked);
     }
 
@@ -287,5 +300,6 @@ std::vector<TrajPoint> bakeTrajectory(const std::vector<BezierSegment>& path, Pr
         // the tangent — a reversed row spins the same way it would going forward.
         traj[i].ω = TO_DEG(speed[i] * samples[i].curvature);
     }
-    return resampleByTime(traj, config.dt / 1000.0);
+    out.rows = resampleByTime(traj, pathSettings.dt / 1000.0);
+    return out;
 }

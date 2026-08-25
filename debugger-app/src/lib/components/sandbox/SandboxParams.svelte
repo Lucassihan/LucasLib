@@ -17,7 +17,7 @@
   // trajectory's baked schedule, summarized for the Selected card —
   // arc length is the sum of consecutive baked rows' distance, which is an
   // honest measure since the rows themselves are arc-spaced samples of the
-  // spline (see bakeTrajectory / arcSpacedParams in ramsete.ts).
+  // spline (see createTrajectory / arcSpacedParams in ramsete.ts).
   const trajStats = $derived.by(() => {
     const traj = selSeg?.traj;
     if (!traj) return null;
@@ -214,13 +214,14 @@
     <SliderRow label="max acceleration" min={10} max={300} step={5} unit="in/s²" value={sandbox.knobs.rsMaxAccel} onchange={(v) => (sandbox.knobs.rsMaxAccel = v)} />
     <div class="kv"><span>Trackwidth</span><span class="mono">{fmt(sandbox.knobs.trackwidth)} in <span class="mono2">— derived, not a knob</span></span></div>
 
-    <div class="subhdr">Profile bake <span class="mono2">ProfileConfig — profile.h</span></div>
+    <div class="subhdr">Profile bake <span class="mono2">PathSettings — util/profile.h</span></div>
     <SliderRow label="velMargin" min={0.1} max={1} step={0.01} decimals={2} value={sandbox.knobs.rsVelMargin} onchange={(v) => (sandbox.knobs.rsVelMargin = v)} />
-    <SliderRow label="spacing" min={0.5} max={6} step={0.25} unit="in" value={sandbox.knobs.rsSpacing} onchange={(v) => (sandbox.knobs.rsSpacing = v)} />
+    <SliderRow label="dt" min={2} max={40} step={1} unit="ms" value={sandbox.knobs.rsDt} onchange={(v) => (sandbox.knobs.rsDt = v)} />
     <SliderRow label="endSpeed" min={0} max={90} step={1} unit="in/s" value={sandbox.knobs.rsEndSpeed} onchange={(v) => (sandbox.knobs.rsEndSpeed = v)} />
+    <SliderRow label="finalDistance" min={0} max={24} step={0.5} unit="in" value={sandbox.knobs.rsFinalDistance} onchange={(v) => (sandbox.knobs.rsFinalDistance = v)} />
     <div class="note">
-      <span class="mono2">ramsete.trajectory</span> no longer takes a <span class="mono2">ProfileConfig</span> argument, so these are tuned
-      here instead. Per-segment ceilings live on the segment as <span class="mono2">.maxVel</span> / <span class="mono2">.maxAccel</span>.
+      The <span class="mono2">PathSettings</span> a route would author, tuned here instead. Per-segment ceilings live on the
+      segment as <span class="mono2">.maxVel</span> / <span class="mono2">.maxAccel</span>.
     </div>
 
     <div class="note">
@@ -231,6 +232,8 @@
 
     <div class="subhdr">Point movement <span class="mono2">ramsete.moveTo()</span></div>
     <SliderRow label="kLat" min={0} max={0.2} step={0.002} decimals={3} unit="1/in" value={sandbox.knobs.rsKLat} onchange={(v) => (sandbox.knobs.rsKLat = v)} />
+    <SliderRow label="headingDisableDist" min={0} max={12} step={0.25} decimals={2} unit="in" value={sandbox.knobs.rsHeadingDisableDist} onchange={(v) => (sandbox.knobs.rsHeadingDisableDist = v)} />
+    <div class="note">Its own boundary — <span class="mono2">moveTo.cpp</span> hardcodes 0.5", where the classic moveTo and trajectory's chase both hand over at the shared <span class="mono2">turnDisableLength</span> above.</div>
     <div class="note">
       <span class="mono2">ramsete.moveTo</span> is the one thing in the module that does not use the velocity layer — it runs on
       <span class="mono2">drivePID</span> and <span class="mono2">headingPID</span> in volts, so <b>kLat is not comparable to the law's b</b>: b

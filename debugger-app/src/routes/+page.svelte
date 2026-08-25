@@ -289,18 +289,27 @@
   ]);
   // measured chassis motion. v is in/s and ω is deg/s, so they get a panel each
   // rather than sharing one y-axis and lying about the scale of whichever loses.
+  // The schedule's own velocity, in the same violet the field overlay draws the
+  // reference path in. Only ramsete.trajectory has one, and traces recorded
+  // before the refV/refW columns existed parse as 0 — in both cases the line is
+  // dropped rather than drawn flat along the axis.
+  const hasRef = $derived(activeTicks.some((t) => t.refV !== 0 || t.refW !== 0));
+  const REF = '#a78bfa';
   const vSeries = $derived([
+    ...(hasRef ? [{ data: activeTicks.map((t) => ({ t: t.t, v: t.refV })), color: REF }] : []),
     { data: activeTicks.map((t) => ({ t: t.t, v: t.cmdV })), color: '#22d3ee', dashed: true },
     { data: activeTicks.map((t) => ({ t: t.t, v: t.v })), color: '#e8e8e8' }
   ]);
   const wSeries = $derived([
+    ...(hasRef ? [{ data: activeTicks.map((t) => ({ t: t.t, v: t.refW })), color: REF }] : []),
     { data: activeTicks.map((t) => ({ t: t.t, v: t.cmdW })), color: '#22d3ee', dashed: true },
     { data: activeTicks.map((t) => ({ t: t.t, v: t.w })), color: '#e8e8e8' }
   ]);
-  const chassisLegend = [
+  const chassisLegend = $derived([
+    ...(hasRef ? [{ label: 'ref', color: REF }] : []),
     { label: 'cmd', color: '#22d3ee', dashed: true },
     { label: 'meas', color: '#e8e8e8' }
-  ];
+  ]);
 
   /**
    * Symmetric range with a little headroom, rounded to something legible.
@@ -322,10 +331,11 @@
   // whatever the chassis happened to be doing.
   const showChassis = $derived(!!active && (isTrajectory(active.type) || isRamseteMove(active.type)));
 
-  const vSpan = $derived(span([...vSeries[0].data, ...vSeries[1].data], 10));
-  const wSpan = $derived(span([...wSeries[0].data, ...wSeries[1].data], 30));
-  const vActive = $derived(vSeries[1].data.some((d) => Math.abs(d.v) > 0.5));
-  const wActive = $derived(wSeries[1].data.some((d) => Math.abs(d.v) > 1));
+  const vSpan = $derived(span(vSeries.flatMap((s) => s.data), 10));
+  const wSpan = $derived(span(wSeries.flatMap((s) => s.data), 30));
+  // "active" is about the chassis, so it reads the measured trace: the last series.
+  const vActive = $derived(vSeries[vSeries.length - 1].data.some((d) => Math.abs(d.v) > 0.5));
+  const wActive = $derived(wSeries[wSeries.length - 1].data.some((d) => Math.abs(d.v) > 1));
 
   const driveActive = $derived(driveNormal[0].data.some((d) => Math.abs(d.v) > 0.1));
   const turnActive = $derived(turnNormal[0].data.some((d) => Math.abs(d.v) > 0.1));

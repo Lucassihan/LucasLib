@@ -11,8 +11,8 @@
 import type { ParseResult, CallStmt, ArgValue, StructInit, PathDeclStmt } from './parse';
 import { STRUCT_FIELDS } from './spec';
 import {
-  bakeTrajectory,
-  resolveProfile,
+  createTrajectory,
+  resolveSpeeds,
   sampleTrajectory,
   trajectoryDuration,
   ramseteError,
@@ -24,7 +24,7 @@ import {
   moveToTurn,
   DEFAULT_RAMSETE,
   type BezierSegment,
-  type ProfileConfig,
+  type PathSettings,
   type RamseteConfig,
   type TrajPoint
 } from './ramsete';
@@ -78,7 +78,7 @@ export interface SimKnobs {
   ecTurnD: number;
   ecTurnWithin: number;
 
-  // trajectory — bakeTrajectory's own chassis limits (config.cpp
+  // trajectory — createTrajectory's own chassis limits (config.cpp
   // setRamseteSettings). runTrajectory runs the RAMSETE law itself
   // (a perfect actuator obeys it exactly — see the function's own doc
   // comment), but the law's constants (b/zeta/vMinGain/clockCoupling) come
@@ -89,23 +89,27 @@ export interface SimKnobs {
   // loop to tune).
   rsMaxVel: number;
   rsMaxAccel: number;
-  // trajectory — profile.h's ProfileConfig knobs that used to be
+  // trajectory — profile.h's PathSettings knobs that used to be
   // reachable through the movement's own (now-removed) `pc` argument. The
-  // C++ still has ProfileConfig — bakeTrajectory(path, cfg) still takes one —
+  // C++ still has PathSettings — createTrajectory(path, cfg) still takes one —
   // but ramsete.trajectory(path, ec) no longer forwards a route-authored one,
   // so these three sit here at the struct's own in-struct defaults instead.
-  /** fraction of maxVel the ceilings may ask for (ProfileConfig.velMargin) */
+  /** fraction of maxVel the ceilings may ask for (PathSettings.velMargin) */
   rsVelMargin: number;
-  /** inches of arc between baked samples (ProfileConfig.spacing) */
-  rsSpacing: number;
-  /** ProfileConfig.endSpeed — in/s left in the LAST baked row, for a hot handoff */
+  /** ms of schedule between baked rows (PathSettings.dt) */
+  rsDt: number;
+  /** PathSettings.endSpeed — in/s left in the LAST baked row, for a hot handoff */
   rsEndSpeed: number;
+  /** PathSettings.finalDistance — in; inside this of the last row the follower parks on moveTo's law. 0 = never. */
+  rsFinalDistance: number;
 
   // ramsete.moveTo — the lyapunov point movement. Unlike trajectory above,
   // this one runs on drivePID / headingPID in VOLTS and never touches the velocity
   // layer, so its two constants are the only thing it adds.
   /** cross-track coupling, 1/in. NOT comparable to the law's b — that one multiplies in/s, this one volts. */
   rsKLat: number;
+  /** within this dist ramsete.moveTo stops point-aiming and holds a fixed heading */
+  rsHeadingDisableDist: number;
 }
 
 export const DEFAULT_KNOBS: SimKnobs = {
@@ -142,11 +146,13 @@ export const DEFAULT_KNOBS: SimKnobs = {
   // mirror config.cpp's setRamseteSettings()
   rsMaxVel: 55,
   rsMaxAccel: 90,
-  // ProfileConfig's own in-struct defaults (profile.h)
+  // PathSettings's own in-struct defaults (profile.h)
   rsVelMargin: 0.9,
-  rsSpacing: 2,
+  rsDt: 10,
   rsEndSpeed: 0,
+  rsFinalDistance: 6,
   rsKLat: 0.02,
+  rsHeadingDisableDist: 0.5,
 };
 
 /** Per-movement heading-correction-effort overrides, keyed by statement index. */
@@ -313,7 +319,7 @@ const SEG_SCALAR_DEFAULTS: Record<string, number | boolean> = Object.fromEntries
   (STRUCT_FIELDS.bezierSeg ?? []).filter((f) => f.kind !== 'point').map((f) => [f.name, f.def])
 );
 
-/** A parsed path decl → the BezierSegment[] bakeTrajectory wants. */
+/** A parsed path decl → the BezierSegment[] createTrajectory wants. */
 function pathFromDecl(decl: PathDeclStmt): BezierSegment[] {
   return decl.segs.map((seg) => {
     const pt = (k: 'a' | 'b' | 'c' | 'd') => ({
@@ -538,7 +544,7 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
    * NOT turnPID — then the blended sides pass the totalOutput stage. Velocity
    * approaches the commanded value at the derived accel limits.
    *
-   * `raw` skips the per-channel govern() call: executeTrajectory.cpp writes
+   * `raw` skips the per-channel govern() call: trajectory.cpp writes
    * drivePow/headingPow straight from the velocity controllers into
    * blendOutputs()/governOutputs(), with none of the drivePID/headingPID
    * cap-floor-slew machinery in between — that governor only exists on the
@@ -687,21 +693,20 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
   const turnEc = (a: ArgValue | undefined) => structVals('turnEc', a, turnDefaults) as unknown as TurnEc;
 
   /**
-   * trajectory's `ec` argument is a real C++ default ARGUMENT
-   * (ramseteController.h: `LateralExitConditions ec = {.t = 10000, .v = -1}`),
-   * not a designated initializer the sandbox fills in — so an ABSENT argument
-   * builds that struct with C++'s own rules: .t and .v are overridden, and the
-   * unmentioned .d/.settleWithin fall back to LateralExitConditions' OWN
-   * in-struct defaults (-1 / 12 in exitConditions.h), never the left-panel
-   * knobs. Filling ecLatD/ecLatWithin in here was a sandbox-only bug: with the
-   * ecLatD knob at >= 0 it armed the cross-line exit even though no ec was
-   * written, and on a curved path the finish line often sits BEHIND the robot
-   * at t = 0 — the movement exited on its first tick, a one-tick sliver on the
-   * timeline and a robot that never moved. Only a WRITTEN initializer goes
-   * through latEc()'s normal knob-fallback convention for ITS omitted fields.
+   * trajectory's `ec` is a real C++ default ARGUMENT (ramseteController.h:
+   * `LateralExitConditions ec = {}`), not a designated initializer the sandbox
+   * fills in — so an ABSENT argument default-constructs the struct and every
+   * field comes from LateralExitConditions' OWN in-struct defaults in
+   * exitConditions.h, never the left-panel knobs. Filling ecLatD/ecLatWithin in
+   * here was a sandbox-only bug: with the ecLatD knob at >= 0 it armed the
+   * cross-line exit even though no ec was written, and on a curved path the
+   * finish line often sits BEHIND the robot at t = 0 — the movement exited on
+   * its first tick, a one-tick sliver on the timeline and a robot that never
+   * moved. Only a WRITTEN initializer goes through latEc()'s normal
+   * knob-fallback convention for ITS omitted fields.
    */
   const trajEc = (a: ArgValue | undefined): LatEc =>
-    a === undefined ? { t: 10000, v: -1, d: -1, settleWithin: 12 } : latEc(a);
+    a === undefined ? { t: 5000, v: 2, d: -1, settleWithin: 12 } : latEc(a);
 
   // --- movement primitives (each returns exit reason) ---
 
@@ -960,7 +965,7 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
   }
 
   /**
-   * ramsete.moveTo — the lyapunov point movement (src/ramsete/moveTo.cpp).
+   * ramsete.moveTo — the lyapunov point movement (src/ramsete/movement/moveTo.cpp).
    *
    * The same two stages as runMoveTo above, and the same volts plumbing. What
    * differs is FAR: a lyapunov term is added to the steering that bends the path
@@ -991,8 +996,11 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
       if (!close) {
         he = e.heading;
         le = e.distance + (backward ? -off : off);
-        // latched on the RAW distance, so the offset never moves the boundary
-        if (Math.abs(e.distance) < knobs.headingDisableDist) {
+        // latched on the RAW distance, so the offset never moves the boundary.
+        // This movement's OWN boundary, not the shared turnDisableLength the
+        // classic moveTo and trajectory's chase run on: moveTo.cpp holds the
+        // point-aiming all the way down to 0.5", where those two hand over at 6.
+        if (Math.abs(e.distance) < knobs.rsHeadingDisableDist) {
           close = true;
           heldHeading = pose.h;
           straightDist = le;
@@ -1176,9 +1184,10 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
     path: BezierSegment[],
     pathName: string,
     ecArg: ArgValue | undefined,
+    chaseEffort: number,
     ticks: SimTick[]
   ): { exit: string; traj: { rows: TrajPoint[]; pathName: string; profileMaxVel: number } } | null {
-    // bakeTrajectory only reads trackwidth/maxVel/maxAccel off the
+    // createTrajectory only reads trackwidth/maxVel/maxAccel off the
     // RamseteConfig — the tracking-law fields (b/zeta/vMinGain/clockCoupling)
     // are never consulted by the bake, so they're filled from the library's
     // own measured constants rather than from a left-panel knob.
@@ -1186,51 +1195,108 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
       trackwidth: knobs.trackwidth,
       maxVel: knobs.rsMaxVel,
       maxAccel: knobs.rsMaxAccel,
+      sampleRate: knobs.rsDt,
       b: DEFAULT_RAMSETE.b,
       zeta: DEFAULT_RAMSETE.zeta,
       vMinGain: DEFAULT_RAMSETE.vMinGain,
       clockCoupling: DEFAULT_RAMSETE.clockCoupling
     };
-    // trajectory no longer takes a ProfileConfig — the C++ bakes
-    // through bakeTrajectory(path) with every field at its own in-struct
-    // default. The three fields that used to be route data reachable through
-    // that argument (velMargin, spacing) now live as
-    // left-panel knobs instead, so the sandbox stays tunable without a `pc`
-    // argument to carry them.
-    const pcPartial: Partial<ProfileConfig> = {
+    // The PathSettings fields a route would author. ramsete.trajectory takes the
+    // struct by argument in the C++; the sandbox has no place to type one yet, so
+    // these ride the left-panel knobs instead.
+    const pcPartial: Partial<PathSettings> = {
       velMargin: knobs.rsVelMargin,
-      spacing: knobs.rsSpacing,
-      endSpeed: knobs.rsEndSpeed
+      dt: knobs.rsDt,
+      endSpeed: knobs.rsEndSpeed,
+      finalDistance: knobs.rsFinalDistance
     };
-    // The global drive direction applies to the whole path, exactly as
-    // executeTrajectory.cpp resolves it: `backward = true` runs every segment
-    // nose-last. It XORs with a segment's own .reversed rather than overwriting,
-    // so a path that already changes direction partway keeps its cusp. The bake
-    // then flips those rows' heading 180 and signs their v negative, so the
-    // robot's pose heading is ALREADY nose-last — nothing downstream needs to
-    // flip the drawing.
-    const resolved = gBack ? path.map((seg) => ({ ...seg, reversed: !seg.reversed })) : path;
-    const traj = bakeTrajectory(resolved, pcPartial, rc);
+    // createTrajectory applies the global drive direction itself now. The bake flips those rows'
+    // heading 180 and signs their v negative, so the robot's pose heading is ALREADY nose-last —
+    // nothing downstream needs to flip the drawing.
+    const traj = createTrajectory(path, pcPartial, rc, gBack);
     if (traj.length < 2) return null;
 
     // For the field overlay's speed colouring — the RESOLVED ceiling.
-    const profileMaxVel = resolveProfile(pcPartial, rc).maxVel;
+    const profileMaxVel = resolveSpeeds(pcPartial, rc).maxVel;
 
     const finish = traj[traj.length - 1];
     const duration = trajectoryDuration(traj);
 
     // A reversed finish row means this schedule ends driving backward — used
     // by latExit's cross-line test, same as every other movement here.
-    const backward = finish.v < 0;
+    // The sign BIT, not `< 0`: a reversed schedule that ends at rest bakes to
+    // negative zero, and -0 < 0 is false, so the comparison alone reads the
+    // movement as forward and the chase drives at the target nose-first while
+    // the robot is parked nose-last. trajectory.cpp uses std::signbit here.
+    const backward = finish.v < 0 || Object.is(finish.v, -0);
 
     const ec = trajEc(ecArg);
     const est = newExitState();
     let refClock = 0;
 
+    // PathSettings.finalDistance: inside this of the last row the follower stops
+    // tracking the schedule and parks on moveTo's law, which is the only half of
+    // this that can settle. Never on a hot exit — a nonzero endSpeed means the
+    // robot is meant to still be moving. Phase 2 leaves the perfect actuator
+    // behind: it runs drivePID / headingPID in volts, exactly as the C++ does.
+    const chaseArmed = Math.abs(finish.v) < 0.5 && knobs.rsFinalDistance > 0;
+    let chasing = false;
+    let chaseOff = 0;
+    let close = false;
+    let heldHeading = 0;
+    let straightDist = 0;
+    let trackX = 0;
+    let trackY = 0;
+
     for (;;) {
+      if (chasing) {
+        const e = moveToError(finish.x, finish.y, pose, backward);
+
+        let le = 0;
+        let he = 0;
+
+        if (!close) {
+          he = e.heading;
+          le = e.distance + (backward ? -chaseOff : chaseOff);
+          if (Math.abs(e.distance) < knobs.headingDisableDist) {
+            close = true;
+            heldHeading = pose.h;
+            straightDist = le;
+            trackX = pose.x;
+            trackY = pose.y;
+          }
+        }
+
+        if (close) {
+          he = wrap(heldHeading - pose.h);
+          const hr2 = heldHeading * D2R;
+          const traveled = (pose.x - trackX) * Math.sin(hr2) + (pose.y - trackY) * Math.cos(hr2);
+          le = straightDist - traveled;
+        }
+
+        const vGov = govern('drive', (Math.sign(le) || 1) * lateralPowMag(le));
+        const v = Math.cos(he * D2R) * vGov;
+        let tp = govern('heading', clamp(he * knobs.headingKp * chaseEffort, 12));
+        if (!close) tp += moveToTurn(e, v, knobs.rsKLat);
+
+        step(ticks, v, tp, 'heading', { de: le, he }, { raw: true });
+        t += TICK;
+
+        const exit = latExit(ec, est, le, finish.x, finish.y, backward);
+        if (exit) {
+          // trajectory.cpp names ANY exit taken during the chase "chase" — which
+          // ec tripped is already readable off the movement's armed conditions.
+          // The sim's own HARD_CAP net has no counterpart in the lib, so it stays
+          // visible rather than hiding behind that label.
+          const reason = t - est.start >= HARD_CAP_MS ? exit : 'chase';
+          return { exit: reason, traj: { rows: traj, pathName, profileMaxVel } };
+        }
+        continue;
+      }
+
       // Sample the schedule at the REFERENCE clock (not real time — the clock
       // itself is adaptive, see ramseteClockRate), then run the law exactly
-      // as executeTrajectory.cpp does: robot-frame error, the scheduled gain,
+      // as trajectory.cpp does: robot-frame error, the scheduled gain,
       // the two feedback halves.
       const ref = sampleTrajectory(traj, refClock);
       const err = ramseteError(ref, pose);
@@ -1262,6 +1328,16 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
       const lateralError = Math.hypot(finish.x - pose.x, finish.y - pose.y);
 
       refClock += DT * rate;
+
+      // The REFERENCE has to be in the endzone too, not just the robot: a route
+      // that doubles back past its own finish would otherwise hand off on the
+      // flyby and abandon the rest of the path.
+      const refToFinish = Math.hypot(finish.x - ref.x, finish.y - ref.y);
+      if (chaseArmed && lateralError < knobs.rsFinalDistance && refToFinish < knobs.rsFinalDistance) {
+        chasing = true;
+        chaseOff = takeOffset('drive');
+        continue;
+      }
 
       // The schedule is the finish line; checkLateralExit is the safety bound
       // on top (and, via latExit's HARD_CAP_MS check, the sim's own net). The
@@ -1437,7 +1513,7 @@ export function simulate(parsed: ParseResult, knobs: SimKnobs, efforts: EffortOv
         const a0 = s.args[0];
         const decl = a0?.kind === 'ident' ? parsed.paths[a0.name] : undefined;
         if (!decl) continue; // unresolved path name — already flagged by the parser
-        const r = runTrajectory(pathFromDecl(decl), decl.name, s.args[1], ticks);
+        const r = runTrajectory(pathFromDecl(decl), decl.name, s.args[1], efforts[i] ?? knobs.moveToHeadingEffort, ticks);
         // fewer than 2 baked rows: the lib's trajectory returns early
         // before doing anything, so the sandbox emits no segment either.
         if (!r) continue;

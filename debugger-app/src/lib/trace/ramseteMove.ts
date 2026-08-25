@@ -20,7 +20,7 @@
 //      latches its heading, switches lateralError to the tracked straight-line
 //      remainder, and the whole lyapunov term goes to zero.
 //
-// See src/ramsete/moveTo.cpp and Ramsete::moveToTurn.
+// See src/ramsete/movement/moveTo.cpp and Ramsete::moveToTurn.
 
 import type { Movement, Tick } from './types';
 import { sinc, moveToTurn } from '$lib/sandbox/ramsete';

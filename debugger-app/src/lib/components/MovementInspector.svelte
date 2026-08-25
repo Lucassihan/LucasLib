@@ -4,6 +4,7 @@
   import ExitGlyph from './ExitGlyph.svelte';
   import HeadingDial from './HeadingDial.svelte';
   import GovernorsCard from './GovernorsCard.svelte';
+  import MotionCard from './MotionCard.svelte';
   import type { Movement } from '$lib/trace/types';
 
   const m = $derived(movementAt(traceState.time));
@@ -333,7 +334,9 @@
     </div>
     {/if}
 
-    {#if !isVolDrive(m.type)}
+    {#if isTrajectory(m.type)}
+      <MotionCard />
+    {:else if !isVolDrive(m.type)}
       <GovernorsCard />
     {/if}
 

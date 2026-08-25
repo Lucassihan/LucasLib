@@ -726,7 +726,7 @@
     // a handle ('b' or 'c'): move it freely; if its endpoint is a joint, mirror
     // the new direction through that endpoint into the partner handle on the
     // other side. Collinear handles are what keeps the heading continuous
-    // across a joint (bezierTools.h) — a handle-based spline is only C1, so
+    // across a joint (bezierUtils.h) — a handle-based spline is only C1, so
     // this is the only thing enforcing it. The partner keeps its own length.
     const decl0 = freshPathDecl();
     const seg0 = decl0?.segs[segIndex];
@@ -778,7 +778,7 @@
   const playheadSeg = $derived(sandbox.time > 0 ? segmentAt(sandbox.time) : null);
 
   // There is no drawing flip for a backward trajectory any more. `backward` now
-  // reverses the PATH itself (executeTrajectory.cpp XORs it onto every segment's
+  // reverses the PATH itself (trajectory.cpp XORs it onto every segment's
   // .reversed), so the bake already emits headings flipped 180 and negative
   // speeds — pose.h is nose-last on its own, and flipping it again here would
   // cancel out and draw the robot facing its direction of travel.
@@ -948,7 +948,9 @@
            rows (v < 0) dash the core so a backing-up stretch still reads as
            backing up. -->
       <defs>
-        <filter id="sb-traj-glow" x="-40%" y="-40%" width="180%" height="180%">
+        <!-- Region in field units, not %-of-bbox: a bbox-relative region is thin
+             wherever the path is, so the blur hits the edge and cuts off square. -->
+        <filter id="sb-traj-glow" filterUnits="userSpaceOnUse" x="-24" y="-24" width="192" height="192">
           <feGaussianBlur stdDeviation="1.5" />
         </filter>
       </defs>

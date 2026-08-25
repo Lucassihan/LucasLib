@@ -2,7 +2,7 @@
 
 #include "misc/util.h"   // Pose, Vector2
 
-// bezierTools — the spline layer. Position, tangent and curvature all fall out of the same four control points, so heading and curvature are exact.
+// bezierUtils — the spline layer. Position, tangent and curvature all fall out of the same four control points, so heading and curvature are exact.
 // Frame: field inches, headings in degrees, 0 = +Y, clockwise positive.
 
 // One cubic segment: endpoints a and d, handles b and c. Only their x and y matter — a control point has no facing.

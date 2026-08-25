@@ -1,7 +1,7 @@
-// bezierTools.cpp — cubic bezier evaluation. Pure math: no vex.h, no globals, so the
+// bezierUtils.cpp — cubic bezier evaluation. Pure math: no vex.h, no globals, so the
 // whole spline layer can be compiled and tested off the brain.
 
-#include "ramsete/bezierTools.h"
+#include "ramsete/util/bezierUtils.h"
 #include "misc/util.h"
 
 #include <cmath>

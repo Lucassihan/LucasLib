@@ -238,7 +238,7 @@ void swingOnRightToPoint(double x, double y, TurnExitConditions ec, double parti
 //  |______/_/    \_\_|  |______|_|  \_\/_/    \_\______| |_|  |_|\____/   \/   |______|_|  |_|______|_| \_|  |_| |_____/ 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////        
 
-void driveForward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
+void driveForward(double distance, LateralExitConditions ec, double heading, BlendSettings bs) {
     double startTime = Brain.timer(msec);
     clearAllValues();
     target.h = heading;
@@ -274,7 +274,7 @@ void driveForward(double distance, double heading, LateralExitConditions ec, Ble
     voltageDrive(0,0); //stop the motors when the movement ends
 }
 
-void driveBackward(double distance, double heading, LateralExitConditions ec, BlendSettings bs) {
+void driveBackward(double distance, LateralExitConditions ec, double heading, BlendSettings bs) {
     double startTime = Brain.timer(msec);
     clearAllValues();
     target.h = heading;

@@ -4,7 +4,7 @@
 
 #include "movement/exitConditions.h"
 #include "movement/movementUtils.h"   // BoomParams
-#include "ramsete/trajectory.h"       // TrajPoint
+#include "ramsete/util/trajectoryUtils.h"       // TrajPoint
 
 #include <vector>
 
@@ -31,6 +31,13 @@ void movePoint(const char* type, double tx, double ty,
                const LateralExitConditions& ec, bool backward,
                bool cosineScaling = true);
 void moveBoomerang(const BoomParams& bp, const LateralExitConditions& ec);
+
+// Names the NEXT movement the debugger opens, overriding the type that tag passes.
+// A movement built on top of another one — ramsete.boomerangTo is a bake handed straight to
+// ramsete.trajectory — would otherwise be traced as the movement it delegated to, and the only
+// alternative is a trace-only argument threaded through the follow loop's signature. Consumed by
+// the first tag after it, dropped if none comes. `type` must outlive the trace (a string literal).
+void nextMoveType(const char* type);
 void moveVoltage(double left, double right);
 
 // Overrides the open movement's exit reason with what ACTUALLY ended it.
@@ -46,7 +53,7 @@ void movementExit(const char* reason);
 // The per-tick refX/refY only trace the reference as far as the CLOCK got, at
 // the tick rate — so a braked clock smears the shape and an early exit truncates
 // it. The planned curve has to travel on its own to be drawn whole.
-void trajectorySchedule(const std::vector<TrajPoint>& traj);
+void trajectorySchedule(const Trajectory& traj);
 
 // ---- Per-tick sampling, hooked inside voltageDrive ----
 void tick();

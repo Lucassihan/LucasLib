@@ -258,7 +258,7 @@ function buildAuton({ name, start, trackwidth = 11.5, headingDisableDist = 6, kL
     mi++;
   }
 
-  // ramsete.moveTo — the lyapunov point movement (src/ramsete/moveTo.cpp).
+  // ramsete.moveTo — the lyapunov point movement (src/ramsete/movement/moveTo.cpp).
   //
   // Same two stages as moveTo above, but the steering carries a second term:
   // kLat·v·sinc(eθ)·e_y, where e_y = distance·sin(eθ) is the target's offset

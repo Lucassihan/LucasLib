@@ -1,5 +1,6 @@
 #pragma once
 #include "vex.h"
+#include "util.h"
 
 using namespace vex;
 
@@ -63,7 +64,7 @@ public:
 
   Odometry(OdometryConfig config);
 
-  double getTrackwidth() { return cfg.trackwidth; }  // for trace export
+  double getTrackwidth() { return odomConfigs.trackwidth; }  // for trace export
 
   void setPos(double newX, double newY, double newH);
 
@@ -94,16 +95,21 @@ public:
   double positivePointHeadingError(double targetX, double targetY, bool backward = false);
   double negativePointHeadingError(double targetX, double targetY, bool backward = false);
 
-  //Velocities, in inches
+  //Velocities, in inches. Smoothed — this is what the velocity layer reads through setSource.
   double v;
   double ω;
+
+  // The same two before smoothing. Nothing steers off these; they are what a trace should carry if
+  // the question is how noisy the measurement itself is.
+  double vRaw;
+  double ωRaw;
 
   int nEncodersUpdated;
   bool hasYTracker;
   bool hasXTracker;
 
 private:
-  OdometryConfig cfg;
+  OdometryConfig odomConfigs;
 
   bool hasSecondIMU;
   bool justResetPos;
@@ -123,6 +129,9 @@ private:
   double lastVRefX = 0;
   double lastVRefY = 0;
   double lastVRefH = 0;
+
+  VelocityHistory vHistory;
+  VelocityHistory ωHistory;
 
   // Heading change (deg) banked since the last Y accumulation. Half re-centers the Y step on its window midpoint; the full swing feeds velocity and arc radius.
   double dhAccumDeg = 0;

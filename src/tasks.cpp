@@ -6,6 +6,7 @@
 #include "misc/util.h"
 #include "scheduler.h"
 #include "vex_task.h"
+#include "scoringControl/dispatchThread.h"
 
 #include <cmath>
 #include <cstdio>
@@ -19,8 +20,6 @@ void startTasks() { //Put your tasks in here (or you can just put them directly 
     task BrainScreenTask(brainScreenTaskFcn);
     task Scheduler(schedulerTask);
 
-    task FourBar(fourBarControlTask);
-
-    task AutoClamp(autoClampTask);
-    task Scoop(scoopTask);
+    task ClawControlTask(clawControlTask);
+    task ClawDispatchTask(clawDispatchTask);
 }

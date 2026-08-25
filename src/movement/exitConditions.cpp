@@ -14,7 +14,7 @@ bool checkLateralExit(LateralExitConditions& ec, double startTime,
 
     if (ec.v != -1 and fabs(vNow) < fabs(lastV) and fabs(lateralError) < ec.settleWithin and fabs(vNow) < ec.v) return true;
 
-    if (hasPointTarget and ec.d != -1 and crossed(target.x, target.y, ec.d)) return true;
+    if (ec.d != -1 and hasPointTarget and crossed(target.x, target.y, ec.d)) return true;
 
     lastV = vNow;
     return false;

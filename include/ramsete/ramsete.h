@@ -1,11 +1,12 @@
 #pragma once
 
 // ramsete — include this one header to get the whole stack: spline → profile → schedule → tracking law → velocity layer.
-// Both movements are members of Ramsete, not free functions: ramsete.moveTo(x, y) and ramsete.trajectory(path).
+// Every movement is a member of Ramsete, not a free function: ramsete.moveTo(x, y), ramsete.trajectory(path), ramsete.boomerangTo(x, y, h, l1, l2, padding).
 
-#include "ramsete/bezierTools.h"
+#include "ramsete/util/bezierUtils.h"
 #include "ramsete/velocityController.h"
 #include "ramsete/config.h"
-#include "ramsete/trajectory.h"
-#include "ramsete/profile.h"
-#include "ramsete/ramseteController.h"
+#include "ramsete/util/trajectoryUtils.h"
+#include "ramsete/util/profile.h"
+#include "ramsete/util/ramseteController.h"
+#include "ramsete/util/boomerangToUtils.h"

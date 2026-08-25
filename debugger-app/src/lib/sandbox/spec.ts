@@ -65,7 +65,7 @@ export const BLEND: StructFieldSpec[] = [
   { name: 'turnPriority', kind: 'number', def: 1, doc: '[0,1] · 1 = drive absorbs the whole cut' }
 ];
 
-// BezierSegment (ramsete/bezierTools.h) — one cubic segment of a path. Only
+// BezierSegment (ramsete/bezierUtils.h) — one cubic segment of a path. Only
 // the control points' x/y matter; a control point has no facing.
 export const BEZIER_SEG: StructFieldSpec[] = [
   { name: 'a', kind: 'point', def: 0, doc: 'segment start, in' },
@@ -264,7 +264,7 @@ export const FUNCTIONS: FnSpec[] = [
     doc: 'Bake a spline and follow it with the RAMSETE law; the schedule is the finish line.',
     params: [
       { name: 'path', kind: 'bezierPath', doc: 'a std::vector<BezierSegment> declared above' },
-      { name: 'ec', kind: 'lateralEc', def: '{.t = 10000, .v = -1}', doc: 'exit conditions — the safety bound on top of the schedule' }
+      { name: 'ec', kind: 'lateralEc', def: '{}', doc: 'exit conditions — the safety bound on top of the schedule' }
     ]
   }
 ];

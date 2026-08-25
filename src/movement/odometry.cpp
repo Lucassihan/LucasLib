@@ -1,4 +1,5 @@
 #include "movement/odometry.h"
+#include "ramsete/util/ramseteController.h"
 #include "coreConfigs.h"
 #include "util.h"
 #include "debugger/debugger.h"
@@ -12,20 +13,20 @@ static motor* pickMotor(DriveEncoderPosition pos, motor& f, motor& m, motor& b) 
 }
 
 //constructor
-Odometry::Odometry(OdometryConfig config) : cfg(config) {
-  hasYTracker  = (cfg.yTracker  != nullptr);
-  hasXTracker  = (cfg.xTracker  != nullptr);
-  hasSecondIMU = (cfg.imu2      != nullptr);
+Odometry::Odometry(OdometryConfig config) : odomConfigs(config) {
+  hasYTracker  = (odomConfigs.yTracker  != nullptr);
+  hasXTracker  = (odomConfigs.xTracker  != nullptr);
+  hasSecondIMU = (odomConfigs.imu2      != nullptr);
 
-  leftEncoder  = pickMotor(cfg.driveEncoder, fl, ml, bl);
-  rightEncoder = pickMotor(cfg.driveEncoder, fr, mr, br);
+  leftEncoder  = pickMotor(odomConfigs.driveEncoder, fl, ml, bl);
+  rightEncoder = pickMotor(odomConfigs.driveEncoder, fr, mr, br);
 
-  lastIMU1     = cfg.imu1->rotation(rotationUnits::deg);
+  lastIMU1     = odomConfigs.imu1->rotation(rotationUnits::deg);
   lastLeftPos  = leftEncoder->position(rotationUnits::deg);
   lastRightPos = rightEncoder->position(rotationUnits::deg);
 
   if (hasSecondIMU) {
-    lastIMU2 = cfg.imu2->rotation(rotationUnits::deg);
+    lastIMU2 = odomConfigs.imu2->rotation(rotationUnits::deg);
   }
 
   // Seed the Y/X accumulation baselines (scalar raw positions: tracker degrees, or the
@@ -45,8 +46,8 @@ Odometry::Odometry(OdometryConfig config) : cfg(config) {
 
   // Expose the configured mount offsets, then seed the intersection point consistent with the
   // start pose (x = y = h = 0): trueX/trueY = (x, y) + the offset vector rotated by heading.
-  xTrackerOffset = cfg.xTrackerOffset;
-  yTrackerOffset = cfg.yTrackerOffset;
+  xTrackerOffset = odomConfigs.xTrackerOffset;
+  yTrackerOffset = odomConfigs.yTrackerOffset;
 
   double hr = TO_RAD(h);
   trueX = x + ( yTrackerOffset * cos(hr) + xTrackerOffset * sin(hr));
@@ -80,7 +81,7 @@ void Odometry::setPos(double newX, double newY, double newH) {
 
 //conversion helpers
 double Odometry::motorDegsToInches(double deg) {
-  return deg * (cfg.driveWheelDiameter * M_PI * cfg.driveGearRatio) / 360.0;
+  return deg * (odomConfigs.driveWheelDiameter * M_PI * odomConfigs.driveGearRatio) / 360.0;
 }
 
 double Odometry::trackerDegsToInches(double deg, double diameter) {
@@ -100,19 +101,19 @@ double Odometry::motorTickDegrees() {
 //Raw Y reading (degrees), BEFORE scaling: the Y tracker if present, otherwise the average
 //of the two drive encoders (their common-mode motion is forward travel).
 double Odometry::yRawPosition() {
-  if (hasYTracker) return cfg.yTracker->position(rotationUnits::deg);
+  if (hasYTracker) return odomConfigs.yTracker->position(rotationUnits::deg);
   return (leftEncoder->position(rotationUnits::deg) + rightEncoder->position(rotationUnits::deg)) / 2.0;
 }
 
 //Raw X reading (degrees), BEFORE scaling: the X tracker if present, otherwise 0 (no lateral tracking).
 double Odometry::xRawPosition() {
-  return hasXTracker ? cfg.xTracker->position(rotationUnits::deg) : 0;
+  return hasXTracker ? odomConfigs.xTracker->position(rotationUnits::deg) : 0;
 }
 
 //heading resolution
 double Odometry::resolveHeading(double dIMU1, double dIMU2, double dLDeg, double dRDeg) {
-  double scaled1 = dIMU1 * cfg.imu1_multiplier;
-  double scaled2 = dIMU2 * cfg.imu2_multiplier;
+  double scaled1 = dIMU1 * odomConfigs.imu1_multiplier;
+  double scaled2 = dIMU2 * odomConfigs.imu2_multiplier;
 
   if (not hasSecondIMU or imu2Dead) {
     return scaled1;
@@ -124,7 +125,7 @@ double Odometry::resolveHeading(double dIMU1, double dIMU2, double dLDeg, double
 
   if (fabs(scaled1 - scaled2) >= 5.0) {
     double dhWheelsDeg = (motorDegsToInches(dRDeg) - motorDegsToInches(dLDeg))
-                         / cfg.trackwidth * (180.0 / M_PI);
+                         / odomConfigs.trackwidth * (180.0 / M_PI);
 
     if (fabs(scaled1 - dhWheelsDeg) <= fabs(scaled2 - dhWheelsDeg)) {
       imu2Dead = true;
@@ -141,8 +142,8 @@ double Odometry::resolveHeading(double dIMU1, double dIMU2, double dLDeg, double
 //trackHeading -- fuse the IMU(s), advance heading, apply the off-center offset translation.
 //Runs every tick (heading is read from the IMU, never noise-gated by the encoders).
 void Odometry::trackHeading() {
-  double curIMU1 = cfg.imu1->rotation(rotationUnits::deg);
-  double curIMU2 = hasSecondIMU ? cfg.imu2->rotation(rotationUnits::deg) : 0;
+  double curIMU1 = odomConfigs.imu1->rotation(rotationUnits::deg);
+  double curIMU2 = hasSecondIMU ? odomConfigs.imu2->rotation(rotationUnits::deg) : 0;
   double curLeft  = leftEncoder->position(rotationUnits::deg);
   double curRight = rightEncoder->position(rotationUnits::deg);
 
@@ -193,7 +194,7 @@ double Odometry::xRawDeltaDeg() {
 }
 
 void Odometry::trackY(double rawDeltaDeg) {
-  double dYInches = hasYTracker ? trackerDegsToInches(rawDeltaDeg, cfg.yTrackerDiameter)
+  double dYInches = hasYTracker ? trackerDegsToInches(rawDeltaDeg, odomConfigs.yTrackerDiameter)
                                 : motorDegsToInches(rawDeltaDeg);
 
   double headingRad = TO_RAD(h - dhAccumDeg / 2.0);  // window midpoint, not end
@@ -214,7 +215,7 @@ void Odometry::trackY(double rawDeltaDeg) {
 }
 
 void Odometry::trackX(double rawDeltaDeg) {
-  double dXInches = trackerDegsToInches(rawDeltaDeg, cfg.xTrackerDiameter);
+  double dXInches = trackerDegsToInches(rawDeltaDeg, odomConfigs.xTrackerDiameter);
 
   double headingRad = TO_RAD(h - dhAccumDegX / 2.0);  // window midpoint, not end
   double gdx =  dXInches * cos(headingRad);
@@ -253,16 +254,26 @@ void Odometry::updateVelocity() {
   // robot forward direction
   double headingRad = TO_RAD((h + lastVRefH) / 2.0);
 
-  v = (dx * sin(headingRad) +
-       dy * cos(headingRad)) / timeSinceLastTracked;
+  vRaw = (dx * sin(headingRad) +
+          dy * cos(headingRad)) / timeSinceLastTracked;
 
-  ω = TO_RAD((h - lastVRefH) / timeSinceLastTracked);
+  ωRaw = TO_RAD((h - lastVRefH) / timeSinceLastTracked);
 
+  // Before the history sees it: a teleport's reading is not a measurement, and averaging it in
+  // would spread one bad sample across the next five.
   if (justResetPos) {
-    v = 0;
-    ω = 0;
+    vRaw = 0;
+    ωRaw = 0;
     justResetPos = false;
   }
+
+  // Pushed either way, so switching smoothing on mid-run reads a warm history instead of ramping
+  // up from zero.
+  double vSmoothed = vHistory.push(vRaw, ramsete.smoothedVSamples);
+  double ωSmoothed = ωHistory.push(ωRaw, ramsete.smoothedωSamples);
+
+  v = ramsete.smoothV ? vSmoothed : vRaw;
+  ω = ramsete.smoothω ? ωSmoothed : ωRaw;
 
   lastVRefX = x;
   lastVRefY = y;
@@ -277,16 +288,16 @@ void Odometry::readWall(int wall, int sensor, bool bypassSettleDelay) {
 
   if (sensor == 1) {
     distanceReading = DistSensor1.objectDistance(inches);
-    mount           = cfg.sensor1Offset;
+    mount           = odomConfigs.sensor1Offset;
   } else if (sensor == 2) {
     distanceReading = DistSensor2.objectDistance(inches);
-    mount           = cfg.sensor2Offset;
+    mount           = odomConfigs.sensor2Offset;
   } else if (sensor == 3) {
     distanceReading = DistSensor3.objectDistance(inches);
-    mount           = cfg.sensor3Offset;
+    mount           = odomConfigs.sensor3Offset;
   } else if (sensor == 4) {
     distanceReading = DistSensor4.objectDistance(inches);
-    mount           = cfg.sensor4Offset;
+    mount           = odomConfigs.sensor4Offset;
   }
 
   // Rotate the sensor's 2D local mount into the field frame using the current heading

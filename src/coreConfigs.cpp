@@ -117,7 +117,7 @@ Odometry chassis({
 
   //These are used for both motor encoder tracking (if there is no Y tracker), or for expected heading calculation if there are 2 IMUs
   .trackwidth         = 13.5,
-  .driveWheelDiameter = 3.25*(24.0/27.0),
+  .driveWheelDiameter = 2.7994867608,
   .driveGearRatio     = 48.0/36.0,
   .driveEncoder       = middle, //Motor choosed for no tracker wheel odometry. Either front motors, middle motors, or back motors.
 

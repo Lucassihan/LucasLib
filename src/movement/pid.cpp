@@ -145,9 +145,9 @@ double PID::calculateOutput(double inputError) {
         firstCycle = false;
     }
 
-    error = inputError;                                            // P
-    sumError = fabs(error) < integralBound ? error + sumError : 0; // I
-    derivative = (error - lastError) / timeSinceLastCycle();       // D
+    error = inputError;                                                                                           // P
+    sumError = fabs(error) < integralBound and sign(error) == sign(lastError)? sumError + error: 0;  // I
+    derivative = (error - lastError) / timeSinceLastCycle();                                                      // D
 
     raw = P() + I() + D();
 

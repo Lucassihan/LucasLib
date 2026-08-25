@@ -2,23 +2,23 @@
 // (anchors + tangent handles), the bake knobs, and the schedule they produce.
 //
 // The profile is NOT modelled here: buildPath converts the anchors into the
-// library's own BezierSegment[] and calls sandbox/ramsete.ts's bakeTrajectory,
-// which is the line-for-line port of src/ramsete/profile.cpp. So the speed
+// library's own BezierSegment[] and calls sandbox/ramsete.ts's createTrajectory,
+// which is the line-for-line port of src/ramsete/util/profile.cpp. So the speed
 // curve on screen is the schedule the brain will bake from the same control
 // points, not a second opinion about it — which is the whole point of a motion
 // profile: the thing on screen is the reference the robot follows.
 //
-// The export is those control points (+ any non-default ProfileConfig), never
+// The export is those control points (+ any non-default PathSettings), never
 // baked rows, so the library stays the only thing that owns the math.
 // Persists to localStorage.
 
 import {
-  bakeTrajectory,
+  createTrajectory,
   bezierCurvature,
   bezierAt,
   bezierLength,
   trajectoryDuration,
-  DEFAULT_PROFILE,
+  DEFAULT_SPEEDS,
   DEFAULT_RAMSETE,
   type BezierSegment,
   type TrajPoint
@@ -47,19 +47,19 @@ export interface Anchor {
 }
 
 export interface PursuitPlanParams {
-  maxVel: number; // route ceiling, in/s (ProfileConfig.maxVel)
-  maxAccel: number; // acceleration budget, in/s² (ProfileConfig.maxAccel)
+  maxVel: number; // route ceiling, in/s (PathSettings.maxVel)
+  maxAccel: number; // acceleration budget, in/s² (PathSettings.maxAccel)
   velMargin: number; // fraction of maxVel the ceilings may ask for
   endSpeed: number; // in/s in the last row — bake a hot exit
 }
 
 // The library's own defaults, so an untouched path exports as the bare
-// ramsete.trajectory(path) call with no ProfileConfig at all.
+// ramsete.trajectory(path) call with no PathSettings at all.
 export const DEFAULT_PARAMS: PursuitPlanParams = {
   maxVel: DEFAULT_RAMSETE.maxVel,
   maxAccel: DEFAULT_RAMSETE.maxAccel,
-  velMargin: DEFAULT_PROFILE.velMargin,
-  endSpeed: DEFAULT_PROFILE.endSpeed
+  velMargin: DEFAULT_SPEEDS.velMargin,
+  endSpeed: DEFAULT_SPEEDS.endSpeed
 };
 
 const DEFAULT_ANCHORS: Anchor[] = [
@@ -589,7 +589,7 @@ export function pathSegments(anchors: Anchor[]): BezierSegment[] {
   return segs;
 }
 
-/** The ProfileConfig the bake runs with — the knobs, resolved the same way
+/** The PathSettings the bake runs with — the knobs, resolved the same way
  *  resolveConfig() does on the brain. */
 function profileConfig(params: PursuitPlanParams) {
   return {
@@ -602,7 +602,7 @@ function profileConfig(params: PursuitPlanParams) {
 
 // --- the planning pipeline ------------------------------------------------------
 // There isn't one any more, and that is the point. buildPath hands the control
-// points to the library port's bakeTrajectory and then only REPACKAGES what
+// points to the library port's createTrajectory and then only REPACKAGES what
 // comes back: `points` is the schedule's own rows, `dense` is a fine geometric
 // sampling for drawing whose speeds are read back out of those rows. Nothing
 // here decides a speed.
@@ -646,7 +646,7 @@ export function buildPath(anchors: Anchor[], params: PursuitPlanParams): Plan {
 
   // THE bake — the same function the sandbox runs and the same math the brain
   // runs. Everything below is presentation.
-  const traj = bakeTrajectory(segs, profileConfig(params), DEFAULT_RAMSETE);
+  const traj = createTrajectory(segs, profileConfig(params), DEFAULT_RAMSETE);
   if (traj.length < 2) return EMPTY_PLAN;
 
   // Rows carry time, not arc, so walk them once for the cumulative distance the
@@ -1197,11 +1197,11 @@ export async function deletePath(name: string): Promise<void> {
  * follows them.
  *
  * Deliberately NOT the baked rows. The brain bakes these same segments with
- * src/ramsete/profile.cpp \u2014 which is what the preview above just ran through
+ * src/ramsete/util/profile.cpp \u2014 which is what the preview above just ran through
  * its port \u2014 so shipping geometry keeps one implementation of the profile
  * instead of two, and a path stays a few lines instead of a few hundred.
  *
- * Route-level knobs only appear when they differ from ProfileConfig's own
+ * Route-level knobs only appear when they differ from PathSettings's own
  * defaults, in which case the bake has to be spelled out; an untouched path is
  * the bare one-liner.
  */
@@ -1229,8 +1229,10 @@ export function exportCpp(): string {
   if (p.velMargin !== DEFAULT_PARAMS.velMargin) cfg.push(`.velMargin = ${fmt(p.velMargin, 2)}`);
   if (p.endSpeed !== DEFAULT_PARAMS.endSpeed) cfg.push(`.endSpeed = ${fmt(p.endSpeed)}`);
 
+  // The library takes the PathSettings by argument and bakes internally — there is
+  // no longer an overload that accepts a pre-baked row list.
   const call = cfg.length
-    ? `ramsete.trajectory(bakeTrajectory(${name}, {${cfg.join(', ')}}));`
+    ? `ramsete.trajectory(${name}, {${cfg.join(', ')}});`
     : `ramsete.trajectory(${name});`;
 
   const caps = segs.filter((s) => s.maxVel !== undefined).length;
@@ -1238,7 +1240,7 @@ export function exportCpp(): string {
 
   return `// ${segs.length} segment${segs.length > 1 ? 's' : ''} \u00b7 ${plan.total.toFixed(1)}" \u00b7 ~${plan.duration.toFixed(1)}s${capNote}
 // Baked on the brain from these control points \u2014 the speed plan above is what
-// bakeTrajectory() will produce from them.
+// createTrajectory() will produce from them.
 std::vector<BezierSegment> ${name} = {
 ${body}
 };

@@ -2,10 +2,11 @@
 // trajectory, ramseteController). Compiled natively — no vex.h anywhere in that
 // dependency set, which is the point.
 
-#include "ramsete/bezierTools.h"
-#include "ramsete/profile.h"
-#include "ramsete/trajectory.h"
-#include "ramsete/ramseteController.h"
+#include "ramsete/util/bezierUtils.h"
+#include "ramsete/util/profile.h"
+#include "ramsete/util/trajectoryUtils.h"
+#include "ramsete/util/ramseteController.h"
+#include "ramsete/util/boomerangToUtils.h"
 #include "movement/odometry.h"
 
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <algorithm>
 
 Ramsete ramsete;   // normally lives in config.cpp
+bool backward = false;   // movementUtils' global drive direction, read by createTrajectory
 Odometry chassis;  // the law reads the tracked pose straight off this
 
 // The values initializeRamseteConstants() would set on the robot. The harness
@@ -67,9 +69,9 @@ static std::vector<BezierSegment> splitFirstInHalf(std::vector<BezierSegment> pa
 // ---------------------------------------------------------------- profile ---
 static void testProfile() {
     printf("\n[1] profile: ceilings, passes, integration\n");
-    ProfileConfig cfg;
+    PathSettings cfg;
     cfg.maxVel = 55; cfg.maxAccel = 90; cfg.trackwidth = 13.5;
-    std::vector<TrajPoint> traj = bakeTrajectory(demoPath(), cfg);
+    Trajectory traj = createTrajectory(demoPath(), cfg);
 
     check(traj.size() > 20, "row count", traj.size());
 
@@ -121,7 +123,7 @@ static void testProfile() {
 // ONLY the schedule's own (v, omega) and see whether it reproduces the rows.
 static void testFeasibility() {
     printf("\n[2] feasibility: integrating (v, omega) must retrace the rows\n");
-    std::vector<TrajPoint> traj = bakeTrajectory(demoPath(), {});
+    Trajectory traj = createTrajectory(demoPath(), {});
     double dt = 0.002, worst = 0, worstH = 0;
     double x = traj[0].x, y = traj[0].y, h = traj[0].heading;
 
@@ -145,7 +147,7 @@ static void testCusp() {
     BezierSegment s1; s1.a = {72, 24}; s1.b = {72, 48}; s1.c = {72, 60}; s1.d = {72, 72};
     BezierSegment s2; s2.a = {72, 72}; s2.b = {72, 60}; s2.c = {72, 48}; s2.d = {72, 24};
     s2.reversed = true;
-    std::vector<TrajPoint> traj = bakeTrajectory({s1, s2}, {});
+    Trajectory traj = createTrajectory({s1, s2}, {});
 
     double minMid = 1e9; size_t at = 0;
     for (size_t i = 0; i < traj.size(); i++) {
@@ -163,7 +165,7 @@ struct Sim { double x, y, h, v, w; };
 
 // One closed-loop run. Returns the worst cross-track error after the first
 // half-second of settling, and reports where it finished.
-static Sim runSim(const std::vector<TrajPoint>& traj, bool adaptive, Sim bot,
+static Sim runSim(const Trajectory& traj, bool adaptive, Sim bot,
                   double* worstLate, double shoveAt = -1, bool print = false) {
     const double dt = 0.01, tau = 0.09;
     double clock = 0, wall = 0;
@@ -201,7 +203,7 @@ static Sim runSim(const std::vector<TrajPoint>& traj, bool adaptive, Sim bot,
 
 static void testLaw() {
     printf("\n[4] the law: convergence from a clean start and from an offset\n");
-    std::vector<TrajPoint> traj = bakeTrajectory(demoPath(), {});
+    Trajectory traj = createTrajectory(demoPath(), {});
     const TrajPoint& end = traj.back();
     double worst;
 
@@ -233,7 +235,7 @@ static void testLaw() {
     printf("\n[6] reversed rows: the same law backs the robot down a path\n");
     BezierSegment b; b.a = {72, 96}; b.b = {72, 72}; b.c = {60, 60}; b.d = {48, 48};
     b.reversed = true;
-    std::vector<TrajPoint> back = bakeTrajectory({b}, {});
+    Trajectory back = createTrajectory({b}, {});
     double travel = atan2(back[1].x - back[0].x, back[1].y - back[0].y) / DEG;
     check(fabs(fabs(wrapDegrees(travel - back.front().heading)) - 180) < 5.0,
           "reversed row faces 180° away from travel (deg)", wrapDegrees(travel - back.front().heading));
@@ -254,30 +256,30 @@ static void testGainAndEdges() {
     check(kf > ks && ks > 0, "gain rides the referenceState speed", kf / ks);
     check(k0 > 0.1, "vMin floor keeps the gain alive at standstill", k0);
 
-    std::vector<TrajPoint> empty;
+    Trajectory empty;
     check(trajectoryDuration(empty) == 0, "empty trajectory has zero duration");
     TrajState s = sampleTrajectory(empty, 3.0);
     check(s.v == 0, "sampling an empty trajectory is harmless");
 
-    std::vector<TrajPoint> one = bakeTrajectory({}, {});
+    Trajectory one = createTrajectory({}, {});
     check(one.empty(), "baking an empty path yields no rows");
 
-    std::vector<TrajPoint> traj = bakeTrajectory(demoPath(), {});
+    Trajectory traj = createTrajectory(demoPath(), {});
     TrajState before = sampleTrajectory(traj, -5);
     TrajState after  = sampleTrajectory(traj, 999);
     check(fabs(before.x - traj.front().x) < 1e-9, "clock before 0 clamps to the first row");
     check(fabs(after.x  - traj.back().x)  < 1e-9, "clock past the end clamps to the last row");
 
     // hot entry / hot exit
-    ProfileConfig hot; hot.startSpeed = 20; hot.endSpeed = 15;
-    std::vector<TrajPoint> h = bakeTrajectory(demoPath(), hot);
+    PathSettings hot; hot.startSpeed = 20; hot.endSpeed = 15;
+    Trajectory h = createTrajectory(demoPath(), hot);
     check(fabs(h.front().v - 20) < 1e-6, "startSpeed lands in the first row", h.front().v);
     check(fabs(h.back().v - 15) < 1e-6, "endSpeed lands in the last row", h.back().v);
 
     // authored per-segment cap
     std::vector<BezierSegment> capped = demoPath();
     capped[1].maxVel = 12;
-    std::vector<TrajPoint> c = bakeTrajectory(capped, {});
+    Trajectory c = createTrajectory(capped, {});
     size_t joint = 0; double best = 1e9;
     for (size_t i = 0; i < c.size(); i++) {
         double d = hypot(c[i].x - capped[1].a.x, c[i].y - capped[1].a.y);
@@ -296,14 +298,14 @@ static void testGainAndEdges() {
     std::vector<BezierSegment> split = splitFirstInHalf(demoPath());
     check(split.size() == 3, "de Casteljau split adds one segment", split.size());
 
-    double dWhole = trajectoryDuration(bakeTrajectory(demoPath(), {}));
-    double dSplit = trajectoryDuration(bakeTrajectory(split, {}));
+    double dWhole = trajectoryDuration(createTrajectory(demoPath(), {}));
+    double dSplit = trajectoryDuration(createTrajectory(split, {}));
     check(fabs(dSplit - dWhole) < 0.02, "splitting a segment does not change the schedule (s)", dSplit - dWhole);
 
     // ...and the split is what makes a sub-segment cap possible: slow only the
     // first half and the second half keeps its speed.
     split[0].maxVel = 10;
-    std::vector<TrajPoint> half = bakeTrajectory(split, {});
+    Trajectory half = createTrajectory(split, {});
     double firstHalfMax = 0, laterMax = 0;
     for (size_t i = 0; i < half.size(); i++) {
         double d = hypot(half[i].x - split[0].d.x, half[i].y - split[0].d.y);
@@ -321,7 +323,7 @@ static void testGainAndEdges() {
 // question is where the reference is when it gets free.
 static void testPin() {
     printf("\n[8] the pin: where is the referenceState when the robot gets free?\n");
-    std::vector<TrajPoint> traj = bakeTrajectory(demoPath(), {});
+    Trajectory traj = createTrajectory(demoPath(), {});
     const double dt = 0.01, tau = 0.09;
 
     for (int adaptive = 0; adaptive < 2; adaptive++) {
@@ -548,6 +550,152 @@ static void testMoveTo() {
           fabs(wrapDegrees(approach - r.h)));
 }
 
+static void testBoomerangTo() {
+    printf("\n[10] boomerangTo: the curve the movement drives\n");
+    const double TINY = 1e-6;
+
+    // Robot at (10, 20) facing +X, arriving at (40, 60) travelling +Y.
+    std::vector<BezierSegment> path = boomerangToPath(10, 20, 90, 40, 60, 0, 12, 8);
+    check(path.size() == 1, "no padding: one segment", double(path.size()));
+    BezierSegment s = path[0];
+
+    check(fabs(s.a.x - 10) < TINY and fabs(s.a.y - 20) < TINY, "starts on the robot", s.a.x);
+    check(fabs(s.d.x - 40) < TINY and fabs(s.d.y - 60) < TINY, "ends on the target", s.d.x);
+    check(fabs(bezierHeading(s, 0.0) - 90) < TINY, "leaves along startHeading (deg)", bezierHeading(s, 0.0));
+    check(fabs(bezierHeading(s, 1.0) -  0) < TINY, "arrives along endHeading (deg)", bezierHeading(s, 1.0));
+    check(fabs(hypot(s.b.x - s.a.x, s.b.y - s.a.y) - 12) < TINY, "handle 1 length (in)", hypot(s.b.x - s.a.x, s.b.y - s.a.y));
+    check(fabs(hypot(s.d.x - s.c.x, s.d.y - s.c.y) -  8) < TINY, "handle 2 length (in)", hypot(s.d.x - s.c.x, s.d.y - s.c.y));
+
+    // The end handle has to sit BEHIND the target along endHeading. Put it past
+    // the target and the curve arrives going the wrong way down the same line,
+    // which no other check here would notice.
+    check(s.c.y < s.d.y, "end handle sits behind the target, not past it (in)", s.c.y);
+
+    // Padding: the cubic stops `padding` inches short along endHeading, and the rest is a line.
+    std::vector<BezierSegment> pad = boomerangToPath(10, 20, 90, 40, 60, 0, 12, 8, 10);
+    check(pad.size() == 2, "padding: curve plus a straight tail", double(pad.size()));
+
+    BezierSegment curve = pad[0];
+    BezierSegment line  = pad[1];
+    check(fabs(curve.d.x - 40) < TINY and fabs(curve.d.y - 50) < TINY,
+          "curve ends on the padded point (in)", curve.d.y);
+    check(fabs(hypot(curve.d.x - curve.c.x, curve.d.y - curve.c.y) - 8) < TINY,
+          "handle 2 stays that long off the PADDED anchor (in)", hypot(curve.d.x - curve.c.x, curve.d.y - curve.c.y));
+    check(fabs(bezierHeading(curve, 1.0) - 0) < TINY, "curve still arrives along endHeading (deg)", bezierHeading(curve, 1.0));
+
+    check(fabs(line.a.x - curve.d.x) < TINY and fabs(line.a.y - curve.d.y) < TINY, "tail starts where the curve ended (in)", line.a.y);
+    check(fabs(line.d.x - 40) < TINY and fabs(line.d.y - 60) < TINY, "tail ends on the target (in)", line.d.y);
+
+    // Straight means straight the whole way, not just at the ends: a bezier can leave and arrive on
+    // heading and still bow out in between, and only the curvature at midspan would notice.
+    double bow = 0;
+    for (int i = 0; i <= 10; i++) {
+        double t = i / 10.0;
+        bow = std::max(bow, fabs(bezierCurvature(line, t)));
+        bow = std::max(bow, fabs(wrapDegrees(bezierHeading(line, t) - 0)));
+        bow = std::max(bow, fabs(bezierAt(line, t).x - 40));
+    }
+    check(bow < 1e-9, "tail is dead straight along endHeading (worst deviation)", bow);
+
+    // Tangent at the joint, so the bake reads it as a joint and not a cusp it has to stop for.
+    check(fabs(wrapDegrees(bezierHeading(curve, 1.0) - bezierHeading(line, 0.0))) < TINY,
+          "curve and tail meet tangent (deg)", wrapDegrees(bezierHeading(curve, 1.0) - bezierHeading(line, 0.0)));
+
+    // The joint is only a cusp if the bake stops for it. Read the speed at the row closest to the
+    // padded point rather than the slowest row anywhere — the slowest row is the final brake.
+    Trajectory padRows = createTrajectory(pad, {});
+    double atJoint = 0;
+    double nearest = 1e9;
+    for (size_t i = 0; i < padRows.size(); i++) {
+        double d = hypot(padRows[i].x - 40, padRows[i].y - 50);
+        if (d < nearest) {
+            nearest = d;
+            atJoint = fabs(padRows[i].v);
+        }
+    }
+    check(atJoint > 1.0, "padded path does not stop at the joint (in/s)", atJoint);
+    check(fabs(padRows.back().x - 40) < 0.5 and fabs(padRows.back().y - 60) < 0.5,
+          "padded schedule still ends on the target (in)", padRows.back().y);
+
+    // Backward: the caller hands in heading + 180, so the curve leaves out the tail.
+    BezierSegment b = boomerangToPath(10, 20, 90 + 180, 40, 60, 0, 12, 8)[0];
+    check(fabs(wrapDegrees(bezierHeading(b, 0.0) - (-90))) < TINY,
+          "backward: curve leaves along the tail (deg)", bezierHeading(b, 0.0));
+    check(fabs(bezierHeading(b, 1.0) - 0) < TINY,
+          "backward: endHeading is NOT flipped (deg)", bezierHeading(b, 1.0));
+
+    // And it still bakes: a reversed segment gives negative-signed rows.
+    BezierSegment rev = b;
+    rev.reversed = true;
+    Trajectory rows = createTrajectory({rev}, {});
+    check(rows.size() > 2, "bakes into a schedule (rows)", double(rows.size()));
+    check(std::signbit(rows[rows.size() / 2].v), "reversed rows carry negative v", rows[rows.size() / 2].v);
+}
+
+// Speed and remaining arc at a clock time, for the handoff checks.
+static void atTime(const Trajectory& t, double when, double& speed, double& arcLeft) {
+    std::size_t row = 0;
+    for (std::size_t i = 0; i < t.size(); i++) {
+        if (t[i].t <= when) row = i;
+    }
+    speed   = fabs(t[row].v);
+    arcLeft = 0;
+    for (std::size_t i = row + 1; i < t.size(); i++) {
+        arcLeft += hypot(t[i].x - t[i - 1].x, t[i].y - t[i - 1].y);
+    }
+}
+
+static void testTailHandoff() {
+    printf("\n[11] straight tail: where the follower takes over\n");
+
+    check(trajectoryTailStart(createTrajectory(boomerangToPath(10, 20, 90, 40, 60, 0, 12, 8), {}), 0) < 0,
+          "no tail asked for: no handoff", 0);
+
+    // The ordinary case: 10 in of padding on a move with room to run.
+    Trajectory roomy = createTrajectory(boomerangToPath(0, 0, 0, 0, 60, 0, 12, 8, 10), {});
+    double when = trajectoryTailStart(roomy, 10);
+    double v, left;
+    atTime(roomy, when, v, left);
+    check(when > 0 and when < trajectoryDuration(roomy), "roomy: hands off mid-schedule (s)", when);
+    check(fabs(left - 10) < 1.0, "roomy: hands off one padding from the end (in)", left);
+    check(v > 1.0, "roomy: schedule is still moving at the handoff (in/s)", v);
+
+    // The reason the arc is walked along the rows: this approach swings past the target and comes
+    // back, so it is euclidean-close to the finish about 30 in of path before it is arc-close.
+    Trajectory curl = createTrajectory(boomerangToPath(0, 0, 0, 0, 30, 180, 20, 8, 10), {});
+    double curlWhen = trajectoryTailStart(curl, 10);
+    atTime(curl, curlWhen, v, left);
+    check(fabs(left - 10) < 1.5, "curl-around: handoff is arc-close, not fly-by close (in)", left);
+    check(v > 1.0, "curl-around: still moving at the handoff (in/s)", v);
+
+    // Padding as long as the whole move. Walking the arc alone would land on row zero, at rest;
+    // the peak clamp pushes it onto the braking side instead.
+    Trajectory tight = createTrajectory(boomerangToPath(0, 0, 0, 0, 10, 0, 12, 8, 10), {});
+    double tightWhen = trajectoryTailStart(tight, 10);
+    atTime(tight, tightWhen, v, left);
+    double peak = 0;
+    for (std::size_t i = 0; i < tight.size(); i++) peak = std::max(peak, fabs(tight[i].v));
+    check(tightWhen > 0, "tail swallows the path: handoff is not row zero (s)", tightWhen);
+    check(v > 1.0, "tail swallows the path: not at rest when it switches (in/s)", v);
+    check(fabs(v - peak) < 1e-6, "tail swallows the path: switches at the profile peak (in/s)", v);
+    check(left > 0.5, "tail swallows the path: still has path left to drive (in)", left);
+
+    // Whatever the geometry, the switch never lands where the schedule has stopped.
+    double pads[] = {1, 2, 5, 10, 16, 24};
+    double reaches[] = {60, 36, 24, 16, 12, 10};
+    double worst = 1e9;
+    for (double reach : reaches) {
+        for (double pad : pads) {
+            Trajectory t = createTrajectory(boomerangToPath(0, 0, 0, 0, reach, 0, 12, 8, pad), {});
+            double w = trajectoryTailStart(t, pad);
+            if (w < 0) continue;
+            atTime(t, w, v, left);
+            worst = std::min(worst, v);
+        }
+    }
+    check(worst > 1.0, "36 reach/padding pairs: slowest handoff speed (in/s)", worst);
+}
+
 int main() {
     printf("LucasLib ramsete — host checks\n");
     configureRamsete();
@@ -558,6 +706,8 @@ int main() {
     testGainAndEdges();
     testPin();
     testMoveTo();
+    testBoomerangTo();
+    testTailHandoff();
     printf("\n%s (%d failures)\n", failures ? "SOME CHECKS FAILED" : "ALL CHECKS PASSED", failures);
     return failures ? 1 : 0;
 }

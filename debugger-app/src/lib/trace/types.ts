@@ -130,6 +130,8 @@ export interface Tick {
   refX: number;   // ramsete.trajectory: the pose the schedule wanted this tick
   refY: number;
   refH: number;
+  refV: number;   // the speed the schedule wanted at that pose, in/s
+  refW: number;   // …and deg/s
   cmdV: number;   // what the law asked the velocity layer for, in/s
   cmdW: number;   // …and deg/s
   errFwd: number; // robot-frame gap to the reference: forward, right, heading
