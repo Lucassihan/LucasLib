@@ -16,14 +16,16 @@ extern int  autonIndex;
 extern motor intakeRollers;
 extern motor upperRollers;
 extern motor clawMotor;
-extern motor liftMotor;
+extern motor_group liftMotor;
 extern motor clawRollers;
+extern motor intakeMotor;
 
 // ---- Mechanism sensors ----
 
 extern distance OtwDistSensor;
 extern distance ChamberDistSensor;
 extern optical  OtwColorSensor;
+extern distance autoClampSensor;
 
 // ---- Pneumatics ----
 

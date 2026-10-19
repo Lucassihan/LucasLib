@@ -24,9 +24,7 @@ void setRamseteSettings() {
     ramsete.zeta       = 0.4;     // damping
     ramsete.vMinGain   = 4.0;     // in/s floor inside k
 
-    //velocity measurement smoothing -- chassis.v / chassis.ω, read back by the velocity layer
-    ramsete.smoothV          = false;
-    ramsete.smoothedVSamples = 5;
+    //measurement smoothing -- chassis.ω, read back by the turn channel
     ramsete.smoothω          = false;
     ramsete.smoothedωSamples = 2;
 

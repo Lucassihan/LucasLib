@@ -48,8 +48,6 @@ public:
   double trueX = 0;
   double trueY = 0;
 
-  double velocity = 0;   // in/s forward, refreshed on each Y accumulation
-
   // Wheel-rolled distance in the robot's local frame since the last clearTrackedInches().
   double yInchesTracked = 0;
   double xInchesTracked = 0;
@@ -76,6 +74,7 @@ public:
   void   trackX(double rawDeltaDeg);
   void   applyPoseOffsets(double offsetX, double offsetY);  // intersection point → desired tracking point; call after trackY/trackX
   void updateVelocity();
+  void updateEncoderVelocity();        // fills `velocity`; runs every tick, never noise-gated
 
   void clearTrackedInches();
   void readWall(int wall, int sensor, bool bypassSettleDelay = false);
@@ -96,6 +95,7 @@ public:
   double negativePointHeadingError(double targetX, double targetY, bool backward = false);
 
   //Velocities, in inches. Smoothed — this is what the velocity layer reads through setSource.
+  //v is the vertical encoder's own reading, ω is the pose's, so a setPos moves ω and never v.
   double v;
   double ω;
 
@@ -126,11 +126,8 @@ private:
   double lastXPos     = 0;   // X accumulation baseline (raw deg); advances only when X accumulates
   double lastLeftPos  = 0;
   double lastRightPos = 0;
-  double lastVRefX = 0;
-  double lastVRefY = 0;
   double lastVRefH = 0;
 
-  VelocityHistory vHistory;
   VelocityHistory ωHistory;
 
   // Heading change (deg) banked since the last Y accumulation. Half re-centers the Y step on its window midpoint; the full swing feeds velocity and arc radius.
@@ -145,6 +142,7 @@ private:
   double motorDegsToInches(double deg);
   double trackerDegsToInches(double deg, double diameter);
   double motorTickDegrees();   // drive-encoder resolution (deg/tick) from the gear cartridge
+  double yEncoderFullScale();  // what the vertical encoder reads at free speed, in its own units/s
   double yRawPosition();       // current raw Y reading (tracker deg, or avg drive-encoder deg)
   double xRawPosition();       // current raw X reading (tracker deg, or 0 with no X tracker)
 };

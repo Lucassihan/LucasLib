@@ -54,14 +54,12 @@ struct Ramsete {
     double maxAccel;        // in/s² — the profile's acceleration budget
     double sampleRate;      // MS between baked rows, not a frequency; PathSettings.dt overrides it per route
 
-    // --- smoothing on the measurements the velocity layer reads back ---
-    // chassis.v and chassis.ω are each one interval of pose difference, and the pose arrives in
-    // bursts, so a single reading is noisy enough to move the drive a couple of volts once the
-    // velocity channel's kP is on top of it. Each channel is set on its own: v gains far more from
-    // averaging than ω does, and ω pays more for the delay, since it swings faster.
+    // --- smoothing on the measurement the turn channel reads back ---
+    // chassis.ω is one interval of heading difference, and the heading arrives in bursts, so a
+    // single reading is noisy enough to move the drive a volt once the turn channel's kP is on top
+    // of it. There is no matching knob for chassis.v: it comes off the vertical encoder now, and
+    // the estimator schedules its own smoothing from measured acceleration.
     // Samples run 1..5; 1 is the same as off. Costs (samples-1)/2 cycles of delay.
-    bool   smoothV;
-    int    smoothedVSamples;
     bool   smoothω;
     int    smoothedωSamples;
 

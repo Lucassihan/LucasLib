@@ -74,7 +74,7 @@ motor fl = motor(PORT10, ratio18_1, true);
 motor ml = motor(PORT9, ratio6_1, true);
 motor bl = motor(PORT8, ratio6_1, true);
 
-motor fr = motor(PORT20, ratio18_1, false);
+motor fr = motor(PORT16, ratio18_1, false);
 motor mr = motor(PORT19, ratio6_1, false);
 motor br = motor(PORT18, ratio6_1, false);
 

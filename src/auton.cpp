@@ -43,21 +43,21 @@ void initializeClawPIDConstants() {
   //ClawPID
   clawPID.maxOutput = 12;
   clawPID.setProfile(normal);
-  clawPID.addStep(999999, 0.15, 0.01, 4);
-  clawPID.setIntegralSettings(10, 3);
+  clawPID.addStep(999999, 0.5, 0.01, 2);
+  clawPID.setIntegralSettings(45, 4);
 
   clawPID.setProfile(holding);
-  clawPID.addStep(999999, 0.15, 0.01, 4);
+  clawPID.addStep(999999, 0.5, 0.01, 2);
   clawPID.setIntegralSettings(10, 3);
 
   //LiftPID
   liftPID.maxOutput = 12;
   liftPID.setProfile(normal);
-  liftPID.addStep(999999, 0.1, 0.001, 1.506);
+  liftPID.addStep(999999, 2, 0.01, 0);
   liftPID.setIntegralSettings(10, 3);
 
   liftPID.setProfile(holding);
-  liftPID.addStep(999999, 0.1, 0.001, 1.506);
+  liftPID.addStep(999999, 2, 0.001, 0);
   liftPID.setIntegralSettings(10, 3);
 
 }
@@ -112,7 +112,7 @@ void once() {
 }
 
 void tuneClaw() {
-  claw.kFeedForward = 10;
+
 }
 
 void trajectoryTest() {

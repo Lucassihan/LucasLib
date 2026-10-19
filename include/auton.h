@@ -3,6 +3,8 @@
 #include "tuner.h"
 #include "ramsete/ramsete.h"
 
+void initializePIDConstants();
+void initializeClawPIDConstants();
 // Baked at startup by createTrajectories(), driven by the routes below.
 extern Trajectory goTraj;
 extern Trajectory loadTraj;

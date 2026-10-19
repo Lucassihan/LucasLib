@@ -19,10 +19,12 @@ std::string currentAuton;
 
 
 // Intake
-motor intakeMotor = motor(PORT9, ratio18_1, true);
-motor clawMotor = motor(PORT17, ratio18_1, false);
-motor clawRollers = motor(PORT17, ratio18_1, false);
-motor liftMotor = motor(PORT17, ratio18_1, false);
+motor intakeMotor = motor(PORT21, ratio18_1, false);
+motor clawMotor = motor(PORT13, ratio18_1, false);
+motor clawRollers = motor(PORT20, ratio18_1, false);
+motor liftMotorL = motor(PORT1, ratio18_1, false);
+motor liftMotorR = motor(PORT2, ratio18_1, true);
+motor_group liftMotor = motor_group(liftMotorL, liftMotorR);
 
 //4Bar
 motor fourBarLeft = motor(PORT16, ratio36_1, false);
@@ -31,7 +33,7 @@ motor_group fourBar = motor_group(fourBarLeft, fourBarRight);
 rotation fourBarRotation = rotation(PORT14, false);
 
 //Mag distance sensors
-distance autoClampSens = distance(PORT21);
+distance autoClampSensor = distance(PORT21);
 
 //Color sensor
 optical OtwColorSensor = optical(PORT1);
@@ -39,16 +41,22 @@ optical OtwColorSensor = optical(PORT1);
 //Pistons
 digital_out zhuazi = digital_out(Brain.ThreeWirePort.A);
 
+bool intaking;
 void intake() {
   intakeMotor.spin(forward, 100, pct);
+  intaking = true;
 }
 
+bool spitting;
 void spit() {
   intakeMotor.spin(reverse, 100, pct);
+  spitting = true;
 }
 
 void stop() {
   intakeMotor.stop(coast);
+  intaking = false;
+  spitting = false;
 }
 
 //height is 7 in
@@ -100,23 +108,6 @@ void unclamp() {
   zhuazi.set(true);
 }
 
-bool autoClampEnabled;
-bool clamped;
-int autoClampTask() {
-  while (true) {
-    if (autoClampEnabled and not clamped) {
-      if (autoClampSens.objectDistance(inches) < 1) {
-        clamp();
-        Controller.rumble(".");
-        clamped = true;
-      } 
-    }
-    delay(10);
-  }
-  return 0;
-}
-
-
 
 int trackDisplayTask() {
   while (true) {
@@ -164,16 +155,16 @@ int controllerScreenTask() {
     Controller.Screen.print("Y:%.3f", chassis.y);
 
     Controller.Screen.setCursor(3, 1);
-    Controller.Screen.print("H: %.3f", chassis.h);
+    Controller.Screen.print("H:%.3f", chassis.h);
 
     Controller.Screen.setCursor(1, 10);
-    Controller.Screen.print("Chassis:%2.f", chassisTempAvg);
+    Controller.Screen.print("Chassis:%.2f", chassisTempAvg);
 
     Controller.Screen.setCursor(2, 10);
-    Controller.Screen.print("Claw: %3.f", claw.currentAngle);
+    Controller.Screen.print("Claw: %.3f", claw.currentAngle);
 
-    Controller.Screen.setCursor(3, 13);
-    Controller.Screen.print("Lift: %3.f", lift.currentHeight);
+    Controller.Screen.setCursor(3, 10);
+    Controller.Screen.print("Lift: %.3f", lift.currentHeight);
 
     delay(50);
   }
@@ -193,7 +184,7 @@ int brainScreenTaskFcn() {
       Brain.Screen.printAt(350,235, "D4: %.5f   ", DistSensor4.objectDistance(inches));
     }
 
-    vex::this_thread::sleep_for(50);
+    vex::this_thread::sleep_for(100);
   }
   return 0;
 }
@@ -208,12 +199,16 @@ void initialize() {
   leftdrive.setStopping(brake);
   rightdrive.setStopping(brake);
 
+  initializeClawPIDConstants();
+
   startTasks();
 
   createTrajectories();
   
+  initializePIDConstants();
+
   claw.setPosition(claw.clawMin);
-  lift.setPosition(lTuck);
+  lift.setPosition(0);
 
 }
 
@@ -246,16 +241,134 @@ void driver() {
 
   fourBar.setStopping(hold);
 
+  claw.asyncControl = true;
+  lift.asyncControl = true;
 
   Controller.rumble(".");
 
+  claw.setPosition(-56.6);
+  lift.setPosition(0);
+  clawAction(Tuck);
+
+  bool clawMode = false;
+
   while (true) {
-    
-    // velocityTuner.angular.collectData(2, 1.0, 3.0, 0.3);
     controllerButtonMonitoringFcn();
 
+    bool spitCombo = false;
+
+///////////////////////////////////////////////
+//  | |         / _| |       (_)   | |     
+//  | |     ___| |_| |_   ___ _  __| | ___ 
+//  | |    / _ \  _| __| / __| |/ _` |/ _ \
+//  | |___|  __/ | | |_  \__ \ | (_| |  __/
+//  |______\___|_|  \__| |___/_|\__,_|\___|
+///////////////////////////////////////////////
+
+    if (l1.NewPress) {
+      if (clawCurrentState == Open) {
+        clawAction(Drop);
+      } else {
+        clawAction(Open);
+
+      }
+    }
+
+    if (l2.Pressing) {
+      if (clawCurrentState != Tuck) {
+        clawAction(Tuck);
+      }
+      if (clawCurrentState == Tuck and not l1.pressedSecond) {
+        intake();
+      }
+    }
+
+    if (l2.pressedFirst and l1.pressedSecond) {
+      spitCombo = true;
+      spit();
+      claw.spit(12);
+    }
+
+    if (not l2.Pressing) {
+      stop();
+    }
+
+////////////////////////////////////////////////////
+//   _____  _       _     _         _     _      
+//  |  __ \(_)     | |   | |       (_)   | |     
+//  | |__) |_  __ _| |__ | |_   ___ _  __| | ___ 
+//  |  _  /| |/ _` | '_ \| __| / __| |/ _` |/ _ \
+//  | | \ \| | (_| | | | | |_  \__ \ | (_| |  __/
+//  |_|  \_\_|\__, |_| |_|\__| |___/_|\__,_|\___|
+//             __/ |                             
+//            |___/                              
+////////////////////////////////////////////////////
+
+    if (r1.Pressing) {
+      if (clawCurrentState == Tuck or clawCurrentState == Drop) {
+        clawAction(LeaveChamber);
+      }
+
+      if (clawCurrentState == LeaveChamber) {
+        liftPID.minOutput = 12;
+        lift.move(lift.currentHeight + 2);
+      }
+    }
+
+    if (r2.Pressing) {
+      if (clawCurrentState == LeaveChamber) {
+        liftPID.minOutput = 12;
+        lift.move(lift.currentHeight - 2);
+      }
+
+      if (r1.pressedSecond)  {
+        clawAction(Score);
+      }
+    }
+
+    if (not r2.Pressing and not r1.Pressing and finished and clawCurrentState != Tuck) {
+      liftPID.minOutput = 0;
+      lift.move(lift.currentHeight);
+    }
+
+/////////////////////////////////////////////////////////////////////
+//   __  __ _            _    _           _       _   _             
+//  |  \/  (_)          | |  | |         | |     | | (_)            
+//  | \  / |_ ___  ___  | |  | |_ __   __| | __ _| |_ _ _ __   __ _ 
+//  | |\/| | / __|/ __| | |  | | '_ \ / _` |/ _` | __| | '_ \ / _` |
+//  | |  | | \__ \ (__  | |__| | |_) | (_| | (_| | |_| | | | | (_| |
+//  |_|  |_|_|___/\___|  \____/| .__/ \__,_|\__,_|\__|_|_| |_|\__, |
+//                             | |                             __/ |
+//                             |_|                            |___/ 
+/////////////////////////////////////////////////////////////////////
+
+    if (not overrideClawRollerControl and not spitCombo) {
+      if (clawCurrentState == Tuck and intaking) {
+        claw.intake(12);
+      }
+
+      if (clawCurrentState == Tuck and not intaking) {
+        claw.stop();
+      }
+
+      if (clawCurrentState == Open or clawCurrentState == Drop) {
+        claw.intake(12);
+      }
+
+      if (clawCurrentState == LeaveChamber) {
+        claw.intake(6);
+      }
+
+      if (not (clawCurrentState == Tuck or clawCurrentState == Open)) {
+        claw.kFeedForward = 1.7 + 2;
+        lift.kFeedForward = 1.5 + 0.5;
+      } else {
+        claw.kFeedForward = 1.7;
+        lift.kFeedForward = 1.5;
+      }
+    }
+
     arcadeDriveFcn();
-    // singleStickDriveFcn();
 
     
     delay(1);
